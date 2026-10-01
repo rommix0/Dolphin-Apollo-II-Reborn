@@ -53,9 +53,11 @@ int main(int argc, char **argv)
 
     frame_list fl = { 0 };
     machine_status st = rom_engine_speak(&g_machine, rom, sizeof rom, text, boot, &fl);
-    char *hex = frame_list_hex(&fl);
-    fputs(hex, stdout);
-    free(hex);
+    if (st == MACHINE_IDLE) {   /* never print a partial stream (spec section 4) */
+        char *hex = frame_list_hex(&fl);
+        fputs(hex, stdout);
+        free(hex);
+    }
     frame_list_free(&fl);
     if (st == MACHINE_FAULT) {
         machine_dump(&g_machine, stderr);
