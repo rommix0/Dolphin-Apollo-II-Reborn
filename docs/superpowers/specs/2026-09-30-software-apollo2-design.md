@@ -1,7 +1,7 @@
 # Software Apollo 2 — Design
 
 **Date:** 2026-09-30
-**Status:** Approved. Revision 3 makes the finished project ROM-free (R5). Revision 2 adds facts found while planning milestone 1
+**Status:** Approved. Revision 4 records what milestone 2 verified (command-driven frame bytes, the raw DSP stream, the calibration). Revision 3 makes the finished project ROM-free (R5). Revision 2 adds facts found while planning milestone 1
 (MAME's M50734 register map and the lower-ROM banking); the changes are marked *(rev 2)*.
 **Goal:** A software Dolphin Apollo 2. Text typed on a PC goes through the real
 firmware logic (first emulated, then decompiled to C) and produces DSP frames.
@@ -75,6 +75,12 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
   `$16A5` and `$16B9`. At `$B306` it swaps buffers. The buffer the main loop just
   finished is the one the zero-page pointer `$2C/$2D` points to. If the main loop
   hasn't finished by the end of a frame, the ISR replays the old frame.
+- **DSP reset** *(rev 4)*: `$B38B` pulses P2.0 high (`CLB0`/`SEB0`/`CLB0 $F0`). It is called
+  when speech starts (`$B323`, which also clears `$5A`/`$5C`) and when it stops (`$B398`, which
+  also disables timer 3). In the emulator, the raw DSP stream is the produced stream one frame
+  late. raw[0] is the buffer left over from before the first swap, and the last produced
+  frame is never played. Every raw frame is aligned on its `$FFFF` word. No replays were seen
+  for the corpus texts.
 
 ### 1.4 DSP frame format (20 bytes = 10 words)
 
@@ -85,11 +91,23 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 | 2 | b4 A2 | b5 F2 |
 | 3 | b6 A3 | b7 F3 |
 | 4 | b8 AHF (high-frequency amplitude) | b9 V (degree of voicing, 1..63) |
-| 5 | b10 F0 (very likely; smoothed prosody/4) | b11 global setting clamped by F0 (hypothesis: pulse width) |
+| 5 | b10 F0 (pitch: follows @F; calibrated in §5) | b11 mark-space ratio (@M, clamped by F0) *(rev 4: verified)* |
 | 6 | b12 constant `$17` | b13 transition flags (bit 7 spectral jump, bit 6 onset, bit 4 multi-channel drop, bit 3 F0 jump) |
 | 7 | b14 | b15: b14–b15 are a 16-bit value from tables `$B573`/`$B673`, indexed by (ALF−A1−4)·(F1−33) |
-| 8 | b16 | b17: b16–b17 are the voice setting (`$1815` via `$BAEC`/`$BAF0`) |
+| 8 | b16 voicing source (@$: $82 default, $58 spike, $9B cut-down, $BA reduced-HF) | b17 voice filter (@$: $4A male, $54 female) *(rev 4: verified)* |
 | 9 | `$FF` | `$FF` |
+
+- **Commands that change frame bytes** *(rev 4, verified by prefixing `_AR.`)*:
+
+  | Command | Bytes changed |
+  |---|---|
+  | `@K1` (non-male speaker table) | FN, F1, F2 and F3 only (voice B) |
+  | `@Bd` | V |
+  | `@Fh` | F0; also b11, and F1/F2 at high pitch |
+  | `@Mhh` | b11 |
+  | `@$o` | b16 and b17 |
+  | `@udhh±` | adds to or subtracts from one parameter |
+  | `@Ah` (volume) | none |
 
 - **Phoneme tables:** voice A has its count at `$D469` (N = 86) and data at `$D46A`;
   voice B has its count at `$E5E2` and data at `$E5E3`. Each table has 2 rows of N,
@@ -100,7 +118,7 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
   `$FF`. The decoder is at `$D31B`. Punctuation produces phoneme `$3B` (pause).
 
 ## 2. Requirements
-- **R1 — CLI:** `apollo2 "text" [-o out.wav] [--voice a|b] [--engine rom|hybrid|native]`.
+- **R1 — CLI:** `apollo2 "text" [-o out.wav] [--voice a|b] [--engine rom|hybrid|native] [--rom PATH] [--hyp b11,b13] [--stream produced|raw] [--text-file FILE] [--audio-check]`. *(rev 4: `--voice b` sends `@K1`; `--stream raw` is for comparison listening only.)*
   It writes a WAV file, or plays live audio when `-o` is omitted. Text enters
   through the firmware's real serial input path, so device control codes work.
 - **R2 — Audio:** mono, 16-bit, **10,000 Hz native**. No resampling anywhere in our
@@ -137,7 +155,7 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 
 | Unit | Responsibility | Interface | Depends on |
 |---|---|---|---|
-| `cpu740/` | Instruction-exact 740 core with approximate cycle counts. *(rev 2)* SET (T mode), SED (decimal), STP, MUL, DIV and BRK are never used by the ROM, so they **fault** instead of being emulated. A T or D flag restored by PLP/RTI also faults. | `cpu740_reset`, `cpu740_step(cpu*, const bus*) -> cycles`, `cpu740_irq(cpu*, vector)` | — |
+| `cpu740/` | Instruction-exact 740 core with approximate cycle counts. *(rev 2)* SET (T mode), SED (decimal), STP, MUL, DIV and BRK are never used by the ROM, so they **fault** instead of being emulated. A T flag restored by PLP/RTI faults; a D flag faults when ADC/SBC executes with it set (rev 4: matches the code). | `cpu740_reset`, `cpu740_step(cpu*, const bus*) -> cycles`, `cpu740_irq(cpu*, vector)` | — |
 | `machine/` | Apollo 2 board: memory map, banking, SFRs, serial RX, timer, DSP port, hooks | `machine_init(rom, len)`, `machine_feed_serial(bytes, n)`, `machine_run(max_cycles) -> status`, `machine_set_frame_sink(cb)`, `machine_hook(addr, thunk)` | cpu740 |
 | `firmware/` | Decompiled firmware in C on a shared memory image | per-routine C functions + thunks; `fw_native_speak(bytes, n, frame_sink)` | machine (hybrid only) |
 | `synth/` | Holmes parallel-formant synthesizer | `synth_init(cfg)`, `synth_frame(const uint8_t f[20], int16_t out[100])` | — |
@@ -170,8 +188,7 @@ and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
 - **Timers** *(rev 2)*: timers 1–3 count CPU cycles. Each period is
   4·(pre+1)·(reload+1). On expiry a timer sets its ICR2 request bit; the interrupt
   line is the AND of the enable and request bits.
-- **DSP port:** writes to `$8000` are counted. Raw-stream capture with re-alignment
-  on P2 bit 0 (DSP reset) arrives with the synthesizer in M2.
+- **DSP port** *(rev 4)*: writes to `$8000` are counted and grouped into raw 20-byte frames, re-aligned at every P2.0 DSP-reset rising edge. The raw stream depends on CPU timing and is used only for diagnosis and for `--stream raw` listening. The produced stream stays the golden.
 - **Produced frames (the golden stream)** *(rev 2)*: whenever the PC reaches
   `$B306` (the ISR's buffer swap), the 20 bytes at the `$2C/$2D` pointer are
   captured as one produced frame. ISR replays never show up in this stream, so it
@@ -214,6 +231,19 @@ and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
 4. **Hypothesis switches:** b11 (as pulse width), b13 (resonator state reset) and
    b14–b17 each have a switch that defaults to off or neutral. They are enabled one
    at a time during listening tests.
+
+**Calibration results** *(rev 4; see docs/calibration/report.md)*:
+- F1 and F2 are linear and F3 is logarithmic, fitted to Wells (1962) RP male means (RMS 5–6 %).
+- Amplitudes are 0.95 dB per code, confirming the hypothesis, with channel offsets fitted to
+  Wells's formant levels.
+- ALF and AHF channel offsets were corrected once against the Juno long-term average spectrum (ALF −5.1 dB, AHF −3.8 dB); the corpus then peaks at −4.9 dBFS.
+- F0 is log-linear, fitted to the Juno snippet's 5/50/95th percentiles.
+- FN has no reference. Hypothesis H-FN treats it as a low resonance near 256 Hz.
+- The source is a unit-power impulse train. Hypothesis b11 switches to a Rosenberg pulse whose
+  open quotient is b11/64.
+- Hypothesis switches implemented: b11 (pulse width) and b13 bit 7 (resonator reset).
+- b14–b15 and b16–b17 are decoded (§1.4) but get no switch until a listening-test hypothesis
+  exists. Candidates: the @$ source and filter variants.
 
 ## 6. Decompilation workflow
 1. **`ghidra740/`:** copy Ghidra's 6502 spec and add the 740 extensions:
@@ -263,9 +293,7 @@ and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
 - **CPU unit tests:** per-instruction vectors for all addressing modes, flags,
   740 extensions, interrupts, and faults on the unsupported instructions *(rev 2)*.
 - **Golden corpus:** `tests/corpus/*.txt` covers prose, numbers, dates, abbreviations,
-  punctuation, spelling mode and every documented control code. M1 covers plain
-  text; control codes and spelling mode are added once `docs/apollo2.txt` has been
-  worked through *(rev 2)*. The golden files are produced-frame streams (§4) stored
+  punctuation, spelling mode and every documented control code. M1 covers plain text. M2 adds every frame-affecting control code, spelling mode, phonetic input, mute (Ctrl-X), a boot golden, and a check that @c? queries leave the speech unchanged *(rev 4)*. The golden files are produced-frame streams (§4) stored
   as hex, one frame per line. They are firmware output, not ROM bytes.
   - The `rom` engine records the golden frame streams.
   - `hybrid` and `native` must match them byte for byte (R3).
@@ -306,12 +334,13 @@ and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
 - Option-ROM languages (the sockets are empty in this ROM).
 - Recovering the real µPD77C20 program.
 - Bit-exact audio. Only the frames are bit-exact.
+- Serial replies (@c? queries, @L, @E, indexing) *(rev 4)*. The firmware sends them only under the host's RTS/CTS handshake (CNTR pin), which is not modelled.
 
 ## 10. Open questions (resolved inside the milestones above)
 - ~~How the firmware reaches the rule text in file `0x0000–0x3FFF`~~: resolved statically (P2.7, §1.2); M1 confirms it in the emulator.
 - ~~The timer period~~: resolved, 200 CPU cycles (§1.1).
 - The exact external RAM extent (M1 logs any access outside `$0000–$3FFF`).
-- The meaning of the P4 DIP switches beyond bit 0, and of the P3 baud jumpers (M2, from `docs/apollo2.txt`).
-- The meanings of b11, b13 and b14–b17 (M2 listening tests).
+- The P4 DIP switches beyond bit 0. *(rev 4: the P3 baud jumpers are pins 20/21 in docs/apollo2.txt Appendix 1: 9600 default, 1200, 300, 19200.)*
+- The meanings of b13 and b14–b15, and how the DSP realises the @$ source/filter variants (listening tests). *(rev 4: b11, b16 and b17 are identified, §1.4.)*
 - The 17 phoneme indices not reachable from ASCII symbols (6, 7, 22, 23, 25, 40,
   41, 58, 77–85), probably reached via `$9E74` (M3).
