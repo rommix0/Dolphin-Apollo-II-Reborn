@@ -75,7 +75,7 @@ static void build(void)
     /* 740 extensions */
     set(0x02, M_JSR, AM_ZPI); set(0xB2, M_JMP, AM_ZPI); set(0x22, M_JSR, AM_SPG);
     set(0x3C, M_LDM, AM_LDM); set(0x44, M_COM, AM_ZP); set(0x64, M_TST, AM_ZP); set(0x82, M_RRF, AM_ZP);
-    set(0x1A, M_INC, AM_ACC); set(0x3A, M_DEC, AM_ACC);
+    set(0x1A, M_DEC, AM_ACC); set(0x3A, M_INC, AM_ACC);
     set(0x62, M_MUL, AM_ZPX); set(0xE2, M_DIV, AM_ZPX);
     for (i = 0; i < 8; i++) {
         set(0x03 + 0x20 * i, M_BBS, AM_BIT_A_REL);

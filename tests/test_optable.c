@@ -21,7 +21,8 @@ void suite_optable(void)
     CHECK_STR(cpu740_mnem_name(t[0x22].mnem), "JSR"); CHECK_EQ(t[0x22].mode, AM_SPG);
     CHECK_STR(cpu740_mnem_name(t[0x02].mnem), "JSR"); CHECK_EQ(t[0x02].mode, AM_ZPI);
     CHECK_STR(cpu740_mnem_name(t[0xB2].mnem), "JMP"); CHECK_EQ(t[0xB2].mode, AM_ZPI);
-    CHECK_STR(cpu740_mnem_name(t[0x1A].mnem), "INC"); CHECK_EQ(t[0x1A].mode, AM_ACC);
+    CHECK_STR(cpu740_mnem_name(t[0x1A].mnem), "DEC"); CHECK_EQ(t[0x1A].mode, AM_ACC);
+    CHECK_STR(cpu740_mnem_name(t[0x3A].mnem), "INC"); CHECK_EQ(t[0x3A].mode, AM_ACC);
     CHECK_STR(cpu740_mnem_name(t[0x80].mnem), "BRA");
     CHECK_STR(cpu740_mnem_name(t[0xC2].mnem), "WIT");
     CHECK_STR(cpu740_mnem_name(t[0x12].mnem), "CLT");

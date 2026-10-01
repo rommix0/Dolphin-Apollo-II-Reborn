@@ -274,7 +274,8 @@ void suite_optable(void)
     CHECK_STR(cpu740_mnem_name(t[0x22].mnem), "JSR"); CHECK_EQ(t[0x22].mode, AM_SPG);
     CHECK_STR(cpu740_mnem_name(t[0x02].mnem), "JSR"); CHECK_EQ(t[0x02].mode, AM_ZPI);
     CHECK_STR(cpu740_mnem_name(t[0xB2].mnem), "JMP"); CHECK_EQ(t[0xB2].mode, AM_ZPI);
-    CHECK_STR(cpu740_mnem_name(t[0x1A].mnem), "INC"); CHECK_EQ(t[0x1A].mode, AM_ACC);
+    CHECK_STR(cpu740_mnem_name(t[0x1A].mnem), "DEC"); CHECK_EQ(t[0x1A].mode, AM_ACC);
+    CHECK_STR(cpu740_mnem_name(t[0x3A].mnem), "INC"); CHECK_EQ(t[0x3A].mode, AM_ACC);
     CHECK_STR(cpu740_mnem_name(t[0x80].mnem), "BRA");
     CHECK_STR(cpu740_mnem_name(t[0xC2].mnem), "WIT");
     CHECK_STR(cpu740_mnem_name(t[0x12].mnem), "CLT");
@@ -416,7 +417,7 @@ static void build(void)
     /* 740 extensions */
     set(0x02, M_JSR, AM_ZPI); set(0xB2, M_JMP, AM_ZPI); set(0x22, M_JSR, AM_SPG);
     set(0x3C, M_LDM, AM_LDM); set(0x44, M_COM, AM_ZP); set(0x64, M_TST, AM_ZP); set(0x82, M_RRF, AM_ZP);
-    set(0x1A, M_INC, AM_ACC); set(0x3A, M_DEC, AM_ACC);
+    set(0x1A, M_DEC, AM_ACC); set(0x3A, M_INC, AM_ACC);
     set(0x62, M_MUL, AM_ZPX); set(0xE2, M_DIV, AM_ZPX);
     for (i = 0; i < 8; i++) {
         set(0x03 + 0x20 * i, M_BBS, AM_BIT_A_REL);
@@ -1202,7 +1203,7 @@ static void test_ldm_tst_com_rrf(void)
 
 static void test_inc_dec_acc(void)
 {
-    static const uint8_t code[] = { 0xA9, 0xFF, 0x1A, 0x3A };   /* LDA #$FF; INC A; DEC A */
+    static const uint8_t code[] = { 0xA9, 0xFF, 0x3A, 0x1A };   /* LDA #$FF; INC A; DEC A */
     load(0x8000, code, sizeof code);
     run(2); CHECK_EQ(g_cpu.a, 0x00); CHECK(g_cpu.p & CPU740_Z);
     run(1); CHECK_EQ(g_cpu.a, 0xFF); CHECK(g_cpu.p & CPU740_N);
@@ -1411,7 +1412,7 @@ void suite_disasm(void)
     expect(0x8000, (const uint8_t[]){ 0x6B }, 1, "SEB3 A", 1);
     expect(0xB2D9, (const uint8_t[]){ 0xBF, 0xFE }, 2, "CLB5 $FE", 2);
     expect(0x8000, (const uint8_t[]){ 0x0A }, 1, "ASL A", 1);
-    expect(0x8000, (const uint8_t[]){ 0x1A }, 1, "INC A", 1);
+    expect(0x8000, (const uint8_t[]){ 0x3A }, 1, "INC A", 1);
     expect(0x8000, (const uint8_t[]){ 0xB6, 0x10 }, 2, "LDX $10,Y", 2);
     expect(0x8000, (const uint8_t[]){ 0xA1, 0x10 }, 2, "LDA ($10,X)", 2);
     expect(0xA60E, (const uint8_t[]){ 0x9D, 0x00, 0x02 }, 3, "STA $0200,X", 3);
