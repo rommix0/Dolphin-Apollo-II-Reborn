@@ -8,7 +8,7 @@ if not defined VSCMD_VER (
 if not exist build mkdir build
 set CFLAGS=/nologo /std:c11 /W4 /WX /wd4244 /O2 /Zi /Isrc /D_CRT_SECURE_NO_WARNINGS
 set LIBSRC=
-for %%d in (src\cpu740 src\machine src\engine) do (
+for %%d in (src\cpu740 src\machine src\engine src\synth src\audio src\render) do (
     if exist %%d\*.c set LIBSRC=!LIBSRC! %%d\*.c
 )
 cl %CFLAGS% /Fobuild\ /Fdbuild\ /Febuild\apollo2_tests.exe tests\*.c !LIBSRC! || exit /b 1
