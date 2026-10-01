@@ -79,7 +79,7 @@ static machine_status speak(machine *m, const uint8_t *rom, size_t len, const ma
         sink.enabled = true;
         raw_sink.enabled = true;
         if (machine_feed_serial(m, (const uint8_t *)text, strlen(text)) &&
-            machine_feed_serial(m, (const uint8_t *)"", 1))
+            machine_feed_serial(m, (const uint8_t *)"\r", 1))
             st = machine_run(m, ROM_ENGINE_SPEAK_CYCLES);
         else {
             m->fault = MFAULT_INPUT_OVERFLOW;   /* text longer than the input queue */
