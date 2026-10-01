@@ -48,20 +48,6 @@ static void run(const synth_options *o, const uint8_t f[SYNTH_FRAME_BYTES], int 
         synth_frame(&g_s, f, out + i * SYNTH_FRAME_SAMPLES);
 }
 
-static double band_energy(const int16_t *x, int n, double lo, double hi)
-{
-    double e = 0.0;
-    for (double fr = lo; fr <= hi; fr += 50.0) {
-        double re = 0.0, im = 0.0;
-        for (int i = 0; i < n; i++) {
-            re += x[i] * cos(2.0 * TEST_PI * fr * i / SYNTH_RATE);
-            im -= x[i] * sin(2.0 * TEST_PI * fr * i / SYNTH_RATE);
-        }
-        e += re * re + im * im;
-    }
-    return e;
-}
-
 static void test_silence_is_zero(void)
 {
     uint8_t f[SYNTH_FRAME_BYTES];
@@ -269,25 +255,34 @@ static void test_glide_onset(void)
     CHECK(onset * 10 <= steady * 13);
 }
 
-/* The output low-pass removes the band above the DAC filter and leaves the speech band alone. */
+/* The output low-pass is the Butterworth cascade checked in suite_biquad, applied to the whole
+   output: filtering the unfiltered output with the same two sections reproduces the filtered
+   output to within int16 rounding. */
 static void test_lowpass(void)
 {
-    enum { FRAMES = 30, N = FRAMES * SYNTH_FRAME_SAMPLES, SKIP_N = 500 };
+    enum { FRAMES = 30, N = FRAMES * SYNTH_FRAME_SAMPLES };
     static int16_t on[N], off[N];
     synth_options o;
     uint8_t f[SYNTH_FRAME_BYTES];
+    biquad a, b;
+    int worst = 0;
     frame(k_ar, f);
     f[9] = 1;                                   /* noise only: energy right up to 5 kHz */
     synth_default_options(&o);
     run(&o, f, FRAMES, on);
     o.lowpass = false;
     run(&o, f, FRAMES, off);
-    double top = 10.0 * log10(band_energy(on + SKIP_N, N - SKIP_N, 4500.0, 4950.0) /
-                              band_energy(off + SKIP_N, N - SKIP_N, 4500.0, 4950.0));
-    double mid = 10.0 * log10(band_energy(on + SKIP_N, N - SKIP_N, 800.0, 1200.0) /
-                              band_energy(off + SKIP_N, N - SKIP_N, 800.0, 1200.0));
-    CHECK(top < -25.0);
-    CHECK(fabs(mid) < 0.5);
+    biquad_lowpass(&a, CAL_LPF_HZ, 0.5411961f, (float)SYNTH_RATE);
+    biquad_lowpass(&b, CAL_LPF_HZ, 1.3065630f, (float)SYNTH_RATE);
+    for (int i = 0; i < N; i++) {
+        int d = abs((int)lrintf(biquad_step(&b, biquad_step(&a, (float)off[i]))) - on[i]);
+        if (d > worst)
+            worst = d;
+    }
+    if (worst > 3)
+        fprintf(stderr, "  lowpass: worst difference %d LSB\n", worst);
+    CHECK(worst <= 3);
+    CHECK(memcmp(on, off, sizeof on) != 0);
 }
 
 /* The low-end peak acts on voiced speech only. */
