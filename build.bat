@@ -7,13 +7,14 @@ if not defined VSCMD_VER (
 )
 if not exist build mkdir build
 set CFLAGS=/nologo /std:c11 /W4 /WX /wd4244 /O2 /Zi /Isrc /D_CRT_SECURE_NO_WARNINGS
+set LIBS=winmm.lib
 set LIBSRC=
 for %%d in (src\cpu740 src\machine src\engine src\synth src\audio src\render) do (
     if exist %%d\*.c set LIBSRC=!LIBSRC! %%d\*.c
 )
-cl %CFLAGS% /Fobuild\ /Fdbuild\ /Febuild\apollo2_tests.exe tests\*.c !LIBSRC! || exit /b 1
+cl %CFLAGS% /Fobuild\ /Fdbuild\ /Febuild\apollo2_tests.exe tests\*.c !LIBSRC! %LIBS% || exit /b 1
 if exist src\apps\apollo2_frames.c (
-    cl %CFLAGS% /Fobuild\ /Fdbuild\ /Febuild\apollo2_frames.exe src\apps\apollo2_frames.c !LIBSRC! || exit /b 1
+    cl %CFLAGS% /Fobuild\ /Fdbuild\ /Febuild\apollo2_frames.exe src\apps\apollo2_frames.c !LIBSRC! %LIBS% || exit /b 1
 )
 if /i not "%~1"=="test" exit /b 0
 build\apollo2_tests.exe %2
