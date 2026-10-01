@@ -1,0 +1,1 @@
+@F2 Low pitch. @FE High pitch. @F8 Normal. @F+ Up. @F- Down.

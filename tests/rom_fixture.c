@@ -28,3 +28,24 @@ void print_unmodelled(const machine *m)
         fprintf(stderr, "  unmodelled %s $%04X at PC $%04X\n", m->unmodelled[i].write ? "write" : "read",
                 m->unmodelled[i].addr, m->unmodelled[i].pc);
 }
+
+char *test_read_file(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return NULL;
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size < 0) {
+        fclose(f);
+        return NULL;
+    }
+    char *s = malloc((size_t)size + 1);
+    size_t n = s ? fread(s, 1, (size_t)size, f) : 0;
+    fclose(f);
+    if (!s)
+        return NULL;
+    s[n] = '\0';
+    return s;
+}

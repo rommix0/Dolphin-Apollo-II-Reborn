@@ -7,4 +7,6 @@
 const uint8_t *test_rom(size_t *len);
 /* Prints every logged unmodelled access of m to stderr (one line each). */
 void print_unmodelled(const machine *m);
+/* Whole file as a NUL-terminated malloc'ed string (binary mode, no CRLF translation); NULL if missing. */
+char *test_read_file(const char *path);
 #endif

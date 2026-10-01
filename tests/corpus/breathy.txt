@@ -1,0 +1,1 @@
+@B1 Whisper this. @B4 Half voiced. @B8 Full voice.
