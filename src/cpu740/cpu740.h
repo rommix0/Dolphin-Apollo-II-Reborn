@@ -37,4 +37,8 @@ void cpu740_reset(cpu740 *cpu, const cpu740_bus *bus);
 int cpu740_step(cpu740 *cpu, const cpu740_bus *bus);
 void cpu740_set_irq(cpu740 *cpu, int line, bool asserted);
 
+/* Disassembler: side-effect-free byte reader + text output. Returns the instruction length. */
+typedef uint8_t (*cpu740_peek_fn)(void *ctx, uint16_t addr);
+int cpu740_disasm(uint16_t pc, cpu740_peek_fn peek, void *ctx, char *out, size_t outlen);
+
 #endif
