@@ -108,7 +108,7 @@ static void test_hypothesis_switches(void)
     CHECK(!p.reset);
 }
 
-/* b10 is a pitch period of 160 - 2*code samples at 10 kHz (ROM $B930, spec ง1.4). */
+/* b10 is a pitch period of 160 - 2*code samples at 10 kHz (ROM $B930, spec ยง1.4). */
 static void test_f0_period_scale(void)
 {
     CHECK(fabsf(params_f0_hz(32) - 10000.0f / 96.0f) < 0.01f);   /* 104.2 Hz: the plain-corpus median */

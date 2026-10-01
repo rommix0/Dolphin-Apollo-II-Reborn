@@ -239,11 +239,14 @@ and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
   *(rev 5: this removes the stop-closure and glide-onset thumps without boundary clicks)*.
 - F0 follows the period scale (§1.4). The utterance's pitch movement is widened by a gain of 2.0
   around its median pitch, which render computes *(rev 5, chosen by listening)*.
+  *(rev 5)* The gain applies around one centre per utterance, so an explicit `@F` register change
+  inside an utterance is widened too (its jump doubles in semitones).
 
 **Files:**
 - `params.c`: bytes → physical values, using `calib.h`
 - `source.c`, `resonator.c`
 - `synth.c`: the resonator bank and summing
+- `biquad.h/.c`: RBJ peaking and low-pass sections *(rev 5)*
 
 **Calibration (`calib.h`, the only place the synthesizer's calibrated (fitted) constants live;
 structural constants such as the `params.c` ranges and clamps and the `source.c` V gate stay in the code):**
@@ -256,7 +259,7 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
 3. **F0:** *(rev 5)* not fitted. The firmware's period scale is used, with the pitch-range gain chosen by listening (`CAL_F0_RANGE_GAIN`). The Juno reference contains two voices, so the rev 4 quantile fit was wrong.
 4. **Hypothesis switches:** b11 (as pulse width) and b13 (resonator state reset) have a
    switch that defaults to off or neutral. They are enabled one at a time during listening
-   tests. *(rev 4: b14–b17 have no switch yet, see the results below.)*
+   tests. *(rev 5: the b13 switch is optional and stacks on top of the always-on 16-sample ramp and mute-reset.)* *(rev 4: b14–b17 have no switch yet, see the results below.)*
 
 **Calibration results** *(rev 4; see docs/calibration/report.md)*:
 - *(rev 5)* The reference is now only the Juno's male passages (file time 5–14.4 s and 22.3–25 s; 14.5–22 s
@@ -273,9 +276,9 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
 - The source is a unit-power impulse train. Hypothesis b11 switches to a Rosenberg pulse whose
   open quotient is b11/64.
 - Hypothesis switches implemented: b11 (pulse width) and b13 bit 7 (resonator reset).
-- The b11 render is level-matched to the impulse source by `CAL_B11_GAIN_DB` (about −7.7 dB;
-  unmatched, the Rosenberg render was 7.7 dB louder and clipped), so the listening A/B compares
-  timbre, not loudness.
+- *(rev 5)* The b11 (Rosenberg) source is level-matched to the impulse source on the voiced path only,
+  by `CAL_B11_GAIN_DB` = −8.43 dB; the noise is not scaled. (Unmatched, the Rosenberg render was
+  louder and clipped.) The listening A/B therefore compares timbre, not loudness.
 - b14–b15 and b16–b17 are decoded (§1.4) but get no switch until a listening-test hypothesis
   exists. Candidates: the @$ source and filter variants.
 

@@ -68,6 +68,33 @@ void suite_render(void)
     CHECK(memcmp(a.samples, plain.samples, a.count * sizeof a.samples[0]) != 0);
     CHECK_EQ(plain.clipped, 0);
 
+    /* render_text applies the stream's pitch centre: rebuild the pipeline by hand with and without it */
+    {
+        frame_list fl = { 0 };
+        CHECK_EQ(rom_engine_speak_streams(&g_m, rom, len, NULL, "@R4 Hello world.", &fl, NULL), MACHINE_IDLE);
+        CHECK_EQ(fl.count, 105);
+        size_t n = fl.count * SYNTH_FRAME_SAMPLES;
+        int16_t *with_c = malloc(n * sizeof *with_c), *no_c = malloc(n * sizeof *no_c);
+        CHECK(with_c && no_c);
+        if (with_c && no_c) {
+            for (int pass = 0; pass < 2; pass++) {
+                synth s;
+                synth_options so;
+                synth_default_options(&so);
+                so.f0_centre_hz = pass == 0 ? params_f0_centre(&fl.frames[0][0], fl.count) : 0.0f;
+                synth_init(&s, &so);
+                for (size_t i = 0; i < fl.count; i++)
+                    synth_frame(&s, fl.frames[i], (pass == 0 ? with_c : no_c) + i * SYNTH_FRAME_SAMPLES);
+            }
+            CHECK_EQ(a.count, n);
+            CHECK(memcmp(a.samples, with_c, n * sizeof *with_c) == 0);
+            CHECK(memcmp(a.samples, no_c, n * sizeof *no_c) != 0);
+        }
+        free(with_c);
+        free(no_c);
+        frame_list_free(&fl);
+    }
+
     render_result_free(&a);
     render_result_free(&b);
     render_result_free(&voice_b);

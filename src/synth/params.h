@@ -9,8 +9,8 @@
 #define SYNTH_FRAME_SAMPLES 100     /* one 10 ms frame */
 #define SYNTH_FRAME_BYTES   20
 
-/* Synthesizer hypothesis switches (spec §5, step 4). All off = neutral; enabled one at a time
-   during listening tests. */
+/* Synthesizer hypothesis switches (spec §5, step 4) and output filters. Zero-init = hypotheses
+   off and both filters off, which is not the production default: use synth_default_options (synth.h). */
 typedef struct {
     bool b11_pulse_width;   /* b11 (@M mark-space ratio) sets the glottal open quotient (Rosenberg pulse) */
     bool b13_reset;         /* b13 bit 7 (spectral jump) clears the resonator states at frame start */
