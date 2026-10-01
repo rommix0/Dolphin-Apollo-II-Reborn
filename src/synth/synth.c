@@ -5,15 +5,26 @@
 
 static const float k_sign[5] = { 1.0f, -1.0f, 1.0f, -1.0f, 1.0f };   /* spec §5: alternating signs */
 
+void synth_default_options(synth_options *opt)
+{
+    memset(opt, 0, sizeof *opt);
+    opt->peak_filter = true;
+    opt->lowpass = true;
+}
+
 void synth_init(synth *s, const synth_options *opt)
 {
     memset(s, 0, sizeof *s);
     if (opt)
         s->opt = *opt;
+    else
+        synth_default_options(&s->opt);
     source_init(&s->src);
     s->level = CAL_MASTER_GAIN * 32767.0f;
-    if (s->opt.b11_pulse_width)   /* level-match the Rosenberg hypothesis to the impulse source */
-        s->level *= powf(10.0f, CAL_B11_GAIN_DB / 20.0f);
+    /* The b11 (Rosenberg) hypothesis is level-matched on the voiced path only: the noise keeps its level. */
+    s->voiced_gain_db = s->opt.b11_pulse_width ? CAL_B11_GAIN_DB : 0.0f;
+    biquad_lowpass(&s->lpf[0], CAL_LPF_HZ, 0.5411961f, (float)SYNTH_RATE);   /* Butterworth Q pair */
+    biquad_lowpass(&s->lpf[1], CAL_LPF_HZ, 1.3065630f, (float)SYNTH_RATE);
 }
 
 void synth_frame(synth *s, const uint8_t frame[SYNTH_FRAME_BYTES], int16_t out[SYNTH_FRAME_SAMPLES])
@@ -48,6 +59,8 @@ void synth_frame(synth *s, const uint8_t frame[SYNTH_FRAME_BYTES], int16_t out[S
     sp.f0_hz = p.f0_hz;
     sp.voicing = p.voicing;
     sp.open_quotient = p.open_quotient;
+    sp.peak_filter = s->opt.peak_filter;
+    sp.voiced_gain_db = s->voiced_gain_db;
     /* b13 bit 7 marks a transition (closure, release, onset, some vowel/sonorant boundaries): the
        amplitudes reach their targets within CAL_STEP_RAMP_SAMPLES. A full-frame ramp lets the
        vowel's energy thump at a stop closure; an instant step clicks at vowel/sonorant boundaries. */
@@ -60,6 +73,8 @@ void synth_frame(synth *s, const uint8_t frame[SYNTH_FRAME_BYTES], int16_t out[S
             float g = s->gain[k] + (target[k] - s->gain[k]) * t;
             y += k_sign[k] * g * resonator_step(&s->res[k], x);
         }
+        if (s->opt.lowpass)
+            y = biquad_step(&s->lpf[1], biquad_step(&s->lpf[0], y));
         y *= s->level;
         if (y > 32767.0f) {
             y = 32767.0f;

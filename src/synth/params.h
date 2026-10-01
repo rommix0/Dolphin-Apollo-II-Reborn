@@ -15,6 +15,8 @@ typedef struct {
     bool b11_pulse_width;   /* b11 (@M mark-space ratio) sets the glottal open quotient (Rosenberg pulse) */
     bool b13_reset;         /* b13 bit 7 (spectral jump) clears the resonator states at frame start */
     float f0_centre_hz;     /* pitch centre of the utterance (params_f0_centre); 0 = no pitch-range gain */
+    bool peak_filter;       /* voiced-source low-end peak (CAL_PEAK_*): restores the fundamental */
+    bool lowpass;           /* output reconstruction low-pass (CAL_LPF_HZ), like the DAC's analog filter */
 } synth_options;
 
 typedef struct {

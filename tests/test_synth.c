@@ -31,6 +31,37 @@ static void frame(const char *hex, uint8_t f[SYNTH_FRAME_BYTES])
     CHECK(test_parse_hex(hex, f, SYNTH_FRAME_BYTES));
 }
 
+/* The transition tests isolate the amplitude path: both filters off. */
+static void init_unfiltered(void)
+{
+    synth_options o;
+    synth_default_options(&o);
+    o.peak_filter = false;
+    o.lowpass = false;
+    synth_init(&g_s, &o);
+}
+
+static void run(const synth_options *o, const uint8_t f[SYNTH_FRAME_BYTES], int frames, int16_t *out)
+{
+    synth_init(&g_s, o);
+    for (int i = 0; i < frames; i++)
+        synth_frame(&g_s, f, out + i * SYNTH_FRAME_SAMPLES);
+}
+
+static double band_energy(const int16_t *x, int n, double lo, double hi)
+{
+    double e = 0.0;
+    for (double fr = lo; fr <= hi; fr += 50.0) {
+        double re = 0.0, im = 0.0;
+        for (int i = 0; i < n; i++) {
+            re += x[i] * cos(2.0 * TEST_PI * fr * i / SYNTH_RATE);
+            im -= x[i] * sin(2.0 * TEST_PI * fr * i / SYNTH_RATE);
+        }
+        e += re * re + im * im;
+    }
+    return e;
+}
+
 static void test_silence_is_zero(void)
 {
     uint8_t f[SYNTH_FRAME_BYTES];
@@ -122,16 +153,14 @@ static void check_peaks(const char *hex)
 
 static void test_b11_switch_changes_voicing(void)
 {
-    static const synth_options b11 = { true, false };
     static int16_t a[10 * SYNTH_FRAME_SAMPLES], b[10 * SYNTH_FRAME_SAMPLES];
+    synth_options o;
     uint8_t f[SYNTH_FRAME_BYTES];
     frame(k_ar, f);
-    synth_init(&g_s, NULL);
-    for (int i = 0; i < 10; i++)
-        synth_frame(&g_s, f, a + i * SYNTH_FRAME_SAMPLES);
-    synth_init(&g_s, &b11);
-    for (int i = 0; i < 10; i++)
-        synth_frame(&g_s, f, b + i * SYNTH_FRAME_SAMPLES);
+    synth_default_options(&o);
+    run(&o, f, 10, a);
+    o.b11_pulse_width = true;
+    run(&o, f, 10, b);
     CHECK(memcmp(a, b, sizeof a) != 0);
 }
 
@@ -171,10 +200,12 @@ static int corpus_peak(const synth_options *opt, const char *label)
 /* The plain corpus peaks between -12 and -1 dBFS; the b11 hypothesis is level-matched to it. */
 static void test_corpus_level(void)
 {
-    static const synth_options b11 = { true, false };
+    synth_options b11;
     int peak = corpus_peak(NULL, "plain");
     CHECK(peak >= 8231);    /* -12 dBFS */
     CHECK(peak <= 29204);   /* -1 dBFS */
+    synth_default_options(&b11);
+    b11.b11_pulse_width = true;
     corpus_peak(&b11, "b11");   /* no clipping is asserted inside */
 }
 
@@ -183,7 +214,7 @@ static void test_step_ramp(void)
 {
     uint8_t f[SYNTH_FRAME_BYTES];
     int16_t out[SYNTH_FRAME_SAMPLES];
-    synth_init(&g_s, NULL);
+    init_unfiltered();
     frame(k_ar, f);
     for (int i = 0; i < 5; i++)
         synth_frame(&g_s, f, out);
@@ -201,7 +232,7 @@ static void test_closure_settles(void)
     uint8_t f[SYNTH_FRAME_BYTES];
     int16_t out[SYNTH_FRAME_SAMPLES];
     int vowel = 0;
-    synth_init(&g_s, NULL);
+    init_unfiltered();
     frame(k_ar, f);
     for (int i = 0; i < 10; i++) {
         synth_frame(&g_s, f, out);
@@ -221,7 +252,7 @@ static void test_glide_onset(void)
 {
     uint8_t f[SYNTH_FRAME_BYTES];
     int16_t out[SYNTH_FRAME_SAMPLES];
-    synth_init(&g_s, NULL);
+    init_unfiltered();
     frame(k_silence, f);
     for (int i = 0; i < 5; i++)
         synth_frame(&g_s, f, out);
@@ -238,6 +269,48 @@ static void test_glide_onset(void)
     CHECK(onset * 10 <= steady * 13);
 }
 
+/* The output low-pass removes the band above the DAC filter and leaves the speech band alone. */
+static void test_lowpass(void)
+{
+    enum { FRAMES = 30, N = FRAMES * SYNTH_FRAME_SAMPLES, SKIP_N = 500 };
+    static int16_t on[N], off[N];
+    synth_options o;
+    uint8_t f[SYNTH_FRAME_BYTES];
+    frame(k_ar, f);
+    f[9] = 1;                                   /* noise only: energy right up to 5 kHz */
+    synth_default_options(&o);
+    run(&o, f, FRAMES, on);
+    o.lowpass = false;
+    run(&o, f, FRAMES, off);
+    double top = 10.0 * log10(band_energy(on + SKIP_N, N - SKIP_N, 4500.0, 4950.0) /
+                              band_energy(off + SKIP_N, N - SKIP_N, 4500.0, 4950.0));
+    double mid = 10.0 * log10(band_energy(on + SKIP_N, N - SKIP_N, 800.0, 1200.0) /
+                              band_energy(off + SKIP_N, N - SKIP_N, 800.0, 1200.0));
+    CHECK(top < -25.0);
+    CHECK(fabs(mid) < 0.5);
+}
+
+/* The low-end peak acts on voiced speech only. */
+static void test_peak_voiced_only(void)
+{
+    static int16_t a[10 * SYNTH_FRAME_SAMPLES], b[10 * SYNTH_FRAME_SAMPLES];
+    synth_options o;
+    uint8_t f[SYNTH_FRAME_BYTES];
+    frame(k_ar, f);
+    f[9] = 1;                                   /* noise only */
+    synth_default_options(&o);
+    run(&o, f, 10, a);
+    o.peak_filter = false;
+    run(&o, f, 10, b);
+    CHECK(memcmp(a, b, sizeof a) == 0);
+    frame(k_ar, f);                             /* fully voiced */
+    synth_default_options(&o);
+    run(&o, f, 10, a);
+    o.peak_filter = false;
+    run(&o, f, 10, b);
+    CHECK(memcmp(a, b, sizeof a) != 0);
+}
+
 void suite_synth(void)
 {
     test_silence_is_zero();
@@ -248,5 +321,7 @@ void suite_synth(void)
     test_step_ramp();
     test_closure_settles();
     test_glide_onset();
+    test_lowpass();
+    test_peak_voiced_only();
     test_corpus_level();
 }

@@ -46,9 +46,16 @@
 #define CAL_F0_MIN_HZ 40.0f
 #define CAL_F0_MAX_HZ 400.0f
 
+/* Voiced-source low-end peak (restores the fundamental) and the output reconstruction low-pass
+   (4th-order Butterworth, like the DAC's analog filter); both chosen by listening. */
+#define CAL_PEAK_HZ 110.0f
+#define CAL_PEAK_Q 0.6f
+#define CAL_PEAK_DB 10.0f
+#define CAL_LPF_HZ 3800.0f
+
 /* Output level: synth units -> int16 full scale (the corpus must peak between -12 and -1 dBFS
    without clipping; see suite_synth) */
 #define CAL_MASTER_GAIN 0.9123f
-#define CAL_B11_GAIN_DB -7.73f    /* level match of the b11 (Rosenberg) hypothesis to the impulse source */
+#define CAL_B11_GAIN_DB -7.73f    /* level match of the b11 (Rosenberg) voiced source to the impulse source */
 
 #endif

@@ -1,4 +1,6 @@
 #include <math.h>
+#include "synth/calib.h"
+#include "synth/params.h"
 #include "synth/source.h"
 
 #define PI_F 3.14159265358979f
@@ -11,6 +13,7 @@ void source_init(source *s)
     s->noise_state = 0x12345678u;
     s->phase = 0.0f;
     s->prev_flow = 0.0f;
+    biquad_peaking(&s->peak, CAL_PEAK_HZ, CAL_PEAK_Q, CAL_PEAK_DB, (float)SYNTH_RATE);
 }
 
 static float noise(source *s)
@@ -47,6 +50,10 @@ float source_step(source *s, const source_params *p, float fs)
     } else {
         voiced = s->phase < inc ? sqrtf(t0) : 0.0f;   /* one impulse per period: unit average power */
     }
+    if (p->peak_filter)
+        voiced = biquad_step(&s->peak, voiced);
+    if (p->voiced_gain_db != 0.0f)
+        voiced *= powf(10.0f, p->voiced_gain_db / 20.0f);
     float n = noise(s);
     if (p->voicing > 0.25f && p->voicing < 0.75f)     /* voiced fricative: noise follows the glottal cycle */
         n *= (s->phase < 0.5f ? 1.0f : MOD_LOW) * MOD_NORM;

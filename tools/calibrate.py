@@ -56,18 +56,22 @@ TEMPLATE = [
     ('', None), ('/* F0: b10 is a pitch period of 160 - 2*code samples (ROM $B930; params.c). The pitch movement\n'
                  '   of an utterance is widened by CAL_F0_RANGE_GAIN around its median (render passes the centre). */', None),
     ('CAL_F0_RANGE_GAIN', 'f'), ('CAL_F0_MIN_HZ', 'f'), ('CAL_F0_MAX_HZ', 'f'),
+    ('', None), ('/* Voiced-source low-end peak (restores the fundamental) and the output reconstruction low-pass\n'
+                 '   (4th-order Butterworth, like the DAC\'s analog filter); both chosen by listening. */', None),
+    ('CAL_PEAK_HZ', 'f'), ('CAL_PEAK_Q', 'f'), ('CAL_PEAK_DB', 'f'), ('CAL_LPF_HZ', 'f'),
     ('', None), ('/* Output level: synth units -> int16 full scale (the corpus must peak between -12 and -1 dBFS\n'
                  '   without clipping; see suite_synth) */', None),
     ('CAL_MASTER_GAIN', 'f'), ('CAL_B11_GAIN_DB', 'f'),
 ]
 NOTES = {'CAL_FN_B': 'hypothesis H-FN: a low resonance, ~256 Hz at the usual code 32',
          'CAL_F4_HZ': 'the fixed fourth formant, driven by AHF',
-         'CAL_B11_GAIN_DB': 'level match of the b11 (Rosenberg) hypothesis to the impulse source',
+         'CAL_B11_GAIN_DB': 'level match of the b11 (Rosenberg) voiced source to the impulse source',
          'CAL_F0_RANGE_GAIN': 'chosen by listening: 2.0 doubles the firmware contour in semitones',
          'CAL_STEP_RAMP_SAMPLES': 'chosen by listening: no closure thump, no boundary clicks',}
 
 # Seeds for constants that a calib.h written by an older generator does not have yet.
-DEFAULTS = {'CAL_B11_GAIN_DB': 0.0, 'CAL_F0_RANGE_GAIN': 2.0, 'CAL_STEP_RAMP_SAMPLES': 16}
+DEFAULTS = {'CAL_PEAK_HZ': 110.0, 'CAL_PEAK_Q': 0.6, 'CAL_PEAK_DB': 10.0, 'CAL_LPF_HZ': 3800.0,
+            'CAL_B11_GAIN_DB': 0.0, 'CAL_F0_RANGE_GAIN': 2.0, 'CAL_STEP_RAMP_SAMPLES': 16}
 
 
 def c_float(v):
