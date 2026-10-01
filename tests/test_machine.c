@@ -167,6 +167,48 @@ static void test_escaped_pc(void)
     CHECK_EQ(g_m.cpu.pc, 0x00E0);
 }
 
+/* Test-only cycle scale: with 2/1 the peripheral timers see two ticks per CPU cycle. */
+static void test_cycle_scale(void)
+{
+    static const uint8_t code[] = { 0x3C, 0x00, 0xE0,     /* $9000 LDM #$00,$E0  timer 3 prescaler */
+                                    0x3C, 0x31, 0xE1,     /*       LDM #$31,$E1  period 200 timer cycles */
+                                    0x4C, 0x06, 0x90 };   /*       JMP $9006 */
+    machine_config cfg;
+    machine_default_config(&cfg);
+    cfg.cycle_num = 2;
+    cfg.cycle_den = 1;
+    memset(g_rom, 0, sizeof g_rom);
+    put(0x9000, code, sizeof code);
+    set_vector(0xFFFE, 0x9000);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, &cfg));
+    CHECK_EQ(machine_run(&g_m, 60), MACHINE_CYCLE_LIMIT);   /* ~120 timer cycles: not yet */
+    CHECK_EQ(g_m.sfr.icr2 & 0x20, 0);
+    CHECK_EQ(machine_run(&g_m, 50), MACHINE_CYCLE_LIMIT);   /* ~220 timer cycles, ~110 CPU cycles */
+    CHECK_EQ(g_m.sfr.icr2 & 0x20, 0x20);
+    CHECK(g_m.cpu.cycles < 130);                             /* cpu.cycles stays unscaled */
+}
+
+static void test_peek_has_no_side_effects(void)
+{
+    memset(g_rom, 0, sizeof g_rom);
+    g_rom[0x0010] = 0x22; g_rom[0x4010] = 0x11; g_rom[0x9000] = 0x33;
+    set_vector(0xFFFE, 0x9000);
+    boot();
+    wr(M50734_P2, 0xF0);
+    wr(M50734_P2_DIR, 0xFD);                       /* P2.7 = 1: lower window selected */
+    CHECK(m50734_uart_receive(&g_m.sfr, 0x5A));
+    uint64_t lower = g_m.lower_window_reads;
+    unsigned unmodelled = g_m.unmodelled_count;
+    CHECK(g_m.sfr.uart_rx_full);
+    CHECK_EQ(machine_peek(&g_m, 0x4010), 0x22);    /* served from the lower window */
+    machine_peek(&g_m, 0x00E5);                    /* UART RX: a real read would clear rx_full */
+    machine_peek(&g_m, 0x00DA);                    /* unmodelled SFR: a real read would be logged */
+    machine_peek(&g_m, 0x9000);
+    CHECK_EQ(g_m.lower_window_reads, lower);
+    CHECK_EQ(g_m.unmodelled_count, unmodelled);
+    CHECK(g_m.sfr.uart_rx_full);
+}
+
 void suite_machine(void)
 {
     test_memory_map();
@@ -175,4 +217,6 @@ void suite_machine(void)
     test_fault_and_dump();
     test_cycle_limit();
     test_escaped_pc();
+    test_cycle_scale();
+    test_peek_has_no_side_effects();
 }
