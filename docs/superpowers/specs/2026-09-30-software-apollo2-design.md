@@ -1,7 +1,7 @@
 # Software Apollo 2 — Design
 
 **Date:** 2026-09-30
-**Status:** Approved. Revision 2 adds facts found while planning milestone 1
+**Status:** Approved. Revision 3 makes the finished project ROM-free (R5). Revision 2 adds facts found while planning milestone 1
 (MAME's M50734 register map and the lower-ROM banking); the changes are marked *(rev 2)*.
 **Goal:** A software Dolphin Apollo 2. Text typed on a PC goes through the real
 firmware logic (first emulated, then decompiled to C) and produces DSP frames.
@@ -109,8 +109,16 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
   `native` engines emit exactly the same frame stream as the `rom` engine.
 - **R4 — Synth acceptance:** intelligible speech in the Holmes/JSRU character, judged
   by the user's listening tests. Objective checks are in §7.2.
-- **R5 — No Dolphin bytes in the repo:** ROM-derived tables are generated at build
-  time from the user's ROM file.
+- **R5 — Standalone after M5** *(rev 3, user decision 2026-09-30)*: the finished
+  project needs no ROM to build, run or test.
+  - The firmware's **code** is decompiled to C.
+  - Its **data** (letter-to-sound rules, exception dictionary, phoneme parameter
+    tables, symbol tables, lookup tables) is converted once into readable,
+    structured C source and committed. Rules become entries such as
+    `{ "BOR", "ATOR", "LxBQRxTxR" }`, not hex blobs.
+  - The raw ROM image itself is never committed (`*.BIN` stays gitignored).
+  - Before M5 the ROM is needed: the `rom`/`hybrid` engines run it, and a check
+    verifies every committed table byte-for-byte against it when it is present.
 - **R6 — Toolchain:** portable C11, built with MSVC 2022 Build Tools (via
   `vcvars64.bat`) on Windows 10. Python 3.13 (numpy, scipy, librosa) for tools and
   calibration reports only.
@@ -135,14 +143,15 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 | `synth/` | Holmes parallel-formant synthesizer | `synth_init(cfg)`, `synth_frame(const uint8_t f[20], int16_t out[100])` | — |
 | `apollo2/` | CLI, WAV writer, live playback (waveOut) | R1 | all |
 | `ghidra740/` | Ghidra SLEIGH module for the 740 | Ghidra extension | — |
-| `tools/` | `extract_tables.py`, `calibrate.py`, corpus/golden runners | scripts | Python |
+| `tools/` | `extract_tables.py` (a one-time converter, ROM → readable C, rev 3), `calibrate.py`, corpus/golden runners | scripts | Python |
 | `tests/` | unit, differential, golden-frame and synth tests | `apollo2_tests.exe`: runs all suites, non-zero exit on any failure | all |
 
 **Build:** CMake is not installed, so `build.bat` calls `vcvars64.bat` and then `cl`
 with `/std:c11 /W4 /WX /wd4244`. C4244 (implicit narrowing) is disabled because
-8-bit truncation is intentional throughout the emulator. It builds `apollo2.exe` and `apollo2_tests.exe`, after
-first running `tools/extract_tables.py` against the ROM path given in
-`APOLLO2_ROM` (default: `./UK_V2.01_4.04_ROM.BIN`).
+8-bit truncation is intentional throughout the emulator. It builds `apollo2.exe` and
+`apollo2_tests.exe` from committed sources only. The ROM (from `APOLLO2_ROM`,
+default `./UK_V2.01_4.04_ROM.BIN`) is read at run time by the `rom`/`hybrid` engines
+and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
 
 ## 4. Machine model (`machine/`)
 - **Memory map:** as §1.2. Every access to an address with no model behind it is
@@ -231,8 +240,13 @@ first running `tools/extract_tables.py` against the ROM path given in
    - The RAM-resident bank code becomes plain C.
    - In native mode, the ISR double buffer becomes a direct frame sink: the
      main-loop wait on `$5C` turns into "emit frame".
-5. **Data:** `tools/extract_tables.py` generates C arrays from the user's ROM at
-   build time (R5).
+5. **Data** *(rev 3)*: each ROM table is converted once into committed, readable
+   C under `src/firmware/data/`, at the point a routine that uses it is ported.
+   - `tools/extract_tables.py` writes the first draft. It is then annotated by
+     hand: field names, phoneme symbols as comments, rules as strings.
+   - A `firmware_data` test re-encodes every committed table and compares it
+     byte-for-byte with its ROM address range. It runs whenever the ROM is
+     present and SKIPs otherwise.
 6. **Organisation:** one C file per subsystem:
    - command/serial parser
    - text normalisation
@@ -279,8 +293,12 @@ first running `tools/extract_tables.py` against the ROM path given in
    - `apollo2 "text" -o out.wav` works end to end on the `rom` engine.
 3. **Ghidra module and project:** full code coverage and labelled routines.
 4. **Progressive replacement:** routines move to C under differential and golden tests.
-5. **Native:** every routine is in C. The `native` engine builds without
-   `cpu740`/`machine`. The emulator stays in `tests/` as the oracle.
+5. **Native:** every routine and every table is in committed C. The `native`
+   engine builds without `cpu740`/`machine`.
+   - **Done when** *(rev 3)*: with no ROM file anywhere, `build.bat test` passes
+     and the native engine reproduces every committed golden frame stream.
+   - The emulator stays in `tests/` as the oracle. It is needed only to
+     regenerate goldens or extend the corpus, and that requires the ROM.
 
 ## 9. Out of scope
 - Parallel-port input and the virtual serial device. The architecture leaves room

@@ -22,10 +22,11 @@ A dev CLI and a golden-corpus test sit on top.
   - Flags: `/nologo /std:c11 /W4 /WX /wd4244 /O2 /Zi /Isrc /D_CRT_SECURE_NO_WARNINGS`.
   - Code must compile warning-free at `/W4`. In particular: no non-constant aggregate initialisers (C4204); no `(uint8_t)~CONST` casts (C4310), so write `(uint8_t)(0xFF ^ CONST)`; no signed/unsigned loop comparisons (C4018).
 - **Running from Git Bash:** `cmd //c "build.bat test"` builds and runs all suites. `cmd //c "build.bat test <filter>"` runs the suites whose name contains `<filter>`.
-- **No Dolphin bytes in the repo (spec R5):**
-  - The ROM is read at runtime from `APOLLO2_ROM`, or by default from `./UK_V2.01_4.04_ROM.BIN` in the repo root (gitignored).
+- **ROM handling in M1 (spec R5, rev 3):**
+  - The raw ROM image is never committed. It is read at runtime from `APOLLO2_ROM`, or by default from `./UK_V2.01_4.04_ROM.BIN` in the repo root (gitignored).
   - Tests that need the ROM print `SKIP` when it is missing.
-  - Golden frame files (firmware *output*) are committed.
+  - Golden frame files are committed.
+  - M1 converts no ROM tables. That conversion to readable C happens in M4, so that after M5 nothing needs the ROM.
 - **Never silently accept unmodelled behaviour (spec §4):**
   - Unmodelled register or ROM-space accesses are logged.
   - Unsupported opcodes (SET, SED, STP, MUL, DIV, BRK), a T flag restored by PLP/RTI, and enabling DME are faults that stop the run.
@@ -2989,4 +2990,5 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - **M4 — Progressive replacement:**
   - per-routine thunks keyed by ROM address and `rom_call()`
   - differential entry/exit-state tests, golden frames held byte-exact
-- **M5 — Native:** all routines in C, with a `native` engine that doesn't use `cpu740`/`machine` and the emulator kept as the test oracle.
+- **M4 also:** each ROM table a ported routine uses is converted into committed, readable C under `src/firmware/data/`, with a byte-for-byte check against the ROM.
+- **M5 — Native:** all routines and tables in C, with a `native` engine that doesn't use `cpu740`/`machine`. Done when `build.bat test` passes with no ROM file present. The emulator is kept as the oracle for regenerating goldens.
