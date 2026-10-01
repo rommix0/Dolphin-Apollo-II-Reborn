@@ -7,7 +7,7 @@
 **Architecture:**
 - **Pitch:** F0 uses the firmware's own pitch-period scale. The pitch movement is widened around each utterance's centre, which `render` computes.
 - **Transitions:** frames flagged by the firmware (b13 bit 7) ramp their amplitudes quickly, and silent channels hold no resonator energy.
-- **Filters:** a low-end peak acts on the voiced source, and a 3.8 kHz low-pass models the device's DAC filter. Both can be switched off from the CLI.
+- **Filters:** a low-end peak acts on the voiced source, and a 3.8 kHz low-pass models the device's DAC filter. Both are always on in the CLI; `synth_options` can turn them off for tests only.
 - **CLI:** the device's prosody setting is exposed as `--prosody`.
 - **Calibration:** amplitudes are refitted against the Juno reference's male passages only.
 
@@ -79,7 +79,7 @@
   - keep the **impulse source**; the shaped Rosenberg and sawtooth pulses were rejected;
   - add a **peaking filter on the voiced source: 110 Hz, Q 0.6, +10 dB**, which restores the fundamental (H1);
   - add a **4th-order Butterworth low-pass at 3.8 kHz** on the output, modelling the DAC reconstruction filter;
-  - **both filters can be switched off from the CLI**.
+  - **the CLI has no switches for the filters** (user decision 2026-10-01): they are always on. `synth_options.peak_filter`/`lowpass` exist so tests can compare with and without them.
 - **Remaining spectral mismatch** against the Juno's male passages (file time 5–14.4 s and 22.3–25 s): 300–500 Hz about +5 dB, 2–2.5 kHz about +5 dB, 3 kHz about −14 dB. Task 6 refits the channel levels.
 
 ## File Map
@@ -93,7 +93,7 @@
 | `src/synth/synth.h/.c` | Fast ramp on b13 bit 7, mute-reset, output low-pass, default options | 3, 4 |
 | `src/synth/source.h/.c` | Voiced-path peak filter and voiced-only gain | 4 |
 | `src/render/render.h/.c` | `--prosody` prefix, utterance pitch centre, default synth options | 5 |
-| `src/apps/apollo2.c`, `README.md` | `--prosody`, `--peak-filter`, `--lowpass` | 5 |
+| `src/apps/apollo2.c`, `README.md` | `--prosody` | 5 |
 | `tests/test_params.c`, `tests/test_biquad.c`, `tests/test_synth.c`, `tests/test_source.c`, `tests/test_render.c`, `tests/suites.h` | Tests | 1–6 |
 | `docs/calibration/*` | Regenerated report | 6 |
 | `docs/superpowers/specs/...design.md` | Revision 5 | 7 |
@@ -1043,7 +1043,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 5: Render and CLI — prosody, pitch centre, filter switches
+### Task 5: Render and CLI — prosody, pitch centre
 
 **Files:**
 - Modify: `src/render/render.h`, `src/render/render.c`, `src/apps/apollo2.c`, `tests/test_render.c`, `README.md`
@@ -1057,7 +1057,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
     - the default is 4.
   - `render_default_options` sets `synth` to `synth_default_options`.
   - `render_text` passes `params_f0_centre` of the chosen stream as `f0_centre_hz`.
-  - CLI options `--prosody N`, `--peak-filter on|off` and `--lowpass on|off`.
+  - CLI option `--prosody N`. The CLI has **no** `--peak-filter` or `--lowpass` options (user decision 2026-10-01); both filters are always on.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1142,31 +1142,22 @@ void render_default_options(render_options *opt)
 ```c
             "  --prosody N        intonation strength 0-7, sent as @Rn (default 4 = the firmware's\n"
             "                     unscaled contour; the device's own default is 3)\n"
-            "  --peak-filter on|off  low-end peak on the voiced source (default on)\n"
-            "  --lowpass on|off   3.8 kHz output low-pass, like the device's DAC filter (default on)\n"
 ```
 - In the option loop, add before `} else if (!strcmp(a, "--text-file") && val) {`:
 ```c
         } else if (!strcmp(a, "--prosody") && val && val[0] >= '0' && val[0] <= '7' && val[1] == '\0') {
             opt.prosody = val[0] - '0';
             i++;
-        } else if (!strcmp(a, "--peak-filter") && val && (!strcmp(val, "on") || !strcmp(val, "off"))) {
-            opt.synth.peak_filter = !strcmp(val, "on");
-            i++;
-        } else if (!strcmp(a, "--lowpass") && val && (!strcmp(val, "on") || !strcmp(val, "off"))) {
-            opt.synth.lowpass = !strcmp(val, "on");
-            i++;
 ```
 
 `README.md`: in the "Speaking text" code block, add after the `--voice b` line:
 ```
     build/apollo2.exe --prosody 3 "Hello world."      # intonation 0-7 (@Rn); default 4, the device's own default is 3
-    build/apollo2.exe --peak-filter off --lowpass off -o raw.wav "Hello world."   # without the output shaping
 ```
 and append this paragraph after the existing paragraph below the block:
 ```
 The voice is shaped by a low-end peak on the voiced source and a 3.8 kHz low-pass that models the
-device's DAC filter; both are on by default (`--peak-filter`, `--lowpass`).
+device's DAC filter; both are always on.
 ```
 
 - [ ] **Step 4: Run and confirm it passes, then exercise the CLI**
@@ -1179,15 +1170,14 @@ Then run each of these. Never run `apollo2.exe` without `-o`.
 |---|---|
 | `build/apollo2.exe -o build/hello.wav "Hello world."; echo "exit $?"; stat -c %s build/hello.wav` | `exit 0`, `21044` |
 | `build/apollo2.exe --prosody 3 -o build/p3.wav "Hello world."; echo "exit $?"` | `exit 0` |
-| `build/apollo2.exe --peak-filter off --lowpass off -o build/plain.wav "Hello world."; echo "exit $?"` | `exit 0` |
 | `build/apollo2.exe --prosody 8 -o build/x.wav "Hi"; echo "exit $?"` | usage, `exit 1` |
-| `build/apollo2.exe --lowpass maybe -o build/x.wav "Hi"; echo "exit $?"` | usage, `exit 1` |
+| `build/apollo2.exe --peak-filter off -o build/x.wav "Hi"; echo "exit $?"` | usage, `exit 1` (no such option) |
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/render/render.h src/render/render.c src/apps/apollo2.c tests/test_render.c README.md
-git commit -m "apollo2: --prosody (default @R4), --peak-filter and --lowpass; render passes the pitch centre
+git commit -m "apollo2: --prosody (default @R4); render passes the pitch centre and enables both filters
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1201,7 +1191,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes:
-  - `build/apollo2.exe` with `--prosody`, `--peak-filter` and `--lowpass` (Task 5);
+  - `build/apollo2.exe` with `--prosody` (Task 5);
   - `calibrate.py set` (Task 1).
 - Produces:
   - `calib.h` macros `CAL_LTAS_ALF_DB`, `CAL_LTAS_A1_DB`, `CAL_LTAS_A2_DB`, `CAL_LTAS_A3_DB` and `CAL_LTAS_AHF_DB`. Each channel's offset is now `CAL_G_x_DB + CAL_LTAS_x_DB`.
@@ -1305,7 +1295,6 @@ def ltas_deltas(s_db, j_db):
    - **Extra renders.** After the `prose_hyp_b13` render, add:
 ```python
     render(prose, os.path.join(LISTEN_DIR, 'prose_prosody3.wav'), ['--prosody', '3'])
-    render(prose, os.path.join(LISTEN_DIR, 'prose_filters_off.wav'), ['--peak-filter', 'off', '--lowpass', 'off'])
 ```
    - **Markdown list.** In the `md` list:
      - change the Juno sentence to `'Wells (1962) RP male means (`tools/data/`). Juno: the male passages of `dolphin_juno_demo.mp3` (file time 5-14.4 s and 22.3-25 s).'`;
@@ -1317,7 +1306,7 @@ def ltas_deltas(s_db, j_db):
         '|---|---|---|---|---|', *band_rows, '',
         'Apply the suggested corrections with `calibrate.py fit --ltas`.',
 ```
-     - in the listening paragraph, add `prose_prosody3` (the device's default prosody) and `prose_filters_off` to the list.
+     - in the listening paragraph, add `prose_prosody3` (the device's default prosody) to the list.
    - **Print.** Change the final `print` to report `', '.join(f'{ch} {d:+.1f}' for ch, d in deltas.items())` instead of the ALF/AHF pair.
 
 7. Update the docstring's input line about the Juno to say "the male passages of dolphin_juno_demo.mp3".
@@ -1403,7 +1392,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 5. **§2, R1.** Replace the R1 bullet's first line with:
-   `- **R1 — CLI:** `apollo2 "text" [-o out.wav] [--voice a|b] [--prosody 0-7] [--peak-filter on|off] [--lowpass on|off] [--engine rom|hybrid|native] [--rom PATH] [--hyp b11,b13] [--stream produced|raw] [--text-file FILE] [--audio-check]`. *(rev 4: `--voice b` sends `@K1`; `--stream raw` is for comparison listening only. rev 5: `--prosody` sends `@Rn`, default 4; both filters default on.)*`
+   `- **R1 — CLI:** `apollo2 "text" [-o out.wav] [--voice a|b] [--prosody 0-7] [--engine rom|hybrid|native] [--rom PATH] [--hyp b11,b13] [--stream produced|raw] [--text-file FILE] [--audio-check]`. *(rev 4: `--voice b` sends `@K1`; `--stream raw` is for comparison listening only. rev 5: `--prosody` sends `@Rn`, default 4; the output filters are always on.)*`
 
 6. **§5, the "Signal path" bullets.** Replace the whole list (the five bullets from `- The pulse source (shaped by F0 and b11)` to `- Amplitudes ramp linearly across each frame. Frequencies update once per frame.`) with:
 ```
@@ -1468,7 +1457,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - the period pitch scale, the range gain and `@R4`;
   - the transition fixes;
   - both filters on.
-  `--prosody`, `--peak-filter` and `--lowpass` work.
+  `--prosody` works; there are no filter switches.
 - `docs/calibration/report.md` shows:
   - the Juno-male LTAS table within 3 dB per band;
   - F0 against the Juno male passages;
