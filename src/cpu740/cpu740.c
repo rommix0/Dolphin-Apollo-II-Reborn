@@ -46,7 +46,9 @@ static void set_nz(cpu740 *c, uint8_t v)
 
 static uint16_t read16_zp(const cpu740_bus *b, uint8_t zp)
 {
-    return (uint16_t)(rd(b, zp) | (rd(b, (uint8_t)(zp + 1)) << 8));
+    uint8_t lo = rd(b, zp);
+    uint8_t hi = rd(b, (uint8_t)(zp + 1));
+    return (uint16_t)(lo | hi << 8);
 }
 
 void cpu740_reset(cpu740 *c, const cpu740_bus *b)
@@ -60,7 +62,9 @@ void cpu740_reset(cpu740 *c, const cpu740_bus *b)
     c->fault = CPU740_OK;
     c->fault_pc = 0;
     c->fault_opcode = 0;
-    c->pc = (uint16_t)(rd(b, 0xFFFE) | (rd(b, 0xFFFF) << 8));
+    uint8_t lo = rd(b, 0xFFFE);
+    uint8_t hi = rd(b, 0xFFFF);
+    c->pc = (uint16_t)(lo | hi << 8);
 }
 
 void cpu740_set_irq(cpu740 *c, int line, bool asserted)
@@ -82,7 +86,9 @@ static int take_irq(cpu740 *c, const cpu740_bus *b)
     push(c, b, (uint8_t)c->pc);
     push(c, b, (uint8_t)(c->p & (0xFF ^ CPU740_B)));
     c->p |= CPU740_I;
-    c->pc = (uint16_t)(rd(b, vec) | (rd(b, (uint16_t)(vec + 1)) << 8));
+    uint8_t lo = rd(b, vec);
+    uint8_t hi = rd(b, (uint16_t)(vec + 1));
+    c->pc = (uint16_t)(lo | hi << 8);
     return 7;
 }
 
@@ -104,7 +110,9 @@ static operand decode(cpu740 *c, const cpu740_bus *b, uint8_t op, int mode)
         lo = fetch(c, b); hi = fetch(c, b);
         uint16_t ptr = (uint16_t)(lo | hi << 8);
         uint16_t ptr_hi = (uint16_t)((ptr & 0xFF00) | ((ptr + 1) & 0x00FF));  /* 6502 page wrap */
-        o.ea = (uint16_t)(rd(b, ptr) | rd(b, ptr_hi) << 8);
+        lo = rd(b, ptr);
+        hi = rd(b, ptr_hi);
+        o.ea = (uint16_t)(lo | hi << 8);
         break;
     }
     case AM_IZX: zp = (uint8_t)(fetch(c, b) + c->x); o.ea = read16_zp(b, zp); break;
