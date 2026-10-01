@@ -36,6 +36,10 @@
 #define CAL_G_A3_DB -26.7472f
 #define CAL_G_AHF_DB -33.8344f
 
+/* Transitions: frames with b13 bit 7 set (closures, releases, onsets, some vowel/sonorant
+   boundaries) reach their amplitudes within this many samples instead of across the frame. */
+#define CAL_STEP_RAMP_SAMPLES 16  /* chosen by listening: no closure thump, no boundary clicks */
+
 /* F0: b10 is a pitch period of 160 - 2*code samples (ROM $B930; params.c). The pitch movement
    of an utterance is widened by CAL_F0_RANGE_GAIN around its median (render passes the centre). */
 #define CAL_F0_RANGE_GAIN 2.0f    /* chosen by listening: 2.0 doubles the firmware contour in semitones */

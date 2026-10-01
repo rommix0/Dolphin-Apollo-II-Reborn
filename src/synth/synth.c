@@ -38,16 +38,23 @@ void synth_frame(synth *s, const uint8_t frame[SYNTH_FRAME_BYTES], int16_t out[S
     target[3] = p.a3;
     target[4] = p.ahf;
     for (int k = 0; k < 5; k++) {
-        if (p.reset)
+        /* Gains act on the resonator outputs, so a muted channel's resonator keeps ringing at the
+           silence frame's formants and would release that energy as a thump at the next onset
+           (glides after silence). A channel that was silent holds no energy. */
+        if (p.reset || s->gain[k] == 0.0f)
             resonator_reset(&s->res[k]);
         resonator_set(&s->res[k], freq[k], bw[k], (float)SYNTH_RATE);
     }
     sp.f0_hz = p.f0_hz;
     sp.voicing = p.voicing;
     sp.open_quotient = p.open_quotient;
+    /* b13 bit 7 marks a transition (closure, release, onset, some vowel/sonorant boundaries): the
+       amplitudes reach their targets within CAL_STEP_RAMP_SAMPLES. A full-frame ramp lets the
+       vowel's energy thump at a stop closure; an instant step clicks at vowel/sonorant boundaries. */
+    int ramp = (frame[13] & 0x80) ? CAL_STEP_RAMP_SAMPLES : SYNTH_FRAME_SAMPLES;
     for (int n = 0; n < SYNTH_FRAME_SAMPLES; n++) {
         float x = source_step(&s->src, &sp, (float)SYNTH_RATE);
-        float t = (float)(n + 1) / (float)SYNTH_FRAME_SAMPLES;   /* the ramp reaches the target at the frame end */
+        float t = n + 1 >= ramp ? 1.0f : (float)(n + 1) / (float)ramp;   /* reaches the target at the ramp end */
         float y = 0.0f;
         for (int k = 0; k < 5; k++) {
             float g = s->gain[k] + (target[k] - s->gain[k]) * t;

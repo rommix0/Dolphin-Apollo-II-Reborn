@@ -2,8 +2,9 @@
 #define SYNTH_SYNTH_H
 /* Holmes-style parallel-formant synthesizer (spec §5). Five second-order resonators (FN, F1, F2,
    F3 and a fixed fourth formant) share one excitation. Their outputs are summed with
-   alternating signs. Amplitudes ramp linearly across each frame; frequencies update once per
-   frame. Output is 16-bit at 10 kHz, 100 samples per frame. */
+   alternating signs. Amplitudes ramp linearly across each frame, or within CAL_STEP_RAMP_SAMPLES
+   at a b13 bit 7 transition; frequencies update once per frame; a channel that was silent starts
+   from a cleared resonator. Output is 16-bit at 10 kHz, 100 samples per frame. */
 #include <stdint.h>
 #include "synth/params.h"
 #include "synth/resonator.h"

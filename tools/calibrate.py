@@ -50,6 +50,9 @@ TEMPLATE = [
      '   Code <= 1 switches the channel off. */', None),
     ('CAL_DB_PER_CODE', 'f'), ('CAL_REF_CODE', 'int'),
     ('CAL_G_ALF_DB', 'f'), ('CAL_G_A1_DB', 'f'), ('CAL_G_A2_DB', 'f'), ('CAL_G_A3_DB', 'f'), ('CAL_G_AHF_DB', 'f'),
+    ('', None), ('/* Transitions: frames with b13 bit 7 set (closures, releases, onsets, some vowel/sonorant\n'
+                 '   boundaries) reach their amplitudes within this many samples instead of across the frame. */', None),
+    ('CAL_STEP_RAMP_SAMPLES', 'int'),
     ('', None), ('/* F0: b10 is a pitch period of 160 - 2*code samples (ROM $B930; params.c). The pitch movement\n'
                  '   of an utterance is widened by CAL_F0_RANGE_GAIN around its median (render passes the centre). */', None),
     ('CAL_F0_RANGE_GAIN', 'f'), ('CAL_F0_MIN_HZ', 'f'), ('CAL_F0_MAX_HZ', 'f'),
@@ -60,10 +63,11 @@ TEMPLATE = [
 NOTES = {'CAL_FN_B': 'hypothesis H-FN: a low resonance, ~256 Hz at the usual code 32',
          'CAL_F4_HZ': 'the fixed fourth formant, driven by AHF',
          'CAL_B11_GAIN_DB': 'level match of the b11 (Rosenberg) hypothesis to the impulse source',
-         'CAL_F0_RANGE_GAIN': 'chosen by listening: 2.0 doubles the firmware contour in semitones'}
+         'CAL_F0_RANGE_GAIN': 'chosen by listening: 2.0 doubles the firmware contour in semitones',
+         'CAL_STEP_RAMP_SAMPLES': 'chosen by listening: no closure thump, no boundary clicks',}
 
 # Seeds for constants that a calib.h written by an older generator does not have yet.
-DEFAULTS = {'CAL_B11_GAIN_DB': 0.0, 'CAL_F0_RANGE_GAIN': 2.0}
+DEFAULTS = {'CAL_B11_GAIN_DB': 0.0, 'CAL_F0_RANGE_GAIN': 2.0, 'CAL_STEP_RAMP_SAMPLES': 16}
 
 
 def c_float(v):

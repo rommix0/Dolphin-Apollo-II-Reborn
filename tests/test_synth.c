@@ -5,6 +5,7 @@
 #include "corpus_list.h"
 #include "rom_fixture.h"
 #include "synth/synth.h"
+#include "synth/calib.h"
 
 #define TEST_PI 3.14159265358979
 
@@ -12,6 +13,18 @@ static synth g_s;
 static const char k_silence[] = "012001200117011F013F201417201924824AFFFF";
 static const char k_ar[] = "3220321935092A222A3F231417000000824AFFFF";
 static const char k_ee[] = "3020290828282E28323F231417000000824AFFFF";
+static const char k_glide_onset[] = "30202C072B0518181C2E231417900000824AFFFF";   /* W of "We" after silence, b13 $90 */
+static const char k_glide[]       = "30202C072B0518181C2E231417000000824AFFFF";   /* the same glide, steady */
+static const char k_closure[]     = "1420140101050118013E231417C00000824AFFFF";   /* voice bar of a G closure, b13 $C0 */
+
+static int peak_between(const int16_t *x, int from, int to)
+{
+    int peak = 0;
+    for (int i = from; i < to; i++)
+        if (abs(x[i]) > peak)
+            peak = abs(x[i]);
+    return peak;
+}
 
 static void frame(const char *hex, uint8_t f[SYNTH_FRAME_BYTES])
 {
@@ -165,6 +178,66 @@ static void test_corpus_level(void)
     corpus_peak(&b11, "b11");   /* no clipping is asserted inside */
 }
 
+/* b13 bit 7 marks a transition: the amplitudes reach their targets within CAL_STEP_RAMP_SAMPLES. */
+static void test_step_ramp(void)
+{
+    uint8_t f[SYNTH_FRAME_BYTES];
+    int16_t out[SYNTH_FRAME_SAMPLES];
+    synth_init(&g_s, NULL);
+    frame(k_ar, f);
+    for (int i = 0; i < 5; i++)
+        synth_frame(&g_s, f, out);
+    frame(k_silence, f);
+    f[13] = 0x80;
+    synth_frame(&g_s, f, out);
+    CHECK(peak_between(out, 0, CAL_STEP_RAMP_SAMPLES - 1) > 0);
+    CHECK_EQ(peak_between(out, CAL_STEP_RAMP_SAMPLES - 1, SYNTH_FRAME_SAMPLES), 0);
+}
+
+/* A stop closure settles at once: no low-frequency thump from the vowel's energy (measured 0.34
+   with the full-frame ramp, 0.02 with the fast ramp). */
+static void test_closure_settles(void)
+{
+    uint8_t f[SYNTH_FRAME_BYTES];
+    int16_t out[SYNTH_FRAME_SAMPLES];
+    int vowel = 0;
+    synth_init(&g_s, NULL);
+    frame(k_ar, f);
+    for (int i = 0; i < 10; i++) {
+        synth_frame(&g_s, f, out);
+        vowel = peak_between(out, 0, SYNTH_FRAME_SAMPLES);
+    }
+    frame(k_closure, f);
+    synth_frame(&g_s, f, out);
+    int ring = peak_between(out, 20, SYNTH_FRAME_SAMPLES);
+    if (ring * 10 > vowel)
+        fprintf(stderr, "  closure ring %d vs vowel peak %d\n", ring, vowel);
+    CHECK(ring * 10 <= vowel);
+}
+
+/* A glide after silence starts no louder than its steady state: a silent channel holds no energy
+   (measured 2.56x without mute-reset at the fast ramp, 0.93x with it). */
+static void test_glide_onset(void)
+{
+    uint8_t f[SYNTH_FRAME_BYTES];
+    int16_t out[SYNTH_FRAME_SAMPLES];
+    synth_init(&g_s, NULL);
+    frame(k_silence, f);
+    for (int i = 0; i < 5; i++)
+        synth_frame(&g_s, f, out);
+    frame(k_glide_onset, f);
+    synth_frame(&g_s, f, out);
+    int onset = peak_between(out, 0, SYNTH_FRAME_SAMPLES), steady = 0;
+    frame(k_glide, f);
+    for (int i = 0; i < 3; i++) {
+        synth_frame(&g_s, f, out);
+        steady = peak_between(out, 0, SYNTH_FRAME_SAMPLES);
+    }
+    if (onset * 10 > steady * 13)
+        fprintf(stderr, "  glide onset peak %d vs steady %d\n", onset, steady);
+    CHECK(onset * 10 <= steady * 13);
+}
+
 void suite_synth(void)
 {
     test_silence_is_zero();
@@ -172,5 +245,8 @@ void suite_synth(void)
     check_peaks(k_ar);
     check_peaks(k_ee);
     test_b11_switch_changes_voicing();
+    test_step_ramp();
+    test_closure_settles();
+    test_glide_onset();
     test_corpus_level();
 }
