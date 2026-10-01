@@ -14,3 +14,6 @@ build/
 *.ilk
 firmware/generated/
 __pycache__/
+
+# Third-party reference recordings (not ours to commit)
+apollo2_excerpt.wav
