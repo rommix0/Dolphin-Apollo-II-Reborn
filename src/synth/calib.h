@@ -42,6 +42,6 @@
 #define CAL_F0_MAX_HZ 400.0f
 
 /* Output level: synth units -> int16 full scale (tuned so the corpus peaks near -3 dBFS) */
-#define CAL_MASTER_GAIN 0.5f
+#define CAL_MASTER_GAIN 0.9123f
 
 #endif

@@ -1,0 +1,167 @@
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include "test.h"
+#include "corpus_list.h"
+#include "rom_fixture.h"
+#include "synth/synth.h"
+
+#define TEST_PI 3.14159265358979
+
+static synth g_s;
+static const char k_silence[] = "012001200117011F013F201417201924824AFFFF";
+static const char k_ar[] = "3220321935092A222A3F231417000000824AFFFF";
+static const char k_ee[] = "3020290828282E28323F231417000000824AFFFF";
+
+static void frame(const char *hex, uint8_t f[SYNTH_FRAME_BYTES])
+{
+    CHECK(test_parse_hex(hex, f, SYNTH_FRAME_BYTES));
+}
+
+static void test_silence_is_zero(void)
+{
+    uint8_t f[SYNTH_FRAME_BYTES];
+    int16_t out[SYNTH_FRAME_SAMPLES];
+    bool zero = true;
+    frame(k_silence, f);
+    synth_init(&g_s, NULL);
+    for (int i = 0; i < 5; i++) {
+        synth_frame(&g_s, f, out);
+        for (int n = 0; n < SYNTH_FRAME_SAMPLES; n++)
+            if (out[n] != 0)
+                zero = false;
+    }
+    CHECK(zero);
+}
+
+static void test_deterministic(void)
+{
+    static int16_t a[20 * SYNTH_FRAME_SAMPLES], b[20 * SYNTH_FRAME_SAMPLES];
+    uint8_t f[SYNTH_FRAME_BYTES];
+    frame(k_ar, f);
+    synth_init(&g_s, NULL);
+    for (int i = 0; i < 20; i++)
+        synth_frame(&g_s, f, a + i * SYNTH_FRAME_SAMPLES);
+    synth_init(&g_s, NULL);
+    for (int i = 0; i < 20; i++)
+        synth_frame(&g_s, f, b + i * SYNTH_FRAME_SAMPLES);
+    CHECK(memcmp(a, b, sizeof a) == 0);
+}
+
+/* Spec §7.2: a steady vowel frame produces spectral peaks at the calibrated F1-F3 within 5 %.
+   Noise excitation (V = 1) and 77 averaged 256-sample segments give a smooth spectrum. FN and the
+   fixed fourth formant are switched off. A neighbouring loud formant can tilt the spectrum across
+   the search window, so each formant's peak is the local maximum nearest its target, not the
+   window maximum. */
+static void check_peaks(const char *hex)
+{
+    enum { FRAMES = 200, SEG = 256, SEGS = FRAMES * SYNTH_FRAME_SAMPLES / SEG, MAXSTEPS = 400 };
+    static int16_t pcm[FRAMES * SYNTH_FRAME_SAMPLES];
+    static double pw[MAXSTEPS + 1];
+    static const synth_options off = { false, false };
+    uint8_t f[SYNTH_FRAME_BYTES];
+    synth_params p;
+    float target[3];
+    frame(hex, f);
+    f[0] = 1;   /* ALF off */
+    f[8] = 1;   /* AHF off */
+    f[9] = 1;   /* V = 1: noise only */
+    synth_init(&g_s, NULL);
+    for (int i = 0; i < FRAMES; i++)
+        synth_frame(&g_s, f, pcm + i * SYNTH_FRAME_SAMPLES);
+    params_from_frame(f, &off, &p);
+    target[0] = p.f1_hz;
+    target[1] = p.f2_hz;
+    target[2] = p.f3_hz;
+    for (int k = 0; k < 3; k++) {
+        float lo = 0.85f * target[k];
+        int steps = (int)(0.30f * target[k] / 5.0f);
+        if (steps > MAXSTEPS)
+            steps = MAXSTEPS;
+        for (int s = 0; s <= steps; s++) {
+            float fr = lo + 5.0f * (float)s;
+            pw[s] = 0.0;
+            for (int seg = 1; seg < SEGS; seg++) {   /* skip the onset segment */
+                double re = 0.0, im = 0.0;
+                for (int n = 0; n < SEG; n++) {
+                    double w = 0.5 - 0.5 * cos(2.0 * TEST_PI * n / (SEG - 1));
+                    double x = w * pcm[seg * SEG + n];
+                    double ph = 2.0 * TEST_PI * fr * n / SYNTH_RATE;
+                    re += x * cos(ph);
+                    im -= x * sin(ph);
+                }
+                pw[s] += re * re + im * im;
+            }
+        }
+        float best_f = -1.0f;
+        for (int s = 1; s < steps; s++) {
+            float fr = lo + 5.0f * (float)s;
+            if (pw[s] > pw[s - 1] && pw[s] >= pw[s + 1] &&
+                (best_f < 0.0f || fabsf(fr - target[k]) < fabsf(best_f - target[k])))
+                best_f = fr;
+        }
+        bool ok = best_f > 0.0f && fabsf(best_f - target[k]) <= 0.05f * target[k];
+        if (!ok)
+            fprintf(stderr, "  F%d: nearest spectral peak %.0f Hz, calibrated %.0f Hz\n", k + 1, best_f, target[k]);
+        CHECK(ok);
+    }
+}
+
+static void test_b11_switch_changes_voicing(void)
+{
+    static const synth_options b11 = { true, false };
+    static int16_t a[10 * SYNTH_FRAME_SAMPLES], b[10 * SYNTH_FRAME_SAMPLES];
+    uint8_t f[SYNTH_FRAME_BYTES];
+    frame(k_ar, f);
+    synth_init(&g_s, NULL);
+    for (int i = 0; i < 10; i++)
+        synth_frame(&g_s, f, a + i * SYNTH_FRAME_SAMPLES);
+    synth_init(&g_s, &b11);
+    for (int i = 0; i < 10; i++)
+        synth_frame(&g_s, f, b + i * SYNTH_FRAME_SAMPLES);
+    CHECK(memcmp(a, b, sizeof a) != 0);
+}
+
+/* Every golden stream synthesizes without clipping. The loudest peaks between -12 and -1 dBFS.
+   This uses only committed goldens, so no ROM is needed. */
+static void test_corpus_level(void)
+{
+    static const char *const names[] = { CORPUS_NAMES, "boot" };
+    int peak = 0;
+    for (size_t c = 0; c < sizeof names / sizeof names[0]; c++) {
+        char path[128];
+        snprintf(path, sizeof path, "tests/golden/%s.frm", names[c]);
+        char *hex = test_read_file(path);
+        CHECK(hex != NULL);
+        if (!hex)
+            continue;
+        size_t frames = strlen(hex) / (2 * SYNTH_FRAME_BYTES + 1);
+        synth_init(&g_s, NULL);
+        for (size_t i = 0; i < frames; i++) {
+            uint8_t f[SYNTH_FRAME_BYTES];
+            int16_t out[SYNTH_FRAME_SAMPLES];
+            frame(hex + i * (2 * SYNTH_FRAME_BYTES + 1), f);
+            synth_frame(&g_s, f, out);
+            for (int n = 0; n < SYNTH_FRAME_SAMPLES; n++)
+                if (abs(out[n]) > peak)
+                    peak = abs(out[n]);
+        }
+        if (g_s.clipped)
+            fprintf(stderr, "  %s: %llu samples clipped\n", names[c], (unsigned long long)g_s.clipped);
+        CHECK_EQ(g_s.clipped, 0);
+        free(hex);
+    }
+    printf("  corpus peak %d (%.1f dBFS)\n", peak, 20.0 * log10(peak / 32767.0));
+    CHECK(peak >= 8231);    /* -12 dBFS */
+    CHECK(peak <= 29204);   /* -1 dBFS */
+}
+
+void suite_synth(void)
+{
+    test_silence_is_zero();
+    test_deterministic();
+    check_peaks(k_ar);
+    check_peaks(k_ee);
+    test_b11_switch_changes_voicing();
+    test_corpus_level();
+}
