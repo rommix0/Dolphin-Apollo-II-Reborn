@@ -37,11 +37,11 @@ Period scale (ROM $B930), range gain 2.0. 5th/50th/95th percentile: Juno male 60
 
 | Channel | Band (Hz) | synth − Juno (dB) | Suggested correction (dB) | Applied (CAL_LTAS_x_DB) |
 |---|---|---|---|---|
-| ALF | 200-330 | +0.4 | -0.4 | -11.0 |
-| A1 | 350-800 | +0.3 | -0.3 | -5.2 |
-| A2 | 900-2000 | +0.3 | -0.3 | -0.1 |
-| A3 | 2100-3000 | -0.1 | +0.1 | +3.2 |
-| AHF | 3100-3700 | +0.4 | -0.4 | -0.2 |
+| ALF | 200-330 | +1.2 | -1.2 | -11.0 |
+| A1 | 350-800 | +0.5 | -0.5 | -5.2 |
+| A2 | 900-2000 | +0.2 | -0.2 | -0.1 |
+| A3 | 2100-3000 | -0.2 | +0.2 | +3.2 |
+| AHF | 3100-3700 | +0.3 | -0.3 | -0.2 |
 
 Apply the suggested corrections with `calibrate.py fit --ltas`.
 
@@ -51,4 +51,4 @@ Apply the suggested corrections with `calibrate.py fit --ltas`.
 
 Rendered to `build/listening/` (not committed): every corpus text, plus `prose_voice_b`, `prose_hyp_b11` and `prose_hyp_b13` for the hypothesis switches, and `prose_prosody3` (the device's default prosody).
 
-b11 render level vs plain: +0.0 dB (RMS of `prose_hyp_b11` minus `prose`; CAL_B11_GAIN_DB -8.4 dB).
+b11 render level vs plain: +0.2 dB (RMS of `prose_hyp_b11` minus `prose`; CAL_B11_GAIN_DB -8.4 dB).
