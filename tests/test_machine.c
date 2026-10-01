@@ -224,6 +224,54 @@ static void test_unmodelled_log_limits(void)
     CHECK_EQ(g_m.unmodelled_dropped, 71 - MACHINE_MAX_UNMODELLED);
 }
 
+static uint8_t g_raw[4][APOLLO_FRAME_BYTES];
+static int g_raw_calls;
+
+static void on_raw(void *user, const uint8_t frame[APOLLO_FRAME_BYTES])
+{
+    (void)user;
+    if (g_raw_calls < 4)
+        memcpy(g_raw[g_raw_calls], frame, APOLLO_FRAME_BYTES);
+    g_raw_calls++;
+}
+
+/* Bytes at $8000 group into 20-byte frames; a rising edge on P2.0 (DSP reset) restarts at byte 0. */
+static void test_raw_capture(void)
+{
+    static const uint8_t code[] = {
+        0x3C, 0x01, 0xF1,          /* $9000 LDM #$01,$F1   P2.0 is an output (low) */
+        0xA2, 0x00,                /*       LDX #$00 */
+        0x8E, 0x00, 0x80,          /* $9005 STX $8000      25 bytes 0..24 to the DSP port */
+        0xE8,                      /*       INX */
+        0xE0, 0x19,                /*       CPX #$19 */
+        0xD0, 0xF8,                /*       BNE $9005 */
+        0x0F, 0xF0,                /*       SEB0 $F0        DSP reset pulse */
+        0x1F, 0xF0,                /*       CLB0 $F0 */
+        0xA2, 0x64,                /*       LDX #$64 */
+        0x8E, 0x00, 0x80,          /* $9013 STX $8000      20 bytes 100..119 */
+        0xE8,                      /*       INX */
+        0xE0, 0x78,                /*       CPX #$78 */
+        0xD0, 0xF8,                /*       BNE $9013 */
+        0x4C, 0x1B, 0x90,          /* $901B JMP $901B */
+    };
+    memset(g_rom, 0, sizeof g_rom);
+    put(0x9000, code, sizeof code);
+    set_vector(0xFFFE, 0x9000);
+    boot();
+    g_raw_calls = 0;
+    machine_set_raw_output(&g_m, on_raw, NULL);
+    CHECK_EQ(machine_run(&g_m, 5000), MACHINE_CYCLE_LIMIT);
+    CHECK_EQ(g_raw_calls, 2);
+    CHECK_EQ(g_m.raw_frames, 2);
+    CHECK_EQ(g_m.dsp_resets, 1);
+    CHECK_EQ(g_m.raw_discarded, 5);              /* bytes 20..24 were cut by the reset */
+    CHECK_EQ(g_m.port_writes, 45);
+    CHECK_EQ(g_raw[0][0], 0);
+    CHECK_EQ(g_raw[0][19], 19);
+    CHECK_EQ(g_raw[1][0], 100);
+    CHECK_EQ(g_raw[1][19], 119);
+}
+
 void suite_machine(void)
 {
     test_memory_map();
@@ -235,4 +283,5 @@ void suite_machine(void)
     test_cycle_scale();
     test_peek_has_no_side_effects();
     test_unmodelled_log_limits();
+    test_raw_capture();
 }

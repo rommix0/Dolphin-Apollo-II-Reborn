@@ -4,6 +4,7 @@
 #define P2_BANK_MASK  0x7C
 #define P2_MAIN_BANK  0x70
 #define P2_LOWER_HALF 0x80
+#define P2_DSP_RESET  0x01
 #define P0_BUSY       0x20
 #define ICR2_T3_ENABLE 0x10
 
@@ -78,14 +79,28 @@ static void bus_write(void *ctx, uint16_t a, uint8_t v)
         m50734_write(&m->sfr, (uint8_t)a, v);
         if ((m->sfr.p0_func & 0x20) && (m->sfr.port_dir[0] & 0x20))
             m->fault = MFAULT_DME;   /* data-memory strobe: never used by the Apollo ROM */
+        bool reset = (m50734_port_pins(&m->sfr, 2) & P2_DSP_RESET) != 0;
+        if (reset && !m->dsp_reset_level) {   /* rising edge: the DSP restarts at word 0 */
+            m->dsp_resets++;
+            m->raw_discarded += m->raw_pos;
+            m->raw_pos = 0;
+        }
+        m->dsp_reset_level = reset;
         return;
     }
     if (a < 0x4000) {
         m->ram[a] = v;
         return;
     }
-    if (a == 0x8000) {
+    if (a == APOLLO_DSP_PORT) {
         m->port_writes++;
+        m->raw_buf[m->raw_pos++] = v;
+        if (m->raw_pos == APOLLO_FRAME_BYTES) {
+            m->raw_pos = 0;
+            m->raw_frames++;
+            if (m->on_raw)
+                m->on_raw(m->raw_user, m->raw_buf);
+        }
         return;
     }
     note_unmodelled(m, a, true);
@@ -116,6 +131,7 @@ bool machine_init(machine *m, const uint8_t *rom, size_t len, const machine_conf
     m->cycle_num = cfg->cycle_num ? cfg->cycle_num : 1;
     m->cycle_den = cfg->cycle_den ? cfg->cycle_den : 1;
     m50734_reset(&m->sfr, cfg->port_in);
+    m->dsp_reset_level = (m50734_port_pins(&m->sfr, 2) & P2_DSP_RESET) != 0;
     m->bus.ctx = m;
     m->bus.read = bus_read;
     m->bus.write = bus_write;
@@ -127,6 +143,12 @@ void machine_set_outputs(machine *m, machine_frame_fn on_frame, void *user)
 {
     m->on_frame = on_frame;
     m->user = user;
+}
+
+void machine_set_raw_output(machine *m, machine_frame_fn on_raw, void *user)
+{
+    m->on_raw = on_raw;
+    m->raw_user = user;
 }
 
 bool machine_feed_serial(machine *m, const uint8_t *bytes, size_t n)

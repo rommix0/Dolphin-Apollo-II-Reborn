@@ -19,6 +19,7 @@
 #define APOLLO_IDLE_WIT_PC      0xC602   /* the firmware's only WIT: idle, waiting for input */
 #define APOLLO_PRODUCER_PTR     0x2C     /* zero-page pointer to the buffer the main loop fills */
 #define APOLLO_FRAME_BYTES      20
+#define APOLLO_DSP_PORT         0x8000   /* DSP data register (write only) */
 
 typedef void (*machine_frame_fn)(void *user, const uint8_t frame[APOLLO_FRAME_BYTES]);
 
@@ -49,6 +50,14 @@ typedef struct machine {
     uint8_t busy_idle_level;               /* P0.5 level at the first idle = "not busy" */
     machine_frame_fn on_frame;
     void *user;
+    machine_frame_fn on_raw;               /* raw DSP-port frames (machine_set_raw_output) */
+    void *raw_user;
+    uint8_t raw_buf[APOLLO_FRAME_BYTES];
+    unsigned raw_pos;                      /* bytes of the current raw frame received so far */
+    bool dsp_reset_level;                  /* last P2.0 pin level */
+    uint64_t raw_frames;                   /* complete raw frames delivered */
+    uint64_t dsp_resets;                   /* P2.0 rising edges: DSP reset pulses from $B38B */
+    uint64_t raw_discarded;                /* partial-frame bytes dropped at a DSP reset */
     uint64_t frames_produced;
     uint64_t port_writes;                  /* bytes written to the DSP port at $8000 */
     uint64_t lower_window_reads;           /* $4000-$7FFF reads served from file 0x0000-0x3FFF */
@@ -62,6 +71,10 @@ typedef struct machine {
 void machine_default_config(machine_config *cfg);
 bool machine_init(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg);
 void machine_set_outputs(machine *m, machine_frame_fn on_frame, void *user);
+/* Raw DSP-port capture (spec §4). Bytes written to $8000 are grouped into 20-byte frames the way
+   the DSP receives them (even byte of each word first). A DSP reset pulse on P2.0 restarts the
+   grouping at byte 0. Unlike the produced frames, this stream depends on CPU timing. */
+void machine_set_raw_output(machine *m, machine_frame_fn on_raw, void *user);
 bool machine_feed_serial(machine *m, const uint8_t *bytes, size_t n);
 machine_status machine_run(machine *m, uint64_t max_cycles);
 uint8_t machine_peek(const machine *m, uint16_t addr);

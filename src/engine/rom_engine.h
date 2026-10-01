@@ -29,4 +29,10 @@ machine_status rom_engine_speak(machine *m, const uint8_t *rom, size_t len, cons
 machine_status rom_engine_speak_cfg(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
                                     const char *text, bool include_boot, frame_list *out);
 
+/* Like rom_engine_speak_cfg without boot frames. It also collects the raw DSP-port stream (frames
+   as the DSP received them, re-aligned at every DSP reset, ISR replays included) into raw when
+   raw != NULL. Both lists cover the speaking phase only, as do the raw_* counters of m. */
+machine_status rom_engine_speak_streams(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
+                                        const char *text, frame_list *produced, frame_list *raw);
+
 #endif

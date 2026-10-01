@@ -55,29 +55,50 @@ machine_status rom_engine_speak(machine *m, const uint8_t *rom, size_t len, cons
     return rom_engine_speak_cfg(m, rom, len, NULL, text, include_boot, out);
 }
 
-machine_status rom_engine_speak_cfg(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
-                                    const char *text, bool include_boot, frame_list *out)
+static machine_status speak(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
+                            const char *text, bool include_boot, frame_list *out, frame_list *raw)
 {
-    frame_sink sink;
+    frame_sink sink, raw_sink;
     machine_status st;
     sink.list = out;
     sink.enabled = include_boot;
+    raw_sink.list = raw;
+    raw_sink.enabled = false;
     if (!machine_init(m, rom, len, cfg))
         return MACHINE_FAULT;
     machine_set_outputs(m, on_frame, &sink);
+    if (raw)
+        machine_set_raw_output(m, on_frame, &raw_sink);
     st = machine_run(m, ROM_ENGINE_BOOT_CYCLES);
     if (st == MACHINE_IDLE) {
         m->frames_produced = 0;
         m->lower_window_reads = 0;
+        m->raw_frames = 0;
+        m->dsp_resets = 0;
+        m->raw_discarded = 0;
         sink.enabled = true;
+        raw_sink.enabled = true;
         if (machine_feed_serial(m, (const uint8_t *)text, strlen(text)) &&
-            machine_feed_serial(m, (const uint8_t *)"\r", 1))
+            machine_feed_serial(m, (const uint8_t *)"", 1))
             st = machine_run(m, ROM_ENGINE_SPEAK_CYCLES);
         else {
             m->fault = MFAULT_INPUT_OVERFLOW;   /* text longer than the input queue */
             st = MACHINE_FAULT;
         }
     }
-    machine_set_outputs(m, NULL, NULL);   /* sink lives on this stack frame */
+    machine_set_outputs(m, NULL, NULL);       /* the sinks live on this stack frame */
+    machine_set_raw_output(m, NULL, NULL);
     return st;
+}
+
+machine_status rom_engine_speak_cfg(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
+                                    const char *text, bool include_boot, frame_list *out)
+{
+    return speak(m, rom, len, cfg, text, include_boot, out, NULL);
+}
+
+machine_status rom_engine_speak_streams(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
+                                        const char *text, frame_list *produced, frame_list *raw)
+{
+    return speak(m, rom, len, cfg, text, false, produced, raw);
 }
