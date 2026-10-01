@@ -1,7 +1,7 @@
 # Software Apollo 2 — Design
 
 **Date:** 2026-09-30
-**Status:** Approved. Revision 4 records what milestone 2 verified (command-driven frame bytes, the raw DSP stream, the calibration). Revision 3 makes the finished project ROM-free (R5). Revision 2 adds facts found while planning milestone 1
+**Status:** Approved. Revision 5 records the firmware intonation model and the synthesizer revision chosen in the user's listening test. Revision 4 records what milestone 2 verified (command-driven frame bytes, the raw DSP stream, the calibration). Revision 3 makes the finished project ROM-free (R5). Revision 2 adds facts found while planning milestone 1
 (MAME's M50734 register map and the lower-ROM banking); the changes are marked *(rev 2)*.
 **Goal:** A software Dolphin Apollo 2. Text typed on a PC goes through the real
 firmware logic (first emulated, then decompiled to C) and produces DSP frames.
@@ -91,8 +91,8 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 | 2 | b4 A2 | b5 F2 |
 | 3 | b6 A3 | b7 F3 |
 | 4 | b8 AHF (high-frequency amplitude) | b9 V (degree of voicing, 1..63) |
-| 5 | b10 F0 (pitch: follows @F; calibrated in §5) | b11 mark-space ratio (@M, clamped by F0) *(rev 4: verified)* |
-| 6 | b12 constant `$17` | b13 transition flags (bit 7 spectral jump, bit 6 onset, bit 4 multi-channel drop, bit 3 F0 jump) |
+| 5 | b10 pitch period: 160 − 2·code samples at 10 kHz (the mark-space clamp at $B930); @F0..@FF = codes 2..63 ≈ 64..294 Hz *(rev 5)* | b11 mark-space ratio (@M, clamped by F0) *(rev 4: verified)* |
+| 6 | b12 constant `$17` | b13 transition flags (bit 7 spectral jump, bit 6 onset, bit 4 multi-channel drop, bit 3 F0 jump). *(rev 5: bit 7 is set at stop closures ($C0), releases ($80/$90), onsets after silence and many vowel/sonorant boundaries.)* |
 | 7 | b14 | b15: b14–b15 are a 16-bit value from tables `$B573`/`$B673`, indexed by (ALF−A1−4)·(F1−33) |
 | 8 | b16 voicing source (@$: $82 default, $58 spike, $9B cut-down, $BA reduced-HF) | b17 voice filter (@$: $4A male, $54 female) *(rev 4: verified)* |
 | 9 | `$FF` | `$FF` |
@@ -109,6 +109,23 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
   | `@udhh±` | adds to or subtracts from one parameter |
   | `@Ah` (volume) | none |
 
+- **Intonation model** *(rev 5, from the ROM)*. The phrase generator ($D129–$D3DD) writes per-segment arrays: phoneme
+  $0200, duration $0600, pitch target $0A00 and flags $0E00, appended by $CA3B. A segment's target is
+  ($1C26>>3) + $1C25 + $1C30 + $1C23 + 105 plus the centre, built from the per-symbol flags at $1D00:
+  - accented head syllables `$60` get +15;
+  - stressed but unaccented syllables `$40` get +8;
+  - the nucleus (the last accent) `$67` gets +15 −10, a lower peak;
+  - the nuclear tail `$07` gets −15, and the final syllable −20;
+  - the onset after an accent gets −15;
+  - function words carry no accent (the same classification drives Hypermode @H1);
+  - the baseline declines across the phrase ($D3DD/$D40D).
+
+  At playback, $BDD3 scales each deviation from 128 by @R/4 around the @F centre: @R4 is the
+  generator's own contour, the default @R3 is 0.75 of it, and @R8/@R9 are ignored because R is an octal
+  digit. The `?` rise is added at playback. The emulated CPU was verified against py65 (447k random
+  cases over the 149 standard opcodes) and MAME semantics (134k cases for the 740-only ops), so the
+  frames carry exactly what V2.01 computes.
+
 - **Phoneme tables:** voice A has its count at `$D469` (N = 86) and data at `$D46A`;
   voice B has its count at `$E5E2` and data at `$E5E3`. Each table has 2 rows of N,
   then parameters P1..P10 spaced 5N apart. P1..P10 map to bytes 1, 3, 5, 7, 0, 2,
@@ -118,7 +135,7 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
   `$FF`. The decoder is at `$D31B`. Punctuation produces phoneme `$3B` (pause).
 
 ## 2. Requirements
-- **R1 — CLI:** `apollo2 "text" [-o out.wav] [--voice a|b] [--engine rom|hybrid|native] [--rom PATH] [--hyp b11,b13] [--stream produced|raw] [--text-file FILE] [--audio-check]`. *(rev 4: `--voice b` sends `@K1`; `--stream raw` is for comparison listening only.)*
+- **R1 — CLI:** `apollo2 "text" [-o out.wav] [--voice a|b] [--prosody 0-7] [--engine rom|hybrid|native] [--rom PATH] [--hyp b11,b13] [--stream produced|raw] [--text-file FILE] [--audio-check]`. *(rev 4: `--voice b` sends `@K1`; `--stream raw` is for comparison listening only. rev 5: `--prosody` sends `@Rn`, default 4; the output filters are always on.)*
   It writes a WAV file, or plays live audio when `-o` is omitted. Text enters
   through the firmware's real serial input path, so device control codes work.
 - **R2 — Audio:** mono, 16-bit, **10,000 Hz native**. No resampling anywhere in our
@@ -209,12 +226,19 @@ and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
 ## 5. Synthesizer (`synth/`)
 
 **Signal path (10 kHz, float internally, 16-bit output, 100 samples per frame):**
-- The pulse source (shaped by F0 and b11) and the noise source are mixed by V.
+- The impulse source *(rev 5: the user's choice over Rosenberg and sawtooth pulses)* passes a
+  low-end peak (110 Hz, Q 0.6, +10 dB) that restores the fundamental. The peak acts on the voiced
+  component only. The noise source is mixed in by V and is never scaled with the voicing.
 - When V is mid-range (voiced fricatives), the noise is pitch-modulated.
 - The excitation drives parallel second-order resonators: FN×ALF, F1×A1, F2×A2,
   F3×A3, plus a fixed resonator at ~3.5 kHz driven by AHF.
-- Resonator outputs are summed with alternating signs.
-- Amplitudes ramp linearly across each frame. Frequencies update once per frame.
+- Resonator outputs are summed with alternating signs, then pass a 4th-order Butterworth low-pass
+  at 3.8 kHz that models the DAC's reconstruction filter *(rev 5)*.
+- Amplitudes ramp linearly across each frame, or within 16 samples when b13 bit 7 is set.
+  Frequencies update once per frame. A channel that was silent starts from a cleared resonator
+  *(rev 5: this removes the stop-closure and glide-onset thumps without boundary clicks)*.
+- F0 follows the period scale (§1.4). The utterance's pitch movement is widened by a gain of 2.0
+  around its median pitch, which render computes *(rev 5, chosen by listening)*.
 
 **Files:**
 - `params.c`: bytes → physical values, using `calib.h`
@@ -229,18 +253,22 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
 2. **Amplitudes:** start with the hypothesis "about 1 dB per code" (consistent with
    the firmware's 12-step jump threshold). Refine against the long-term average
    spectrum of the Juno reference (`dolphin_juno_demo.mp3`).
-3. **F0:** map b10 → Hz so that the emulator's F0 distribution over the corpus
-   matches the Juno reference: *(rev 4: measured)* 5th/50th/95th percentile 64 / 111 / 227 Hz.
+3. **F0:** *(rev 5)* not fitted. The firmware's period scale is used, with the pitch-range gain chosen by listening (`CAL_F0_RANGE_GAIN`). The Juno reference contains two voices, so the rev 4 quantile fit was wrong.
 4. **Hypothesis switches:** b11 (as pulse width) and b13 (resonator state reset) have a
    switch that defaults to off or neutral. They are enabled one at a time during listening
    tests. *(rev 4: b14–b17 have no switch yet, see the results below.)*
 
 **Calibration results** *(rev 4; see docs/calibration/report.md)*:
+- *(rev 5)* The reference is now only the Juno's male passages (file time 5–14.4 s and 22.3–25 s; 14.5–22 s
+  is a higher voice). The five channel levels get LTAS corrections (`CAL_LTAS_x_DB`) on top of the
+  Wells fit. The rev 4 ALF/AHF corrections below came from the mixed snippet and were reset.
+- *(rev 5)* Listening-test choices: prosody @R4, pitch-range gain 2.0, impulse source, low-end peak
+  110 Hz/Q 0.6/+10 dB, 3.8 kHz output low-pass, a 16-sample transition ramp and mute-reset.
 - F1 and F2 are linear and F3 is logarithmic, fitted to Wells (1962) RP male means (RMS 5–6 %).
 - Amplitudes are 0.95 dB per code, confirming the hypothesis, with channel offsets fitted to
   Wells's formant levels.
 - ALF and AHF channel offsets were corrected once against the Juno long-term average spectrum (ALF −5.1 dB, AHF −3.8 dB); the corpus then peaks at −4.9 dBFS.
-- F0 is log-linear, fitted to the Juno snippet's 5/50/95th percentiles.
+- ~~F0 is log-linear, fitted to the Juno snippet's 5/50/95th percentiles.~~ *(rev 5: superseded by the period scale)*
 - FN has no reference. Hypothesis H-FN treats it as a low resonance near 256 Hz.
 - The source is a unit-power impulse train. Hypothesis b11 switches to a Rosenberg pulse whose
   open quotient is b11/64.
@@ -315,6 +343,9 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
 - A steady-vowel frame produces spectral peaks at the calibrated F1–F3, within 5%.
 - `tools/calibrate.py` writes a report with plots: vowel formant fit vs RP
   references, F0 distribution vs Juno, average spectrum vs Juno.
+- *(rev 5)* Biquad sections match their analytic response, and the peak and low-pass meet their design values.
+- *(rev 5)* Transitions: a b13 bit 7 frame reaches its amplitudes within 16 samples; a stop closure
+  settles (ring ≤ 0.1 of the vowel peak); a glide onset after silence is no louder than 1.3× its steady state.
 - The final acceptance is the user's listening test (R4).
 
 ## 8. Milestones
@@ -347,6 +378,7 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
 - ~~The timer period~~: resolved, 200 CPU cycles (§1.1).
 - The exact external RAM extent (M1 logs any access outside `$0000–$3FFF`).
 - The P4 DIP switches beyond bit 0. *(rev 4: the P3 baud jumpers are pins 20/21 in docs/apollo2.txt Appendix 1: 9600 default, 1200, 300, 19200.)*
-- The meanings of b13 and b14–b15, and how the DSP realises the @$ source/filter variants (listening tests). *(rev 4: b11, b16 and b17 are identified, §1.4.)*
+- The meanings of b14–b15, and how the DSP realises the @$ source/filter variants (listening tests). *(rev 4: b11, b16 and b17 are identified, §1.4. rev 5: b13 bit 7 is handled as a fast amplitude transition, §5; the meanings of bits 6, 4 and 3 are still open.)*
+- *(rev 5)* Recordings of real units show deeper function-word dips (4–6 semitones) than V2.01's frames give at any @R/@F. Possible causes are the newer V2.02 EPROM in the user's photos, different settings, or the DSP itself.
 - The 17 phoneme indices not reachable from ASCII symbols (6, 7, 22, 23, 25, 40,
   41, 58, 77–85), probably reached via `$9E74` (M3).
