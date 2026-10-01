@@ -159,7 +159,9 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 | `machine/` | Apollo 2 board: memory map, banking, SFRs, serial RX, timer, DSP port, hooks | `machine_init(rom, len)`, `machine_feed_serial(bytes, n)`, `machine_run(max_cycles) -> status`, `machine_set_frame_sink(cb)`, `machine_hook(addr, thunk)` | cpu740 |
 | `firmware/` | Decompiled firmware in C on a shared memory image | per-routine C functions + thunks; `fw_native_speak(bytes, n, frame_sink)` | machine (hybrid only) |
 | `synth/` | Holmes parallel-formant synthesizer | `synth_init(cfg)`, `synth_frame(const uint8_t f[20], int16_t out[100])` | — |
-| `apollo2/` | CLI, WAV writer, live playback (waveOut) | R1 | all |
+| `audio/` *(rev 4)* | WAV writer, live playback (waveOut) | `wav_write`, `playback_pcm16` | — |
+| `render/` *(rev 4)* | Frame stream → synthesizer → 16-bit samples, through the `engine/` rom engine | `render_text` | engine, synth |
+| `apps/` *(rev 4)* | `apollo2` CLI (R1) and the `apollo2_frames` dev CLI | R1 | all |
 | `ghidra740/` | Ghidra SLEIGH module for the 740 | Ghidra extension | — |
 | `tools/` | `extract_tables.py` (a one-time converter, ROM → readable C, rev 3), `calibrate.py`, corpus/golden runners | scripts | Python |
 | `tests/` | unit, differential, golden-frame and synth tests | `apollo2_tests.exe`: runs all suites, non-zero exit on any failure | all |
@@ -219,7 +221,8 @@ and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
 - `source.c`, `resonator.c`
 - `synth.c`: the resonator bank and summing
 
-**Calibration (`calib.h`, the only place constants live):**
+**Calibration (`calib.h`, the only place the synthesizer's calibrated (fitted) constants live;
+structural constants such as the `params.c` ranges and clamps and the `source.c` V gate stay in the code):**
 1. **FN/F1/F2/F3:** fit each one as linear or log by least squares. The inputs are
    the ROM vowel targets (named via the symbol table) against published RP male
    vowel formants. The better fit wins. Voice B is the cross-check.
@@ -227,10 +230,10 @@ and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
    the firmware's 12-step jump threshold). Refine against the long-term average
    spectrum of the Juno reference (`dolphin_juno_demo.mp3`).
 3. **F0:** map b10 → Hz so that the emulator's F0 distribution over the corpus
-   matches the Juno reference: median 112 Hz, 5th–95th percentile 74–226 Hz.
-4. **Hypothesis switches:** b11 (as pulse width), b13 (resonator state reset) and
-   b14–b17 each have a switch that defaults to off or neutral. They are enabled one
-   at a time during listening tests.
+   matches the Juno reference: *(rev 4: measured)* 5th/50th/95th percentile 64 / 111 / 227 Hz.
+4. **Hypothesis switches:** b11 (as pulse width) and b13 (resonator state reset) have a
+   switch that defaults to off or neutral. They are enabled one at a time during listening
+   tests. *(rev 4: b14–b17 have no switch yet, see the results below.)*
 
 **Calibration results** *(rev 4; see docs/calibration/report.md)*:
 - F1 and F2 are linear and F3 is logarithmic, fitted to Wells (1962) RP male means (RMS 5–6 %).
@@ -242,6 +245,9 @@ and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
 - The source is a unit-power impulse train. Hypothesis b11 switches to a Rosenberg pulse whose
   open quotient is b11/64.
 - Hypothesis switches implemented: b11 (pulse width) and b13 bit 7 (resonator reset).
+- The b11 render is level-matched to the impulse source by `CAL_B11_GAIN_DB` (about −7.7 dB;
+  unmatched, the Rosenberg render was 7.7 dB louder and clipped), so the listening A/B compares
+  timbre, not loudness.
 - b14–b15 and b16–b17 are decoded (§1.4) but get no switch until a listening-test hypothesis
   exists. Candidates: the @$ source and filter variants.
 
