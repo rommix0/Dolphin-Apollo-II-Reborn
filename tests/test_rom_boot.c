@@ -16,9 +16,7 @@ void suite_rom_boot(void)
     if (st != MACHINE_IDLE)
         machine_dump(&g_m, stderr);
     CHECK_EQ(st, MACHINE_IDLE);
-    for (unsigned i = 0; i < g_m.unmodelled_count; i++)
-        fprintf(stderr, "  unmodelled %s $%04X at PC $%04X\n", g_m.unmodelled[i].write ? "write" : "read",
-                g_m.unmodelled[i].addr, g_m.unmodelled[i].pc);
+    print_unmodelled(&g_m);
     CHECK_EQ(g_m.unmodelled_count, 0);
     printf("  boot: %llu cycles, %llu frames produced, %llu DSP port writes, %u serial bytes sent\n",
            (unsigned long long)g_m.cpu.cycles, (unsigned long long)g_m.frames_produced,

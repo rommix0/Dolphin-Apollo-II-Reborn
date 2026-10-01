@@ -80,11 +80,20 @@ void suite_golden(void)
             machine_dump(&g_m, stderr);
         CHECK_EQ(st, MACHINE_IDLE);
         CHECK(fl.count > 0);
+        print_unmodelled(&g_m);
+        CHECK_EQ(g_m.unmodelled_count, 0);
         char *hex = frame_list_hex(&fl);
 
         if (update) {
-            CHECK(write_file(frm_path, hex));
-            printf("  updated %s (%zu frames)\n", frm_path, fl.count);
+            if (st == MACHINE_IDLE && fl.count > 0 && g_m.unmodelled_count == 0) {
+                CHECK(write_file(frm_path, hex));
+                printf("  updated %s (%zu frames)\n", frm_path, fl.count);
+            } else {
+                fprintf(stderr, "  NOT updating %s: %s\n", frm_path,
+                        st != MACHINE_IDLE ? "run did not reach idle"
+                        : fl.count == 0 ? "no frames produced" : "unmodelled accesses logged");
+                g_test_failures++;
+            }
         } else {
             char *want = read_file(frm_path);
             if (!want) {

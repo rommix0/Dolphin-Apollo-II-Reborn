@@ -21,3 +21,10 @@ const uint8_t *test_rom(size_t *len)
     *len = sizeof rom;
     return rom;
 }
+
+void print_unmodelled(const machine *m)
+{
+    for (unsigned i = 0; i < m->unmodelled_count; i++)
+        fprintf(stderr, "  unmodelled %s $%04X at PC $%04X\n", m->unmodelled[i].write ? "write" : "read",
+                m->unmodelled[i].addr, m->unmodelled[i].pc);
+}

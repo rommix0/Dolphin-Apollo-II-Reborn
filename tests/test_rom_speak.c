@@ -26,6 +26,8 @@ static void test_zoo_uses_lower_rom_and_sounds_like_z(void)
     if (st != MACHINE_IDLE)
         machine_dump(&g_m, stderr);
     CHECK_EQ(st, MACHINE_IDLE);
+    print_unmodelled(&g_m);
+    CHECK_EQ(g_m.unmodelled_count, 0);
     CHECK(fl.count > 10);
     CHECK(g_m.lower_window_reads > 0);
     /* Phoneme Z targets V (b9) = 36 and AHF (b8) = 56: some frame must be close to that */
@@ -49,7 +51,11 @@ static void test_deterministic(void)
         SKIP("ROM not found (set APOLLO2_ROM)");
     frame_list a = { 0 }, b = { 0 };
     CHECK_EQ(rom_engine_speak(&g_m, rom, len, "hello world", false, &a), MACHINE_IDLE);
+    print_unmodelled(&g_m);
+    CHECK_EQ(g_m.unmodelled_count, 0);
     CHECK_EQ(rom_engine_speak(&g_m, rom, len, "hello world", false, &b), MACHINE_IDLE);
+    print_unmodelled(&g_m);
+    CHECK_EQ(g_m.unmodelled_count, 0);
     CHECK(a.count > 0);
     CHECK_EQ(a.count, b.count);
     if (a.count == b.count)
