@@ -30,11 +30,19 @@
    Code <= 1 switches the channel off. */
 #define CAL_DB_PER_CODE 0.948894f
 #define CAL_REF_CODE 50
-#define CAL_G_ALF_DB -5.12955f
+#define CAL_G_ALF_DB 0.0f
 #define CAL_G_A1_DB 0.0f
 #define CAL_G_A2_DB -12.783f
 #define CAL_G_A3_DB -26.7472f
-#define CAL_G_AHF_DB -33.8344f
+#define CAL_G_AHF_DB -30.0f
+
+/* Per-channel corrections from the long-term average spectrum of the Juno's male passages
+   (calibrate.py fit --ltas). Added to CAL_G_x_DB, which the Wells (1962) fit owns. */
+#define CAL_LTAS_ALF_DB -11.0008f
+#define CAL_LTAS_A1_DB -5.17405f
+#define CAL_LTAS_A2_DB -0.0805155f
+#define CAL_LTAS_A3_DB 3.19446f
+#define CAL_LTAS_AHF_DB -0.197488f
 
 /* Transitions: frames with b13 bit 7 set (closures, releases, onsets, some vowel/sonorant
    boundaries) reach their amplitudes within this many samples instead of across the frame. */
@@ -55,7 +63,7 @@
 
 /* Output level: synth units -> int16 full scale (the corpus must peak between -12 and -1 dBFS
    without clipping; see suite_synth) */
-#define CAL_MASTER_GAIN 0.9123f
-#define CAL_B11_GAIN_DB -7.73f    /* level match of the b11 (Rosenberg) voiced source to the impulse source */
+#define CAL_MASTER_GAIN 1.2362f
+#define CAL_B11_GAIN_DB -8.43f    /* level match of the b11 (Rosenberg) voiced source to the impulse source */
 
 #endif

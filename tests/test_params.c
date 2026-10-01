@@ -52,7 +52,7 @@ static void test_amplitudes(void)
     CHECK(fabsf(p.a1 / a30 - want) < 1e-3f * want);
     f[2] = (uint8_t)CAL_REF_CODE;
     params_from_frame(f, &off, &p);
-    CHECK(fabsf(p.a1 - powf(10.0f, CAL_G_A1_DB / 20.0f)) < 1e-4f);
+    CHECK(fabsf(p.a1 - powf(10.0f, (CAL_G_A1_DB + CAL_LTAS_A1_DB) / 20.0f)) < 1e-4f);
     f[2] = 1;                                   /* the firmware uses 1 for silence */
     params_from_frame(f, &off, &p);
     CHECK(p.a1 == 0.0f);

@@ -63,11 +63,11 @@ void params_from_frame(const uint8_t f[SYNTH_FRAME_BYTES], const synth_options *
     p->f1_hz = freq(CAL_F1_LOG, CAL_F1_A, CAL_F1_B, f[3]);
     p->f2_hz = freq(CAL_F2_LOG, CAL_F2_A, CAL_F2_B, f[5]);
     p->f3_hz = freq(CAL_F3_LOG, CAL_F3_A, CAL_F3_B, f[7]);
-    p->alf = gain(f[0], CAL_G_ALF_DB);
-    p->a1 = gain(f[2], CAL_G_A1_DB);
-    p->a2 = gain(f[4], CAL_G_A2_DB);
-    p->a3 = gain(f[6], CAL_G_A3_DB);
-    p->ahf = gain(f[8], CAL_G_AHF_DB);
+    p->alf = gain(f[0], CAL_G_ALF_DB + CAL_LTAS_ALF_DB);
+    p->a1 = gain(f[2], CAL_G_A1_DB + CAL_LTAS_A1_DB);
+    p->a2 = gain(f[4], CAL_G_A2_DB + CAL_LTAS_A2_DB);
+    p->a3 = gain(f[6], CAL_G_A3_DB + CAL_LTAS_A3_DB);
+    p->ahf = gain(f[8], CAL_G_AHF_DB + CAL_LTAS_AHF_DB);
     p->voicing = clampf((float)(f[9] - 1) / 62.0f, 0.0f, 1.0f);
     p->f0_hz = params_f0_hz(f[10]);
     if (opt->f0_centre_hz > 0.0f)   /* widen the pitch movement around the utterance centre */

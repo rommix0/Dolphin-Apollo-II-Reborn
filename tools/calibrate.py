@@ -7,7 +7,8 @@
 Inputs:
 - build/apollo2_frames.exe and the ROM, for the steady vowel frames;
 - tests/golden/*.frm, for the report's F0 distribution;
-- dolphin_juno_demo.mp3, decoded by ffmpeg at its native rate (nothing is resampled, spec R2);
+- the male passages of dolphin_juno_demo.mp3, decoded by ffmpeg at its native rate (nothing is resampled,
+  spec R2);
 - build/apollo2.exe, for the report renders;
 - tools/data/wells1962_rp_male.csv, the reference formants and amplitudes.
 """
@@ -32,6 +33,10 @@ FRAMES_EXE = os.path.join(ROOT, 'build', 'apollo2_frames.exe')
 APOLLO2_EXE = os.path.join(ROOT, 'build', 'apollo2.exe')
 JUNO = os.path.join(ROOT, 'dolphin_juno_demo.mp3')
 JUNO_START_S, JUNO_DUR_S = 5, 20          # the short snippet the user allowed
+JUNO_MALE = [(0.0, 9.4), (17.3, 20.0)]   # male passages within the snippet (file time 5-14.4 s and 22.3-25 s);
+                                         # 14.5-22 s is a higher voice and is excluded
+LTAS_GRID = np.arange(100, 3801, 25, dtype=float)   # up to the output low-pass
+CHANNEL_BANDS = [('ALF', 200, 330), ('A1', 350, 800), ('A2', 900, 2000), ('A3', 2100, 3000), ('AHF', 3100, 3700)]
 WELLS = os.path.join(ROOT, 'tools', 'data', 'wells1962_rp_male.csv')
 PLAIN_CORPUS = ['hello', 'prose', 'numbers', 'punctuation', 'letters_k_to_z', 'abbreviations']
 
@@ -50,6 +55,10 @@ TEMPLATE = [
      '   Code <= 1 switches the channel off. */', None),
     ('CAL_DB_PER_CODE', 'f'), ('CAL_REF_CODE', 'int'),
     ('CAL_G_ALF_DB', 'f'), ('CAL_G_A1_DB', 'f'), ('CAL_G_A2_DB', 'f'), ('CAL_G_A3_DB', 'f'), ('CAL_G_AHF_DB', 'f'),
+    ('', None), ('/* Per-channel corrections from the long-term average spectrum of the Juno\'s male passages\n'
+                 '   (calibrate.py fit --ltas). Added to CAL_G_x_DB, which the Wells (1962) fit owns. */', None),
+    ('CAL_LTAS_ALF_DB', 'f'), ('CAL_LTAS_A1_DB', 'f'), ('CAL_LTAS_A2_DB', 'f'), ('CAL_LTAS_A3_DB', 'f'),
+    ('CAL_LTAS_AHF_DB', 'f'),
     ('', None), ('/* Transitions: frames with b13 bit 7 set (closures, releases, onsets, some vowel/sonorant\n'
                  '   boundaries) reach their amplitudes within this many samples instead of across the frame. */', None),
     ('CAL_STEP_RAMP_SAMPLES', 'int'),
@@ -71,7 +80,9 @@ NOTES = {'CAL_FN_B': 'hypothesis H-FN: a low resonance, ~256 Hz at the usual cod
 
 # Seeds for constants that a calib.h written by an older generator does not have yet.
 DEFAULTS = {'CAL_PEAK_HZ': 110.0, 'CAL_PEAK_Q': 0.6, 'CAL_PEAK_DB': 10.0, 'CAL_LPF_HZ': 3800.0,
-            'CAL_B11_GAIN_DB': 0.0, 'CAL_F0_RANGE_GAIN': 2.0, 'CAL_STEP_RAMP_SAMPLES': 16}
+            'CAL_B11_GAIN_DB': 0.0, 'CAL_F0_RANGE_GAIN': 2.0, 'CAL_STEP_RAMP_SAMPLES': 16,
+            'CAL_LTAS_ALF_DB': 0.0, 'CAL_LTAS_A1_DB': 0.0, 'CAL_LTAS_A2_DB': 0.0, 'CAL_LTAS_A3_DB': 0.0,
+            'CAL_LTAS_AHF_DB': 0.0}
 
 
 def c_float(v):
@@ -184,13 +195,15 @@ def golden_f0_hz(vals):
     return np.concatenate(out)
 
 
-def juno_audio():
+def juno_male_audio():
+    """The Juno snippet's male passages, decoded at the file's native rate (nothing is resampled)."""
     rate = int(subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'a:0', '-show_entries',
                                'stream=sample_rate', '-of', 'csv=p=0', JUNO],
                               capture_output=True, text=True, check=True).stdout.strip())
     raw = subprocess.run(['ffmpeg', '-v', 'error', '-ss', str(JUNO_START_S), '-t', str(JUNO_DUR_S), '-i', JUNO,
                           '-ac', '1', '-f', 's16le', '-'], capture_output=True, check=True).stdout
-    return np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0, rate
+    y = np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
+    return np.concatenate([y[int(a * rate):int(b * rate)] for a, b in JUNO_MALE]), rate
 
 
 def juno_f0(y, sr):
@@ -221,11 +234,11 @@ def cmd_fit(args):
         ltas = json.load(open(LTAS_JSON))
         if ltas.get('applied'):
             sys.exit('ltas.json was already applied; run "report" again first')
-        vals['CAL_G_ALF_DB'] += ltas['alf_delta_db']
-        vals['CAL_G_AHF_DB'] += ltas['ahf_delta_db']
+        for ch, d in ltas['deltas_db'].items():
+            vals[f'CAL_LTAS_{ch}_DB'] += d
         ltas['applied'] = True
         json.dump(ltas, open(LTAS_JSON, 'w'), indent=1)
-        print(f'LTAS: ALF {ltas["alf_delta_db"]:+.1f} dB, AHF {ltas["ahf_delta_db"]:+.1f} dB applied')
+        print('LTAS applied: ' + ', '.join(f'{ch} {d:+.1f} dB' for ch, d in ltas['deltas_db'].items()))
     if args.master_gain is not None:
         vals['CAL_MASTER_GAIN'] = args.master_gain
     if args.b11_gain_db is not None:
@@ -256,11 +269,19 @@ def render(text_file, wav, extra=()):
     return x.astype(np.float32) / 32768.0, rate
 
 
-def ltas_db(x, sr, nperseg, grid):
+def ltas_db(x, sr, nperseg):
+    """Long-term average spectrum on LTAS_GRID, in dB relative to its mean over 200-3700 Hz."""
     from scipy.signal import welch
     f, p = welch(x, sr, nperseg=nperseg)
-    db = 10 * np.log10(np.interp(grid, f, p) + 1e-20)
-    return db - db[(grid >= 800) & (grid <= 1250)].mean()
+    db = 10 * np.log10(np.interp(LTAS_GRID, f, p) + 1e-20)
+    return db - db[(LTAS_GRID >= 200) & (LTAS_GRID <= 3700)].mean()
+
+
+def ltas_deltas(s_db, j_db):
+    """Per-channel correction (dB): minus the mean synth-minus-Juno difference over the channel's band."""
+    diff = s_db - j_db
+    return {ch: float(np.clip(-diff[(LTAS_GRID >= lo) & (LTAS_GRID <= hi)].mean(), -12, 12))
+            for ch, lo, hi in CHANNEL_BANDS}
 
 
 def cmd_report(_args):
@@ -303,11 +324,11 @@ def cmd_report(_args):
 
     # F0: corpus codes through the map vs the Juno snippet
     ours = golden_f0_hz(vals)
-    y, sr = juno_audio()
+    y, sr = juno_male_audio()
     jf0 = juno_f0(y, sr)
     fig, ax = plt.subplots(figsize=(7, 4))
     bins = np.arange(50, 320, 10)
-    ax.hist(jf0, bins, alpha=0.5, density=True, label='Juno snippet (pyin)')
+    ax.hist(jf0, bins, alpha=0.5, density=True, label='Juno, male passages (pyin)')
     ax.hist(ours, bins, alpha=0.5, density=True, label='plain corpus: period scale + range gain')
     ax.set_xlabel('F0 (Hz)')
     ax.legend()
@@ -330,20 +351,19 @@ def cmd_report(_args):
     rms_db = lambda x: 20 * np.log10(np.sqrt(np.mean(x ** 2)))
     b11_diff = float(rms_db(b11_prose) - rms_db(plain_prose))
     render(prose, os.path.join(LISTEN_DIR, 'prose_hyp_b13.wav'), ['--hyp', 'b13'])
-    grid = np.arange(100, 4501, 25, dtype=float)
-    s_db = ltas_db(np.concatenate(synth), rate, 1024, grid)
-    j_db = ltas_db(y, sr, 4096, grid)
-    diff = s_db - j_db
-    alf = float(np.clip(-diff[(grid >= 150) & (grid <= 350)].mean(), -12, 12))
-    ahf = float(np.clip(-diff[(grid >= 3200) & (grid <= 3800)].mean(), -12, 12))
-    json.dump({'alf_delta_db': alf, 'ahf_delta_db': ahf, 'applied': False,
-               'grid_hz': grid.tolist(), 'synth_db': s_db.tolist(), 'juno_db': j_db.tolist()},
-              open(LTAS_JSON, 'w'), indent=1)
+    render(prose, os.path.join(LISTEN_DIR, 'prose_prosody3.wav'), ['--prosody', '3'])
+    s_db = ltas_db(np.concatenate(synth), rate, 1024)
+    j_db = ltas_db(y, sr, 4096)
+    deltas = ltas_deltas(s_db, j_db)
+    json.dump({'deltas_db': deltas, 'applied': False, 'grid_hz': LTAS_GRID.tolist(),
+               'synth_db': s_db.tolist(), 'juno_db': j_db.tolist()}, open(LTAS_JSON, 'w'), indent=1)
+    band_rows = [f'| {ch} | {lo}-{hi} | {-deltas[ch]:+.1f} | {deltas[ch]:+.1f} | {vals[f"CAL_LTAS_{ch}_DB"]:+.1f} |'
+                 for ch, lo, hi in CHANNEL_BANDS]
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(grid, s_db, label='synth, plain corpus')
-    ax.plot(grid, j_db, label='Juno snippet')
+    ax.plot(LTAS_GRID, s_db, label='synth, plain corpus')
+    ax.plot(LTAS_GRID, j_db, label='Juno, male passages')
     ax.set_xlabel('Hz')
-    ax.set_ylabel('dB re 0.8-1.25 kHz')
+    ax.set_ylabel('dB re mean 200-3700 Hz')
     ax.legend()
     fig.tight_layout()
     fig.savefig(os.path.join(REPORT_DIR, 'ltas.png'), dpi=90)
@@ -353,8 +373,8 @@ def cmd_report(_args):
     md = [
         '# Synthesizer calibration report', '',
         'Generated by `tools/calibrate.py report` from the current `src/synth/calib.h`. Reference:',
-        'Wells (1962) RP male means (`tools/data/`). Juno: `dolphin_juno_demo.mp3` '
-        f'{JUNO_START_S}-{JUNO_START_S + JUNO_DUR_S} s.', '',
+        'Wells (1962) RP male means (`tools/data/`). Juno: the male passages of `dolphin_juno_demo.mp3` '
+        '(file time 5-14.4 s and 22.3-25 s).', '',
         '## Vowel formants (F1/F2/F3)', '',
         '| Vowel | Keyword | Codes A | Codes B | Wells Hz | calib.h Hz (A) | Error % |',
         '|---|---|---|---|---|---|---|', *rows, '',
@@ -365,23 +385,29 @@ def cmd_report(_args):
         '## Amplitudes', '',
         f'{vals["CAL_DB_PER_CODE"]:.3f} dB per code; channel offsets (dB): ALF {vals["CAL_G_ALF_DB"]:+.1f}, '
         f'A1 {vals["CAL_G_A1_DB"]:+.1f}, A2 {vals["CAL_G_A2_DB"]:+.1f}, A3 {vals["CAL_G_A3_DB"]:+.1f}, '
-        f'AHF {vals["CAL_G_AHF_DB"]:+.1f}.', '',
+        f'AHF {vals["CAL_G_AHF_DB"]:+.1f}. '
+        f'LTAS corrections (dB): ' + ', '.join(f'{ch} {vals[f"CAL_LTAS_{ch}_DB"]:+.1f}' for ch, _, _ in CHANNEL_BANDS) + '.',
+        '',
         '## F0', '',
-        f'5th/50th/95th percentile: Juno {q(jf0)} Hz; plain corpus through calib.h {q(ours)} Hz.', '',
+        f'Period scale (ROM $B930), range gain {vals["CAL_F0_RANGE_GAIN"]:.1f}. 5th/50th/95th percentile: '
+        f'Juno male {q(jf0)} Hz; plain corpus {q(ours)} Hz.', '',
         '![f0](f0.png)', '',
         '## Long-term average spectrum', '',
-        f'Suggested channel corrections (apply with `calibrate.py fit --ltas`): ALF {alf:+.1f} dB, AHF {ahf:+.1f} dB.', '',
+        '| Channel | Band (Hz) | synth − Juno (dB) | Suggested correction (dB) | Applied (CAL_LTAS_x_DB) |',
+        '|---|---|---|---|---|', *band_rows, '',
+        'Apply the suggested corrections with `calibrate.py fit --ltas`.', '',
         '![ltas](ltas.png)', '',
         '## Listening files (spec R4)', '',
         'Rendered to `build/listening/` (not committed): every corpus text, plus `prose_voice_b`, '
-        '`prose_hyp_b11` and `prose_hyp_b13` for the hypothesis switches.', '',
+        '`prose_hyp_b11` and `prose_hyp_b13` for the hypothesis switches, and `prose_prosody3` '
+        '(the device\'s default prosody).', '',
         f'b11 render level vs plain: {b11_diff:+.1f} dB (RMS of `prose_hyp_b11` minus `prose`; '
         f'CAL_B11_GAIN_DB {vals["CAL_B11_GAIN_DB"]:+.1f} dB).', '',
     ]
     with open(os.path.join(REPORT_DIR, 'report.md'), 'w', newline='\n', encoding='utf-8') as f:
         f.write('\n'.join(md))
     print(f'wrote {os.path.relpath(os.path.join(REPORT_DIR, "report.md"), ROOT)} and {len(synth)} plain renders; '
-          f'LTAS suggests ALF {alf:+.1f} dB, AHF {ahf:+.1f} dB')
+          f'LTAS suggests ' + ', '.join(f'{ch} {d:+.1f}' for ch, d in deltas.items()) + ' dB')
     print(f'b11 render level vs plain: {b11_diff:+.2f} dB; suggested '
           f'--b11-gain-db {vals["CAL_B11_GAIN_DB"] - b11_diff:.2f}')
 
@@ -390,7 +416,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
     fit = sub.add_parser('fit')
-    fit.add_argument('--ltas', action='store_true', help='apply the ALF/AHF corrections from the last report')
+    fit.add_argument('--ltas', action='store_true', help='add the five channel corrections from the last report')
     fit.add_argument('--master-gain', type=float, default=None)
     fit.add_argument('--b11-gain-db', type=float, default=None, help='level match of the b11 hypothesis render')
     sub.add_parser('report')
