@@ -25,4 +25,8 @@ char *frame_list_hex(const frame_list *fl);
 machine_status rom_engine_speak(machine *m, const uint8_t *rom, size_t len, const char *text,
                                 bool include_boot, frame_list *out);
 
+/* Same, with an explicit machine configuration (NULL = defaults); used by timing-invariance tests. */
+machine_status rom_engine_speak_cfg(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
+                                    const char *text, bool include_boot, frame_list *out);
+
 #endif

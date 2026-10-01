@@ -52,11 +52,17 @@ char *frame_list_hex(const frame_list *fl)
 machine_status rom_engine_speak(machine *m, const uint8_t *rom, size_t len, const char *text,
                                 bool include_boot, frame_list *out)
 {
+    return rom_engine_speak_cfg(m, rom, len, NULL, text, include_boot, out);
+}
+
+machine_status rom_engine_speak_cfg(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
+                                    const char *text, bool include_boot, frame_list *out)
+{
     frame_sink sink;
     machine_status st;
     sink.list = out;
     sink.enabled = include_boot;
-    if (!machine_init(m, rom, len, NULL))
+    if (!machine_init(m, rom, len, cfg))
         return MACHINE_FAULT;
     machine_set_outputs(m, on_frame, &sink);
     st = machine_run(m, ROM_ENGINE_BOOT_CYCLES);

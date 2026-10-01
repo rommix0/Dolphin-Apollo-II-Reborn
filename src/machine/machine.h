@@ -22,7 +22,11 @@
 
 typedef void (*machine_frame_fn)(void *user, const uint8_t frame[APOLLO_FRAME_BYTES]);
 
-typedef struct { uint8_t port_in[5]; } machine_config;   /* P0..P4 board input levels */
+/* port_in: P0..P4 board input levels. cycle_num/cycle_den: TEST-ONLY scale applied to the CPU
+   cycles fed to the peripheral timers (ticks = cycles * num / den, remainder carried); 0 means 1.
+   machine_default_config sets 1/1. cpu.cycles and the max_cycles budget stay in CPU cycles. The
+   produced-frame stream must not depend on this scale (spec section 4). */
+typedef struct { uint8_t port_in[5]; uint32_t cycle_num, cycle_den; } machine_config;
 
 typedef enum { MACHINE_IDLE, MACHINE_FAULT, MACHINE_CYCLE_LIMIT } machine_status;
 typedef enum { MFAULT_NONE, MFAULT_CPU, MFAULT_DME, MFAULT_ESCAPED_PC } machine_fault;
@@ -35,6 +39,8 @@ typedef struct machine {
     m50734 sfr;
     uint8_t rom[MACHINE_ROM_SIZE];
     uint8_t ram[MACHINE_RAM_SIZE];
+    uint32_t cycle_num, cycle_den;         /* peripheral timer scale (see machine_config) */
+    uint64_t cycle_rem;                    /* remainder of the scaled ticks, < cycle_den */
     machine_fault fault;
     uint16_t op_pc;                        /* address of the instruction being executed */
     uint8_t queue[MACHINE_QUEUE_SIZE];     /* serial input ring buffer */

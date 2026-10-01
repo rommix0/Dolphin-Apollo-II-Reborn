@@ -56,6 +56,45 @@ static void report_diff(const char *name, const char *got, const char *want)
     fprintf(stderr, "  %s: produced frames differ from golden at frame %zu\n", name, line);
 }
 
+/* Spec section 4: the produced-frame stream does not depend on CPU timing. Scale the cycles the
+   peripheral timers see (1/4 = timers 4x slower relative to the CPU, 3/1 = 3x faster). */
+static void test_timing_invariance(const uint8_t *rom, size_t len)
+{
+    static const uint32_t k_scale[][2] = { { 1, 4 }, { 3, 1 } };
+    char *text = read_file("tests/corpus/hello.txt");
+    char *want = read_file("tests/golden/hello.frm");
+    CHECK(text != NULL);
+    CHECK(want != NULL);
+    if (text && want) {
+        strip_newline(text);
+        for (size_t i = 0; i < sizeof k_scale / sizeof k_scale[0]; i++) {
+            machine_config cfg;
+            frame_list fl = { 0 };
+            machine_default_config(&cfg);
+            cfg.cycle_num = k_scale[i][0];
+            cfg.cycle_den = k_scale[i][1];
+            machine_status st = rom_engine_speak_cfg(&g_m, rom, len, &cfg, text, false, &fl);
+            if (st != MACHINE_IDLE)
+                machine_dump(&g_m, stderr);
+            CHECK_EQ(st, MACHINE_IDLE);
+            print_unmodelled(&g_m);
+            CHECK_EQ(g_m.unmodelled_count, 0);
+            char *hex = frame_list_hex(&fl);
+            if (strcmp(hex, want) != 0) {
+                fprintf(stderr, "  timer scale %u/%u:", (unsigned)cfg.cycle_num, (unsigned)cfg.cycle_den);
+                report_diff("hello", hex, want);
+                g_test_failures++;
+            }
+            printf("  timer scale %u/%u: %zu frames, %llu CPU cycles\n", (unsigned)cfg.cycle_num,
+                   (unsigned)cfg.cycle_den, fl.count, (unsigned long long)g_m.cpu.cycles);
+            free(hex);
+            frame_list_free(&fl);
+        }
+    }
+    free(text);
+    free(want);
+}
+
 void suite_golden(void)
 {
     size_t len;
@@ -111,4 +150,6 @@ void suite_golden(void)
         frame_list_free(&fl);
         free(text);
     }
+    if (!update)
+        test_timing_invariance(rom, len);
 }

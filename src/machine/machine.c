@@ -12,6 +12,7 @@ void machine_default_config(machine_config *cfg)
     /* Switches off (serial mode); P2 pulled to $70 so the main ROM is selected at reset. */
     static const uint8_t k_default[5] = { 0x00, 0x00, 0x70, 0x00, 0x00 };
     memcpy(cfg->port_in, k_default, sizeof k_default);
+    cfg->cycle_num = cfg->cycle_den = 1;
 }
 
 static bool is_sfr(uint16_t a) { return a >= M50734_SFR_FIRST && a <= 0x00FF; }
@@ -110,6 +111,8 @@ bool machine_init(machine *m, const uint8_t *rom, size_t len, const machine_conf
     }
     memset(m, 0, sizeof *m);
     memcpy(m->rom, rom, len);
+    m->cycle_num = cfg->cycle_num ? cfg->cycle_num : 1;
+    m->cycle_den = cfg->cycle_den ? cfg->cycle_den : 1;
     m50734_reset(&m->sfr, cfg->port_in);
     m->bus.ctx = m;
     m->bus.read = bus_read;
@@ -197,7 +200,9 @@ machine_status machine_run(machine *m, uint64_t max_cycles)
             m->fault = MFAULT_CPU;
             return MACHINE_FAULT;
         }
-        m50734_tick(&m->sfr, cycles);
+        uint64_t acc = m->cycle_rem + (uint64_t)cycles * m->cycle_num;
+        m->cycle_rem = acc % m->cycle_den;
+        m50734_tick(&m->sfr, (int)(acc / m->cycle_den));
         if (m->fault != MFAULT_NONE)
             return MACHINE_FAULT;
     }
