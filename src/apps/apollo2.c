@@ -22,6 +22,8 @@ static int usage(void)
             "  --rom PATH         ROM image (default: $APOLLO2_ROM or UK_V2.01_4.04_ROM.BIN)\n"
             "  --hyp LIST         synthesizer hypothesis switches, comma-separated: b11,b13\n"
             "  --stream S         frame stream fed to the synthesizer: produced (default) or raw\n"
+            "  --prosody N        intonation strength 0-7, sent as @Rn (default 4 = the firmware's\n"
+            "                     unscaled contour; the device's own default is 3)\n"
             "  --text-file FILE   read the text from FILE (first line; device control codes allowed)\n"
             "  --audio-check      report whether live 10 kHz playback is available, then exit\n"
             "TEXT may contain the device's @ commands (docs/apollo2.txt section 6); at most %d characters.\n"
@@ -109,6 +111,9 @@ int main(int argc, char **argv)
             i++;
         } else if (!strcmp(a, "--stream") && val && (!strcmp(val, "produced") || !strcmp(val, "raw"))) {
             opt.stream = !strcmp(val, "raw") ? RENDER_STREAM_RAW : RENDER_STREAM_PRODUCED;
+            i++;
+        } else if (!strcmp(a, "--prosody") && val && val[0] >= '0' && val[0] <= '7' && val[1] == '\0') {
+            opt.prosody = val[0] - '0';
             i++;
         } else if (!strcmp(a, "--text-file") && val) {
             text_file = val;

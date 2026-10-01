@@ -22,7 +22,7 @@ void suite_render(void)
     if (!rom)
         SKIP("ROM not found (set APOLLO2_ROM)");
     render_options opt;
-    render_result a = { 0 }, b = { 0 }, voice_b = { 0 }, raw = { 0 };
+    render_result a = { 0 }, b = { 0 }, voice_b = { 0 }, raw = { 0 }, r3 = { 0 }, plain = { 0 };
     render_default_options(&opt);
 
     CHECK_EQ(render_text(&g_m, rom, len, "Hello world.", &opt, &a), MACHINE_IDLE);
@@ -52,9 +52,27 @@ void suite_render(void)
     CHECK(raw.frames > 0);
     CHECK_EQ(raw.count, raw.frames * SYNTH_FRAME_SAMPLES);
 
+    render_default_options(&opt);
+    CHECK_EQ(opt.prosody, 4);                                /* the generator's unscaled contour */
+    CHECK(opt.synth.peak_filter && opt.synth.lowpass);
+    opt.prosody = 3;                                         /* the device default @R3 */
+    CHECK_EQ(render_text(&g_m, rom, len, "Hello world.", &opt, &r3), MACHINE_IDLE);
+    CHECK_EQ(r3.frames, 105);                                /* prosody changes pitch, not timing */
+    CHECK(memcmp(a.samples, r3.samples, a.count * sizeof a.samples[0]) != 0);
+
+    render_default_options(&opt);
+    opt.synth.peak_filter = false;
+    opt.synth.lowpass = false;
+    CHECK_EQ(render_text(&g_m, rom, len, "Hello world.", &opt, &plain), MACHINE_IDLE);
+    CHECK_EQ(plain.frames, 105);
+    CHECK(memcmp(a.samples, plain.samples, a.count * sizeof a.samples[0]) != 0);
+    CHECK_EQ(plain.clipped, 0);
+
     render_result_free(&a);
     render_result_free(&b);
     render_result_free(&voice_b);
     render_result_free(&raw);
+    render_result_free(&r3);
+    render_result_free(&plain);
     CHECK(a.samples == NULL && a.count == 0);
 }

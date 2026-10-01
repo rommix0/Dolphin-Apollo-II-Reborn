@@ -28,6 +28,7 @@ them only after reviewing an intentional emulator change:
     build/apollo2.exe "Hello world."                  # play live (10 kHz)
     build/apollo2.exe -o hello.wav "Hello world."     # write a 10 kHz, mono, 16-bit WAV
     build/apollo2.exe --voice b "Hello world."        # second speaker table (@K1)
+    build/apollo2.exe --prosody 3 "Hello world."      # intonation 0-7 (@Rn); default 4, the device's own default is 3
     build/apollo2.exe "@W5 @F6 Faster and lower."     # device commands work in the text
     build/apollo2.exe --text-file story.txt -o story.wav
     build/apollo2.exe --audio-check                   # is live 10 kHz playback available?
@@ -35,3 +36,6 @@ them only after reviewing an intentional emulator change:
 Text goes through the original firmware's serial input (emulated), so the `@` commands in
 `docs/apollo2.txt` section 6 work. `--hyp b11,b13` enables synthesizer hypotheses for
 listening tests (see `docs/calibration/report.md`).
+
+The voice is shaped by a low-end peak on the voiced source and a 3.8 kHz low-pass that models the
+device's DAC filter; both are always on.

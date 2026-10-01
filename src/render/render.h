@@ -14,6 +14,8 @@ typedef enum {
 typedef struct {
     char voice;               /* 'a' (default) or 'b': speaker table B, selected with @K1 */
     render_stream stream;
+    int prosody;              /* 0-7: sent as @Rn before the text (default 4, the firmware's unscaled
+                                 contour; the device default is 3); -1 = send nothing */
     synth_options synth;
 } render_options;
 
@@ -26,8 +28,9 @@ typedef struct {
 
 void render_default_options(render_options *opt);
 
-/* Runs text through the rom engine and synthesizes the chosen stream. Samples are produced only
-   when the engine reaches MACHINE_IDLE (spec §4: never a partial stream). */
+/* Runs text through the rom engine (prefixed with @K1 for voice b and @Rn for the prosody) and
+   synthesizes the chosen stream, with the stream's median pitch as the pitch-range centre. Samples
+   are produced only when the engine reaches MACHINE_IDLE (spec §4: never a partial stream). */
 machine_status render_text(machine *m, const uint8_t *rom, size_t len, const char *text,
                            const render_options *opt, render_result *out);
 
