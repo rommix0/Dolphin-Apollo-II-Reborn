@@ -79,9 +79,9 @@ static void test_pitch_modulated_noise(void)
     for (int i = 0; i < 100000; i++) {
         float x = source_step(&g_src, &p, (float)SYNTH_RATE);
         int pos = i % 100;
-        if (pos >= 1 && pos < 50)
+        if (pos >= 2 && pos < 50)   /* the impulse lands at pos 1: keep both windows off it */
             first += x * x;
-        else if (pos >= 50)
+        else if (pos >= 52)
             second += x * x;
     }
     CHECK(first / second > 8.0);
@@ -91,9 +91,9 @@ static void test_pitch_modulated_noise(void)
     for (int i = 0; i < 100000; i++) {
         float x = source_step(&g_src, &p, (float)SYNTH_RATE);
         int pos = i % 100;
-        if (pos >= 1 && pos < 50)
+        if (pos >= 2 && pos < 50)
             first += x * x;
-        else if (pos >= 51)
+        else if (pos >= 52)
             second += x * x;
     }
     CHECK(first / second > 0.8 && first / second < 1.25);

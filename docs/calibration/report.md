@@ -42,3 +42,5 @@ Suggested channel corrections (apply with `calibrate.py fit --ltas`): ALF -0.3 d
 ## Listening files (spec R4)
 
 Rendered to `build/listening/` (not committed): every corpus text, plus `prose_voice_b`, `prose_hyp_b11` and `prose_hyp_b13` for the hypothesis switches.
+
+b11 render level vs plain: -0.0 dB (RMS of `prose_hyp_b11` minus `prose`; CAL_B11_GAIN_DB -7.7 dB).

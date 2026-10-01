@@ -11,6 +11,9 @@ void synth_init(synth *s, const synth_options *opt)
     if (opt)
         s->opt = *opt;
     source_init(&s->src);
+    s->level = CAL_MASTER_GAIN * 32767.0f;
+    if (s->opt.b11_pulse_width)   /* level-match the Rosenberg hypothesis to the impulse source */
+        s->level *= powf(10.0f, CAL_B11_GAIN_DB / 20.0f);
 }
 
 void synth_frame(synth *s, const uint8_t frame[SYNTH_FRAME_BYTES], int16_t out[SYNTH_FRAME_SAMPLES])
@@ -50,7 +53,7 @@ void synth_frame(synth *s, const uint8_t frame[SYNTH_FRAME_BYTES], int16_t out[S
             float g = s->gain[k] + (target[k] - s->gain[k]) * t;
             y += k_sign[k] * g * resonator_step(&s->res[k], x);
         }
-        y *= CAL_MASTER_GAIN * 32767.0f;
+        y *= s->level;
         if (y > 32767.0f) {
             y = 32767.0f;
             s->clipped++;

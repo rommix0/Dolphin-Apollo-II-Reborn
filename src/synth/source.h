@@ -3,7 +3,8 @@
 /* Excitation for the parallel-formant bank (spec §5). Voicing (impulse train, or a Rosenberg
    pulse when the b11 hypothesis is on) and noise are mixed by the degree of voicing. In the
    mid range (voiced fricatives) the noise is pitch-modulated. Every excitation has unit
-   average power, so V changes the voiced/noise balance but not the loudness. */
+   average power at the source, so V changes the voiced/noise balance there; the output loudness
+   also depends on where the formants put the spectrum. */
 #include <stdint.h>
 
 typedef struct {

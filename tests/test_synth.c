@@ -122,9 +122,9 @@ static void test_b11_switch_changes_voicing(void)
     CHECK(memcmp(a, b, sizeof a) != 0);
 }
 
-/* Every golden stream synthesizes without clipping. The loudest peaks between -12 and -1 dBFS.
-   This uses only committed goldens, so no ROM is needed. */
-static void test_corpus_level(void)
+/* Every golden stream synthesizes without clipping. Returns the loudest peak. This uses only
+   committed goldens, so no ROM is needed. */
+static int corpus_peak(const synth_options *opt, const char *label)
 {
     static const char *const names[] = { CORPUS_NAMES, "boot" };
     int peak = 0;
@@ -136,7 +136,7 @@ static void test_corpus_level(void)
         if (!hex)
             continue;
         size_t frames = strlen(hex) / (2 * SYNTH_FRAME_BYTES + 1);
-        synth_init(&g_s, NULL);
+        synth_init(&g_s, opt);
         for (size_t i = 0; i < frames; i++) {
             uint8_t f[SYNTH_FRAME_BYTES];
             int16_t out[SYNTH_FRAME_SAMPLES];
@@ -147,13 +147,22 @@ static void test_corpus_level(void)
                     peak = abs(out[n]);
         }
         if (g_s.clipped)
-            fprintf(stderr, "  %s: %llu samples clipped\n", names[c], (unsigned long long)g_s.clipped);
+            fprintf(stderr, "  %s %s: %llu samples clipped\n", label, names[c], (unsigned long long)g_s.clipped);
         CHECK_EQ(g_s.clipped, 0);
         free(hex);
     }
-    printf("  corpus peak %d (%.1f dBFS)\n", peak, 20.0 * log10(peak / 32767.0));
+    printf("  corpus peak %s %d (%.1f dBFS)\n", label, peak, 20.0 * log10(peak / 32767.0));
+    return peak;
+}
+
+/* The plain corpus peaks between -12 and -1 dBFS; the b11 hypothesis is level-matched to it. */
+static void test_corpus_level(void)
+{
+    static const synth_options b11 = { true, false };
+    int peak = corpus_peak(NULL, "plain");
     CHECK(peak >= 8231);    /* -12 dBFS */
     CHECK(peak <= 29204);   /* -1 dBFS */
+    corpus_peak(&b11, "b11");   /* no clipping is asserted inside */
 }
 
 void suite_synth(void)

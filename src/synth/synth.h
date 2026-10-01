@@ -14,6 +14,7 @@ typedef struct {
     source src;
     resonator res[5];   /* FN, F1, F2, F3, F4 */
     float gain[5];      /* gains reached at the end of the previous frame: the start of each ramp */
+    float level;        /* synth units -> int16: master gain, times the b11 level match when b11 is on */
     uint64_t clipped;   /* output samples clipped to the int16 range */
 } synth;
 
