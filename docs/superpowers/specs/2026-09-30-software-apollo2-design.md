@@ -227,7 +227,7 @@ and by ROM-dependent tests, which print SKIP without it *(rev 3)*.
 
 **Signal path (10 kHz, float internally, 16-bit output, 100 samples per frame):**
 - The impulse source *(rev 5: the user's choice over Rosenberg and sawtooth pulses)* passes a
-  low-end peak (110 Hz, Q 0.6, +10 dB) that restores the fundamental. The peak acts on the voiced
+  low-end peak (110 Hz, Q 0.6, +12 dB) that restores the fundamental. The peak acts on the voiced
   component only. The noise source is mixed in by V and is never scaled with the voicing.
 - When V is mid-range (voiced fricatives), the noise is pitch-modulated.
 - The excitation drives parallel second-order resonators: FN×ALF, F1×A1, F2×A2,
@@ -266,7 +266,8 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
   is a higher voice). The five channel levels get LTAS corrections (`CAL_LTAS_x_DB`) on top of the
   Wells fit. The rev 4 ALF/AHF corrections below came from the mixed snippet and were reset.
 - *(rev 5)* Listening-test choices: prosody @R4, pitch-range gain 2.0, impulse source, low-end peak
-  110 Hz/Q 0.6/+10 dB, 3.8 kHz output low-pass, a 16-sample transition ramp and mute-reset.
+  110 Hz/Q 0.6/+12 dB (raised from +10 dB after the LTAS refit thinned the low end), 3.8 kHz output
+  low-pass, a 16-sample transition ramp and mute-reset.
 - F1 and F2 are linear and F3 is logarithmic, fitted to Wells (1962) RP male means (RMS 5–6 %).
 - Amplitudes are 0.95 dB per code, confirming the hypothesis, with channel offsets fitted to
   Wells's formant levels.

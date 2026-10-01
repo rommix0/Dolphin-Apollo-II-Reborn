@@ -58,12 +58,12 @@
    (4th-order Butterworth, like the DAC's analog filter); both chosen by listening. */
 #define CAL_PEAK_HZ 110.0f
 #define CAL_PEAK_Q 0.6f
-#define CAL_PEAK_DB 10.0f
+#define CAL_PEAK_DB 12.0f
 #define CAL_LPF_HZ 3800.0f
 
 /* Output level: synth units -> int16 full scale (the corpus must peak between -12 and -1 dBFS
    without clipping; see suite_synth) */
-#define CAL_MASTER_GAIN 1.2362f
+#define CAL_MASTER_GAIN 1.183f
 #define CAL_B11_GAIN_DB -8.43f    /* level match of the b11 (Rosenberg) voiced source to the impulse source */
 
 #endif
