@@ -69,6 +69,8 @@ static void test_misc_registers(void)
     CHECK_EQ(m50734_read(&g_p, M50734_AD_CTRL), 0x05);     /* conversion completes at once */
     m50734_write(&g_p, M50734_P23_FUNC, 0xFF);
     CHECK_EQ(m50734_read(&g_p, M50734_P23_FUNC), 0xC7);
+    CHECK(m50734_is_write_only(M50734_UART_TX));
+    CHECK(!m50734_is_write_only(M50734_UART_RX));
 }
 
 void suite_m50734(void)

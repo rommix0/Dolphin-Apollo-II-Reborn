@@ -77,9 +77,27 @@ static void test_hex_format(void)
     free(hex);
 }
 
+/* Text that does not fit the serial queue is a fault with its own reason, not a silent truncation. */
+static void test_input_overflow(void)
+{
+    static char text[MACHINE_QUEUE_SIZE + 1];
+    size_t len;
+    const uint8_t *rom = test_rom(&len);
+    if (!rom)
+        SKIP("ROM not found (set APOLLO2_ROM)");
+    memset(text, 'a', MACHINE_QUEUE_SIZE);       /* the queue holds MACHINE_QUEUE_SIZE - 1 bytes */
+    text[MACHINE_QUEUE_SIZE] = '\0';
+    frame_list fl = { 0 };
+    CHECK_EQ(rom_engine_speak(&g_m, rom, len, text, false, &fl), MACHINE_FAULT);
+    CHECK_EQ(g_m.fault, MFAULT_INPUT_OVERFLOW);
+    CHECK_EQ(fl.count, 0);
+    frame_list_free(&fl);
+}
+
 void suite_rom_speak(void)
 {
     test_hex_format();
     test_zoo_uses_lower_rom_and_sounds_like_z();
     test_deterministic();
+    test_input_overflow();
 }

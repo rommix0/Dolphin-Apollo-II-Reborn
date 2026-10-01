@@ -21,6 +21,11 @@ bool m50734_is_modelled(uint8_t a)
            (a >= 0xED && a <= 0xF7) || a == 0xFB || a >= 0xFD;
 }
 
+bool m50734_is_write_only(uint8_t addr)
+{
+    return addr == M50734_UART_TX;
+}
+
 uint8_t m50734_port_pins(const m50734 *p, int port)
 {
     return (uint8_t)((p->port_in[port] & ~p->port_dir[port]) | (p->port_latch[port] & p->port_dir[port]));

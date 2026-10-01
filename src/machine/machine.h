@@ -29,7 +29,7 @@ typedef void (*machine_frame_fn)(void *user, const uint8_t frame[APOLLO_FRAME_BY
 typedef struct { uint8_t port_in[5]; uint32_t cycle_num, cycle_den; } machine_config;
 
 typedef enum { MACHINE_IDLE, MACHINE_FAULT, MACHINE_CYCLE_LIMIT } machine_status;
-typedef enum { MFAULT_NONE, MFAULT_CPU, MFAULT_DME, MFAULT_ESCAPED_PC } machine_fault;
+typedef enum { MFAULT_NONE, MFAULT_CPU, MFAULT_DME, MFAULT_ESCAPED_PC, MFAULT_INPUT_OVERFLOW } machine_fault;
 
 typedef struct { uint16_t addr, pc; bool write; } machine_access;
 
@@ -56,6 +56,7 @@ typedef struct machine {
     unsigned history_pos;
     machine_access unmodelled[MACHINE_MAX_UNMODELLED];
     unsigned unmodelled_count;
+    unsigned unmodelled_dropped;           /* accesses not logged because the log was full (repeats included) */
 } machine;
 
 void machine_default_config(machine_config *cfg);

@@ -44,6 +44,8 @@ static void note_unmodelled(machine *m, uint16_t addr, bool write)
         a->addr = addr;
         a->pc = m->op_pc;
         a->write = write;
+    } else {
+        m->unmodelled_dropped++;
     }
 }
 
@@ -51,7 +53,7 @@ static uint8_t bus_read(void *ctx, uint16_t a)
 {
     machine *m = ctx;
     if (is_sfr(a)) {
-        if (!m50734_is_modelled((uint8_t)a))
+        if (!m50734_is_modelled((uint8_t)a) || m50734_is_write_only((uint8_t)a))
             note_unmodelled(m, a, false);
         return m50734_read(&m->sfr, (uint8_t)a);
     }
@@ -213,7 +215,10 @@ static uint8_t peek_cb(void *ctx, uint16_t a) { return machine_peek(ctx, a); }
 
 void machine_dump(const machine *m, FILE *out)
 {
-    static const char *const k_faults[] = { "none", "cpu", "DME (data-memory strobe) enabled", "escaped PC (SFR space or deselected ROM bank)" };
+    static const char *const k_faults[] = {
+        "none", "cpu", "DME (data-memory strobe) enabled", "escaped PC (SFR space or deselected ROM bank)",
+        "input longer than the serial queue",
+    };
     static const char *const k_cpu_faults[] = {
         "ok", "illegal opcode", "unsupported instruction (SET/SED/STP/MUL/DIV/BRK)", "T flag set",
     };
@@ -234,4 +239,6 @@ void machine_dump(const machine *m, FILE *out)
     for (unsigned i = 0; i < m->unmodelled_count; i++)
         fprintf(out, "unmodelled %s $%04X (first at PC $%04X)\n",
                 m->unmodelled[i].write ? "write" : "read", m->unmodelled[i].addr, m->unmodelled[i].pc);
+    if (m->unmodelled_dropped)
+        fprintf(out, "unmodelled log full: %u more accesses not listed\n", m->unmodelled_dropped);
 }

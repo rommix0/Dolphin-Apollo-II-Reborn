@@ -27,6 +27,10 @@ int main(int argc, char **argv)
         printf("%-28s %s\n", k_suites[i].name, g_test_failures == before ? "ok" : "FAILED");
         run++;
     }
+    if (filter && run == 0) {
+        fprintf(stderr, "no suite matches \"%s\"\n", filter);
+        return 1;
+    }
     printf("%d suite(s), %d failure(s), %d skip(s)\n", run, g_test_failures, g_test_skips);
     return g_test_failures ? 1 : 0;
 }

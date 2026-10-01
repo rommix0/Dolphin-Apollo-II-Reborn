@@ -209,6 +209,21 @@ static void test_peek_has_no_side_effects(void)
     CHECK(g_m.sfr.uart_rx_full);
 }
 
+static void test_unmodelled_log_limits(void)
+{
+    memset(g_rom, 0, sizeof g_rom);
+    set_vector(0xFFFE, 0x9000);
+    boot();
+    rd(M50734_UART_TX);                          /* write-only register: a read is unmodelled */
+    CHECK_EQ(g_m.unmodelled_count, 1);
+    CHECK_EQ(g_m.unmodelled[0].addr, M50734_UART_TX);
+    CHECK(!g_m.unmodelled[0].write);
+    for (int i = 0; i < 70; i++)
+        wr((uint16_t)(0x9000 + i), 0);           /* 70 distinct ROM-space writes */
+    CHECK_EQ(g_m.unmodelled_count, MACHINE_MAX_UNMODELLED);
+    CHECK_EQ(g_m.unmodelled_dropped, 71 - MACHINE_MAX_UNMODELLED);
+}
+
 void suite_machine(void)
 {
     test_memory_map();
@@ -219,4 +234,5 @@ void suite_machine(void)
     test_escaped_pc();
     test_cycle_scale();
     test_peek_has_no_side_effects();
+    test_unmodelled_log_limits();
 }

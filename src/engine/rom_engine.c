@@ -73,8 +73,10 @@ machine_status rom_engine_speak_cfg(machine *m, const uint8_t *rom, size_t len, 
         if (machine_feed_serial(m, (const uint8_t *)text, strlen(text)) &&
             machine_feed_serial(m, (const uint8_t *)"\r", 1))
             st = machine_run(m, ROM_ENGINE_SPEAK_CYCLES);
-        else
-            st = MACHINE_FAULT;   /* text longer than the input queue */
+        else {
+            m->fault = MFAULT_INPUT_OVERFLOW;   /* text longer than the input queue */
+            st = MACHINE_FAULT;
+        }
     }
     machine_set_outputs(m, NULL, NULL);   /* sink lives on this stack frame */
     return st;

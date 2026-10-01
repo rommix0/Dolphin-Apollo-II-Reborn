@@ -41,6 +41,7 @@ typedef struct m50734 {
 
 void m50734_reset(m50734 *p, const uint8_t port_in[5]);
 bool m50734_is_modelled(uint8_t addr);
+bool m50734_is_write_only(uint8_t addr);   /* $E4 UART TX: reading it is an unmodelled access */
 uint8_t m50734_read(m50734 *p, uint8_t addr);
 void m50734_write(m50734 *p, uint8_t addr, uint8_t v);
 void m50734_tick(m50734 *p, int cpu_cycles);
