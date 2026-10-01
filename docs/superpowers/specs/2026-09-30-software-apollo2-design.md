@@ -1,7 +1,8 @@
 # Software Apollo 2 — Design
 
 **Date:** 2026-09-30
-**Status:** Draft, awaiting review
+**Status:** Approved. Revision 2 adds facts found while planning milestone 1
+(MAME's M50734 register map and the lower-ROM banking); the changes are marked *(rev 2)*.
 **Goal:** A software Dolphin Apollo 2. Text typed on a PC goes through the real
 firmware logic (first emulated, then decompiled to C) and produces DSP frames.
 A from-scratch Holmes parallel-formant synthesizer turns the frames into audio.
@@ -17,6 +18,14 @@ ROM. "Hypothesis" means it still has to be proven by the work in this spec.
   Vectors sit at `$FFF4–$FFFF`: RESET `$A61C` (`$FFFE`), the serial/aux IRQ
   `$C2B4` (`$FFFA`), the timer IRQ `$B2D9` (`$FFF8`), and `$C3E0` (`$FFF4`). The
   others point at RTI. Verified.
+- **Clock and interrupts** *(rev 2)*: the 740 core takes the highest-priority line
+  n and uses the vector `$FFFC − 2n`: INT0 `$FFFC` (_INT2 pin), INT1 `$FFFA`
+  (_INT1 pin and the UART), INT2 `$FFF8` (timers 1–3), INT3 `$FFF6` (stepper),
+  INT4 `$FFF4` (Timer X/CNTR). Lower n wins. The crystal is 8 MHz and one CPU
+  cycle is 4 input clocks (2 MHz). Timer n fires every 16·(pre+1)·(reload+1)
+  input clocks. The ROM sets timer 3 to pre 0 and reload `$31`, which is 800
+  clocks = 200 CPU cycles = **10 kHz**. One frame is 100 ticks, so frames are
+  10 ms. Verified (MAME `m740`/`m50734` sources plus the ROM's timer setup).
 - **Opcodes used in the 8.2 KB of traced code:** the 6502 base set plus 740 bit
   ops, LDM, TST, COM, CLT and WIT (once). These never appear: SET (so the T flag is
   never enabled), SED, MUL, DIV, RRF, STP, BRK. Re-check this once code coverage
@@ -31,27 +40,41 @@ ROM. "Hypothesis" means it still has to be proven by the work in this spec.
 
 | Range | Contents | Status |
 |---|---|---|
-| `$0000–$00BF` | Zero-page RAM | Verified |
-| `$00C0–$00FF` | SFRs (`$DE–$FF` observed) | Verified |
+| `$0000–$00D9` | Zero-page RAM | Verified *(rev 2: the M50734 SFRs start at `$DA`)* |
+| `$00DA–$00FF` | SFRs (§1.3) | Verified |
 | `$0100–$3FFF` | External RAM. Buffers seen at `$0200`, `$0A00`, `$0E00`, `$1000–$20xx` | Extent is a hypothesis |
-| `$4000–$7FFF` | ROM file `0x4000–0x7FFF` | Verified (the 26-entry pointer table at `0x4200` is self-consistent) |
+| `$4000–$7FFF` | ROM file `0x4000–0x7FFF` while P2 bit 7 = 0; **file `0x0000–0x3FFF` while P2 bit 7 = 1** | Verified *(rev 2)*: the two-letter rule index at `0x4200` has A–J pointers into `0x5625–0x8FDF` and K–Z pointers `$4010–$77D7`, which land on rule starts only in the lower half. The matcher sets P2.7 (`SEB7 $F0` at `$B1C2`) for K–Z and clears it at `$B25A`. |
 | `$8000` write | DSP data port | Verified |
-| `$8000–$FFFF` | ROM, banked by P0 (`$F0`) bits 2–6 | Verified |
-| file `0x0000–0x3FFF` | Letter-to-sound rule text | How code reaches it is **unknown** (milestone 1, task 1) |
+| `$8000–$FFFF` | Main ROM while P2 bits 2–6 = `$70`; any other value selects an empty option socket (reads `$FF`) | Bank values are verified; the "empty socket" behaviour is a hypothesis *(rev 2: port P2, not P0)* |
 
 - At boot, `$ADFE–$AFFC` is copied to RAM `$0200–$03FE`. That RAM code switches
   banks and probes `$FFD0 == $78` to detect option ROMs.
 
-### 1.3 Peripherals (observed use)
+### 1.3 Peripherals *(rev 2: register map from MAME `m50734.cpp`; the UART is inferred from the ROM)*
+
+| Address | Register | ROM use |
+|---|---|---|
+| `$DC–$E1` | Timers 1–3: prescaler/reload pairs | Timer 2 is a startup delay; timer 3 is the 10 kHz DSP tick |
+| `$E4` / `$E5` / `$E6` / `$E7` | UART TX / RX / control (bit 4 = RX interrupt enable) / status (bit 1 = TX ready, bits 2–4 = errors) | Serial input. The RX interrupt shares vector `$FFFA` with _INT1. |
+| `$E9` / `$EA` / `$EB` | A/D control / data / **P4 input** | Boot copies `P4 & $0F` (DIP switches) into `$10`; bit 0 = parallel mode |
+| `$ED` | P2/P3 function | |
+| `$EE`/`$EF`, `$F0`/`$F1`, `$F3`/`$F4`, `$F6`/`$F7` | P3, P2, P1, P0 data/direction. A read returns `(pins & ~dir) \| (latch & dir)`. | **P2**: bit 0 = DSP reset (pulsed by `$B38B`), bits 2–6 = ROM bank, bit 7 = lower-ROM window. **P0** bit 5 = host busy line (polarity set by the P0.2 jumper). P3 bits 1–2 = baud jumpers. |
+| `$F2` | P1 latched input (parallel data) | Parallel mode only; out of scope |
+| `$F5` | P0 function. Bit 5 together with P0 direction bit 5 enables DME data memory. | Never enables DME. The emulator faults if it ever does. |
+| `$FB` | UART baud rate | |
+| `$FD` / `$FE` / `$FF` | Interrupt control 3 / 2 / 1: enable bits (even) paired with request bits (odd) | ICR2 bit 4/5 = timer 3 enable/request; ICR1 bit 0/1 = _INT1 |
+
+Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–$FA`,
+`$FC`) are logged whenever they are accessed.
+
 - **Serial input (`$C33C`, via the `$C2B4` handler):** reads data at `$E5` and status
-  at `$E7` (`$1C` = error bits). The control register is `$E6`. Flow-control
-  outputs are `$FD` bits 6–7. Received bytes are queued by `$C37E`. An alternative
-  input path reads port `$F2` when `$10` bit 0 is set (probably a parallel port; out
-  of scope).
+  at `$E7` (`$1C` = error bits). Received bytes are queued by `$C37E`.
+- **Idle:** the firmware's only `WIT` is at `$C602`, inside its wait-for-input helper `$C5FE`.
 - **Timer ISR `$B2D9`:** sends one 16-bit word (even byte first) to `$8000` every
   10 ticks. There are 10 words per frame, played from the ping-pong buffers at
-  `$16A5` and `$16B9`.
-- **P0 bit 0:** DSP reset, toggled by routine `$B38B`.
+  `$16A5` and `$16B9`. At `$B306` it swaps buffers. The buffer the main loop just
+  finished is the one the zero-page pointer `$2C/$2D` points to. If the main loop
+  hasn't finished by the end of a frame, the ISR replays the old frame.
 
 ### 1.4 DSP frame format (20 bytes = 10 words)
 
@@ -106,7 +129,7 @@ ROM. "Hypothesis" means it still has to be proven by the work in this spec.
 
 | Unit | Responsibility | Interface | Depends on |
 |---|---|---|---|
-| `cpu740/` | Instruction-exact 740 core (incl. T flag, decimal mode, cycle counts) | `cpu740_reset`, `cpu740_step(cpu*, const bus*) -> cycles`, `cpu740_irq(cpu*, vector)` | — |
+| `cpu740/` | Instruction-exact 740 core with approximate cycle counts. *(rev 2)* SET (T mode), SED (decimal), STP, MUL, DIV and BRK are never used by the ROM, so they **fault** instead of being emulated. A T or D flag restored by PLP/RTI also faults. | `cpu740_reset`, `cpu740_step(cpu*, const bus*) -> cycles`, `cpu740_irq(cpu*, vector)` | — |
 | `machine/` | Apollo 2 board: memory map, banking, SFRs, serial RX, timer, DSP port, hooks | `machine_init(rom, len)`, `machine_feed_serial(bytes, n)`, `machine_run(max_cycles) -> status`, `machine_set_frame_sink(cb)`, `machine_hook(addr, thunk)` | cpu740 |
 | `firmware/` | Decompiled firmware in C on a shared memory image | per-routine C functions + thunks; `fw_native_speak(bytes, n, frame_sink)` | machine (hybrid only) |
 | `synth/` | Holmes parallel-formant synthesizer | `synth_init(cfg)`, `synth_frame(const uint8_t f[20], int16_t out[100])` | — |
@@ -116,25 +139,41 @@ ROM. "Hypothesis" means it still has to be proven by the work in this spec.
 | `tests/` | unit, differential, golden-frame and synth tests | `apollo2_tests.exe`: runs all suites, non-zero exit on any failure | all |
 
 **Build:** CMake is not installed, so `build.bat` calls `vcvars64.bat` and then `cl`
-with `/std:c11 /W4 /WX`. It builds `apollo2.exe` and `apollo2_tests.exe`, after
+with `/std:c11 /W4 /WX /wd4244`. C4244 (implicit narrowing) is disabled because
+8-bit truncation is intentional throughout the emulator. It builds `apollo2.exe` and `apollo2_tests.exe`, after
 first running `tools/extract_tables.py` against the ROM path given in
 `APOLLO2_ROM` (default: `./UK_V2.01_4.04_ROM.BIN`).
 
 ## 4. Machine model (`machine/`)
 - **Memory map:** as §1.2. Every access to an address with no model behind it is
   logged once, with the PC and the address. It is never silently accepted.
-- **Banking:** P0 bits 2–6 select the bank for `$8000–$FFFF`. Empty option sockets
-  read `$FF`.
-- **Serial RX:** an input queue. A byte is presented at `$E5` and the IRQ is raised
-  only while the flow-control line (`$FD`) permits.
-- **Timer:** raises the `$FFF8` IRQ every *N* CPU cycles. *N* is a constant derived
-  from the SFR setup and checked against the 10 ms/frame assumption.
-- **DSP port:** writes to `$8000` are collected. A pulse on P0 bit 0 (DSP reset)
-  re-aligns the capture. Every 20 bytes after that become one frame for the sink.
-- **Idle detection:** a run ends when the input queue is empty, the CPU has hit the
-  `WIT` idle point, and 20 consecutive silent frames (200 ms) have been emitted.
-- **Determinism:** the main loop busy-waits on `$5C` for buffer swaps, so the frame
-  stream depends only on input bytes. Golden runs execute as fast as possible.
+- **Banking** *(rev 2)*: P2 bits 2–6 select the bank for `$8000–$FFFF` (main ROM =
+  `$70`; empty option sockets read `$FF`). P2 bit 7 maps the lower ROM half into
+  `$4000–$7FFF`. Undriven P2 pins read the board pull levels, which default to `$70`,
+  so the main ROM is selected at reset.
+- **Board inputs** *(rev 2)*: the P0–P4 pin levels (jumpers, DIP switches, pulls)
+  come from a `machine_config`. The default is all switches off: serial mode, P2
+  pulls at `$70`.
+- **Serial RX** *(rev 2)*: an input queue. One byte is presented at `$E5` each time
+  the CPU sits in the idle `WIT` at `$C602`, the previous byte has been read, and
+  the P0.5 busy line is at its idle level (the level recorded at the first idle).
+  The RX request raises INT1 while `$E6` bit 4 is set.
+- **Timers** *(rev 2)*: timers 1–3 count CPU cycles. Each period is
+  4·(pre+1)·(reload+1). On expiry a timer sets its ICR2 request bit; the interrupt
+  line is the AND of the enable and request bits.
+- **DSP port:** writes to `$8000` are counted. Raw-stream capture with re-alignment
+  on P2 bit 0 (DSP reset) arrives with the synthesizer in M2.
+- **Produced frames (the golden stream)** *(rev 2)*: whenever the PC reaches
+  `$B306` (the ISR's buffer swap), the 20 bytes at the `$2C/$2D` pointer are
+  captured as one produced frame. ISR replays never show up in this stream, so it
+  doesn't depend on CPU timing. That is what lets C functions, which take zero
+  emulated time, be compared byte for byte.
+- **Idle detection** *(rev 2)*: a run ends when the CPU is in the `$C602` `WIT`, the
+  input queue is empty, the last byte has been read, the timer 3 interrupt is
+  disabled (ICR2 bit 4 = 0; speech switches it off when finished) and no
+  interrupt line is asserted.
+- **Determinism:** the main loop busy-waits on `$5C` for buffer swaps, so the
+  produced-frame stream depends only on input bytes. Golden runs execute as fast as possible.
 - **Errors:** an invalid opcode, a wrong ROM size or an escaped PC (into an
   unmodelled region) stops the run with the PC, registers and the last 64
   instructions. Nothing ever falls through to a "plausible" frame stream.
@@ -208,9 +247,12 @@ first running `tools/extract_tables.py` against the ROM path given in
 ## 7. Testing
 ### 7.1 Firmware (objective, automated)
 - **CPU unit tests:** per-instruction vectors for all addressing modes, flags,
-  740 extensions, T-flag behaviour and decimal mode.
+  740 extensions, interrupts, and faults on the unsupported instructions *(rev 2)*.
 - **Golden corpus:** `tests/corpus/*.txt` covers prose, numbers, dates, abbreviations,
-  punctuation, spelling mode and every documented control code.
+  punctuation, spelling mode and every documented control code. M1 covers plain
+  text; control codes and spelling mode are added once `docs/apollo2.txt` has been
+  worked through *(rev 2)*. The golden files are produced-frame streams (§4) stored
+  as hex, one frame per line. They are firmware output, not ROM bytes.
   - The `rom` engine records the golden frame streams.
   - `hybrid` and `native` must match them byte for byte (R3).
   - The goldens are regenerated only when `cpu740/` or `machine/` changes, and only
@@ -230,7 +272,7 @@ first running `tools/extract_tables.py` against the ROM path given in
 ## 8. Milestones
 1. **ROM speaks frames:**
    - `cpu740` with its unit tests, plus `machine`.
-   - Resolve how the rule text in file `0x0000–0x3FFF` is reached.
+   - Confirm in the emulator how the rule text in file `0x0000–0x3FFF` is reached (P2.7, §1.2).
    - The `rom` engine produces golden frames for the corpus.
 2. **Software Apollo 2 v0:**
    - `synth` and calibration.
@@ -248,8 +290,10 @@ first running `tools/extract_tables.py` against the ROM path given in
 - Bit-exact audio. Only the frames are bit-exact.
 
 ## 10. Open questions (resolved inside the milestones above)
-- How the firmware reaches the rule text in file `0x0000–0x3FFF` (M1).
-- The exact external RAM extent and the timer period in CPU cycles (M1).
+- ~~How the firmware reaches the rule text in file `0x0000–0x3FFF`~~: resolved statically (P2.7, §1.2); M1 confirms it in the emulator.
+- ~~The timer period~~: resolved, 200 CPU cycles (§1.1).
+- The exact external RAM extent (M1 logs any access outside `$0000–$3FFF`).
+- The meaning of the P4 DIP switches beyond bit 0, and of the P3 baud jumpers (M2, from `docs/apollo2.txt`).
 - The meanings of b11, b13 and b14–b17 (M2 listening tests).
 - The 17 phoneme indices not reachable from ASCII symbols (6, 7, 22, 23, 25, 40,
   41, 58, 77–85), probably reached via `$9E74` (M3).
