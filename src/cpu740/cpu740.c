@@ -318,6 +318,47 @@ int cpu740_step(cpu740 *c, const cpu740_bus *b)
         break;
     case M_BRK: fault = CPU740_FAULT_UNSUPPORTED; break;   /* never used: usually a runaway PC */
 
+    /* 740 extensions */
+    case M_BBS:
+    case M_BBC: {
+        v = info.mode == AM_BIT_A_REL ? c->a : rd(b, o.ea);
+        bool bit_set = ((v >> o.bit) & 1) != 0;
+        if (bit_set == (info.mnem == M_BBS)) {
+            c->pc = o.target;
+            cycles += 2;
+        }
+        break;
+    }
+    case M_SEB:
+    case M_CLB: {
+        uint8_t mask = (uint8_t)(1u << o.bit);
+        if (info.mode == AM_BIT_A) {
+            c->a = info.mnem == M_SEB ? (uint8_t)(c->a | mask) : (uint8_t)(c->a & ~mask);
+        } else {
+            v = rd(b, o.ea);
+            wr(b, o.ea, info.mnem == M_SEB ? (uint8_t)(v | mask) : (uint8_t)(v & ~mask));
+        }
+        break;
+    }
+    case M_LDM: wr(b, o.ea, o.imm); break;
+    case M_TST: set_nz(c, rd(b, o.ea)); break;
+    case M_COM:
+        v = (uint8_t)~rd(b, o.ea);
+        set_nz(c, v);
+        wr(b, o.ea, v);
+        cycles += 2;
+        break;
+    case M_RRF:
+        v = rd(b, o.ea);
+        wr(b, o.ea, (uint8_t)((v << 4) | (v >> 4)));
+        cycles = 8;
+        break;
+    case M_CLT: set_flag(c, CPU740_T, false); break;
+    case M_WIT: c->waiting = true; break;
+    case M_SET: case M_STP: case M_MUL: case M_DIV:
+        fault = CPU740_FAULT_UNSUPPORTED;   /* verified unused by the Apollo ROM (spec §1.1) */
+        break;
+
     default: fault = CPU740_FAULT_ILLEGAL; break;
     }
 

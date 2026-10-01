@@ -2,3 +2,4 @@
 SUITE(suite_smoke)
 SUITE(suite_optable)
 SUITE(suite_cpu_base)
+SUITE(suite_cpu_740)
