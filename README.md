@@ -22,3 +22,16 @@ Golden frame streams for the regression corpus live in `tests/golden/`. Regenera
 them only after reviewing an intentional emulator change:
 
     APOLLO2_UPDATE_GOLDEN=1 cmd //c ".\build.bat test golden"
+
+## Speaking text
+
+    build/apollo2.exe "Hello world."                  # play live (10 kHz)
+    build/apollo2.exe -o hello.wav "Hello world."     # write a 10 kHz, mono, 16-bit WAV
+    build/apollo2.exe --voice b "Hello world."        # second speaker table (@K1)
+    build/apollo2.exe "@W5 @F6 Faster and lower."     # device commands work in the text
+    build/apollo2.exe --text-file story.txt -o story.wav
+    build/apollo2.exe --audio-check                   # is live 10 kHz playback available?
+
+Text goes through the original firmware's serial input (emulated), so the `@` commands in
+`docs/apollo2.txt` section 6 work. `--hyp b11,b13` enables synthesizer hypotheses for
+listening tests (see `docs/calibration/report.md`).
