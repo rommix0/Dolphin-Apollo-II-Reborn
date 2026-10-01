@@ -26,21 +26,29 @@ void suite_render(void)
     render_default_options(&opt);
 
     CHECK_EQ(render_text(&g_m, rom, len, "Hello world.", &opt, &a), MACHINE_IDLE);
+    print_unmodelled(&g_m);
+    CHECK_EQ(g_m.unmodelled_count, 0);
     CHECK_EQ(a.frames, 105);                                 /* tests/golden/hello.frm */
     CHECK_EQ(a.count, 105 * SYNTH_FRAME_SAMPLES);
     CHECK_EQ(a.clipped, 0);
     CHECK(peak_of(&a) > 1000);                               /* audible speech, not silence */
 
     CHECK_EQ(render_text(&g_m, rom, len, "Hello world.", &opt, &b), MACHINE_IDLE);
+    print_unmodelled(&g_m);
+    CHECK_EQ(g_m.unmodelled_count, 0);
     CHECK(a.count == b.count && memcmp(a.samples, b.samples, a.count * sizeof a.samples[0]) == 0);
 
     opt.voice = 'b';
     CHECK_EQ(render_text(&g_m, rom, len, "Hello world.", &opt, &voice_b), MACHINE_IDLE);
+    print_unmodelled(&g_m);
+    CHECK_EQ(g_m.unmodelled_count, 0);
     CHECK(voice_b.count != a.count || memcmp(a.samples, voice_b.samples, a.count * sizeof a.samples[0]) != 0);
 
     opt.voice = 'a';
     opt.stream = RENDER_STREAM_RAW;
     CHECK_EQ(render_text(&g_m, rom, len, "Hello world.", &opt, &raw), MACHINE_IDLE);
+    print_unmodelled(&g_m);
+    CHECK_EQ(g_m.unmodelled_count, 0);
     CHECK(raw.frames > 0);
     CHECK_EQ(raw.count, raw.frames * SYNTH_FRAME_SAMPLES);
 

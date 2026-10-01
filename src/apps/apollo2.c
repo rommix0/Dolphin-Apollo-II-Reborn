@@ -25,7 +25,7 @@ static int usage(void)
             "  --text-file FILE   read the text from FILE (first line; device control codes allowed)\n"
             "  --audio-check      report whether live 10 kHz playback is available, then exit\n"
             "TEXT may contain the device's @ commands (docs/apollo2.txt section 6); at most %d characters.\n"
-            "exit codes: 0 ok, 1 usage/ROM/file error, 2 emulation fault, 3 cycle limit, 4 audio error\n",
+            "exit codes: 0 ok, 1 usage/ROM/file error, 2 emulation fault, 3 cycle limit, 4 audio error, 5 unmodelled access logged\n",
             APOLLO2_MAX_TEXT);
     return 1;
 }
@@ -127,6 +127,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "cannot read %s\n", text_file);
         return 1;
     }
+    if (!*text) {
+        fprintf(stderr, "no text to speak (TEXT or the first line of the file is empty)\n");
+        return 1;
+    }
     if (strlen(text) > APOLLO2_MAX_TEXT) {
         fprintf(stderr, "text too long: %zu characters (at most %d)\n", strlen(text), APOLLO2_MAX_TEXT);
         return 1;
@@ -151,6 +155,11 @@ int main(int argc, char **argv)
     if (r.clipped)
         fprintf(stderr, "warning: %llu samples clipped\n", (unsigned long long)r.clipped);
     int rc = 0;
+    if (g_machine.unmodelled_count || g_machine.unmodelled_dropped) {   /* spec section 4: never accept silently */
+        fprintf(stderr, "the firmware made accesses the machine model does not cover:\n");
+        machine_print_unmodelled(&g_machine, stderr);
+        rc = 5;
+    }
     if (out_path) {
         if (!wav_write(out_path, r.samples, r.count, SYNTH_RATE)) {
             fprintf(stderr, "cannot write %s\n", out_path);

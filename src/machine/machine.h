@@ -65,13 +65,14 @@ typedef struct machine {
     unsigned history_pos;
     machine_access unmodelled[MACHINE_MAX_UNMODELLED];
     unsigned unmodelled_count;
-    unsigned unmodelled_dropped;           /* accesses not logged because the log was full (repeats included) */
+    unsigned unmodelled_dropped;           /* accesses not logged because the log was full; repeats of a logged access are
+                                              not counted, repeats of an unlogged one are counted each time */
 } machine;
 
 void machine_default_config(machine_config *cfg);
 bool machine_init(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg);
 void machine_set_outputs(machine *m, machine_frame_fn on_frame, void *user);
-/* Raw DSP-port capture (spec ง4). Bytes written to $8000 are grouped into 20-byte frames the way
+/* Raw DSP-port capture (spec ยง4). Bytes written to $8000 are grouped into 20-byte frames the way
    the DSP receives them (even byte of each word first). A DSP reset pulse on P2.0 restarts the
    grouping at byte 0. Unlike the produced frames, this stream depends on CPU timing. */
 void machine_set_raw_output(machine *m, machine_frame_fn on_raw, void *user);
@@ -79,5 +80,7 @@ bool machine_feed_serial(machine *m, const uint8_t *bytes, size_t n);
 machine_status machine_run(machine *m, uint64_t max_cycles);
 uint8_t machine_peek(const machine *m, uint16_t addr);
 void machine_dump(const machine *m, FILE *out);
+/* Lists every logged unmodelled access and the count of dropped ones (nothing if there are none). */
+void machine_print_unmodelled(const machine *m, FILE *out);
 
 #endif

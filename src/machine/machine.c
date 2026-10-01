@@ -258,6 +258,11 @@ void machine_dump(const machine *m, FILE *out)
         cpu740_disasm(pc, peek_cb, (void *)m, text, sizeof text);
         fprintf(out, "  %04X  %s\n", pc, text);
     }
+    machine_print_unmodelled(m, out);
+}
+
+void machine_print_unmodelled(const machine *m, FILE *out)
+{
     for (unsigned i = 0; i < m->unmodelled_count; i++)
         fprintf(out, "unmodelled %s $%04X (first at PC $%04X)\n",
                 m->unmodelled[i].write ? "write" : "read", m->unmodelled[i].addr, m->unmodelled[i].pc);

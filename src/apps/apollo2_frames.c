@@ -59,6 +59,11 @@ int main(int argc, char **argv)
         free(hex);
     }
     frame_list_free(&fl);
+    if (st == MACHINE_IDLE && (g_machine.unmodelled_count || g_machine.unmodelled_dropped)) {
+        fprintf(stderr, "the firmware made accesses the machine model does not cover:\n");
+        machine_print_unmodelled(&g_machine, stderr);
+        return 5;   /* spec section 4: never accept silently */
+    }
     if (st == MACHINE_FAULT) {
         machine_dump(&g_machine, stderr);
         return 2;
