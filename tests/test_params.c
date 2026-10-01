@@ -1,4 +1,5 @@
 #include <math.h>
+#include <string.h>
 #include "test.h"
 #include "rom_fixture.h"
 #include "synth/calib.h"
@@ -107,10 +108,63 @@ static void test_hypothesis_switches(void)
     CHECK(!p.reset);
 }
 
+/* b10 is a pitch period of 160 - 2*code samples at 10 kHz (ROM $B930, spec §1.4). */
+static void test_f0_period_scale(void)
+{
+    CHECK(fabsf(params_f0_hz(32) - 10000.0f / 96.0f) < 0.01f);   /* 104.2 Hz: the plain-corpus median */
+    CHECK(fabsf(params_f0_hz(35) - 10000.0f / 90.0f) < 0.01f);   /* the @F8 default centre */
+    CHECK(fabsf(params_f0_hz(2) - 10000.0f / 156.0f) < 0.01f);   /* @F0 */
+    CHECK(fabsf(params_f0_hz(63) - 10000.0f / 34.0f) < 0.05f);   /* @FF */
+    CHECK(params_f0_hz(255) <= CAL_F0_MAX_HZ);                    /* a code outside 0..63 stays clamped */
+    for (int c = 1; c < 64; c++)
+        CHECK(params_f0_hz(c) > params_f0_hz(c - 1));
+}
+
+/* The pitch movement is widened by CAL_F0_RANGE_GAIN around the utterance centre. */
+static void test_f0_range_gain(void)
+{
+    synth_options opt = { false, false, 0.0f };
+    uint8_t f[SYNTH_FRAME_BYTES];
+    synth_params p;
+    map(k_ar, &opt, &p, f);
+    f[10] = 35;
+    params_from_frame(f, &opt, &p);
+    CHECK(fabsf(p.f0_hz - params_f0_hz(35)) < 1e-3f);           /* no centre: the raw period scale */
+    opt.f0_centre_hz = params_f0_hz(32);
+    params_from_frame(f, &opt, &p);
+    float want = opt.f0_centre_hz * powf(params_f0_hz(35) / opt.f0_centre_hz, CAL_F0_RANGE_GAIN);
+    CHECK(fabsf(p.f0_hz - want) < 1e-2f);
+    CHECK(p.f0_hz > params_f0_hz(35));                          /* widened upwards */
+    f[10] = 32;
+    params_from_frame(f, &opt, &p);
+    CHECK(fabsf(p.f0_hz - opt.f0_centre_hz) < 1e-3f);          /* the centre itself is unchanged */
+}
+
+/* The centre is the median pitch of the clearly voiced frames (V >= 40, A1 > 10). */
+static void test_f0_centre(void)
+{
+    static uint8_t frames[5][SYNTH_FRAME_BYTES];
+    CHECK(test_parse_hex(k_ar, frames[0], SYNTH_FRAME_BYTES));
+    for (int i = 1; i < 5; i++)
+        memcpy(frames[i], frames[0], SYNTH_FRAME_BYTES);
+    frames[0][10] = 30;
+    frames[1][10] = 35;
+    frames[2][10] = 32;
+    frames[3][10] = 50;
+    frames[3][9] = 1;                           /* unvoiced: ignored */
+    frames[4][10] = 60;
+    frames[4][2] = 1;                           /* silent: ignored */
+    CHECK(fabsf(params_f0_centre(&frames[0][0], 5) - params_f0_hz(32)) < 1e-3f);
+    CHECK(params_f0_centre(&frames[3][0], 2) == 0.0f);
+}
+
 void suite_params(void)
 {
     test_frequencies();
     test_amplitudes();
     test_voicing_and_f0();
     test_hypothesis_switches();
+    test_f0_period_scale();
+    test_f0_range_gain();
+    test_f0_centre();
 }

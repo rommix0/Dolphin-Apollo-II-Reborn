@@ -1,11 +1,12 @@
 """Synthesizer calibration (spec section 5). Fits src/synth/calib.h and writes docs/calibration/.
 
-  python tools/calibrate.py fit [--ltas] [--master-gain G] [--b11-gain-db G]   regenerate src/synth/calib.h
+  python tools/calibrate.py fit [--ltas] [--master-gain G] [--b11-gain-db G]   refit src/synth/calib.h
+  python tools/calibrate.py set [NAME=VALUE ...]            rewrite calib.h with overrides (no fitting)
   python tools/calibrate.py report                          plots + report + listening WAVs
 
 Inputs:
 - build/apollo2_frames.exe and the ROM, for the steady vowel frames;
-- tests/golden/*.frm, for the F0 codes;
+- tests/golden/*.frm, for the report's F0 distribution;
 - dolphin_juno_demo.mp3, decoded by ffmpeg at its native rate (nothing is resampled, spec R2);
 - build/apollo2.exe, for the report renders;
 - tools/data/wells1962_rp_male.csv, the reference formants and amplitudes.
@@ -49,15 +50,20 @@ TEMPLATE = [
      '   Code <= 1 switches the channel off. */', None),
     ('CAL_DB_PER_CODE', 'f'), ('CAL_REF_CODE', 'int'),
     ('CAL_G_ALF_DB', 'f'), ('CAL_G_A1_DB', 'f'), ('CAL_G_A2_DB', 'f'), ('CAL_G_A3_DB', 'f'), ('CAL_G_AHF_DB', 'f'),
-    ('', None), ('/* F0 code (b10) -> Hz = exp(CAL_F0_LNA + CAL_F0_LNB * code), clamped */', None),
-    ('CAL_F0_LNA', 'f'), ('CAL_F0_LNB', 'f'), ('CAL_F0_MIN_HZ', 'f'), ('CAL_F0_MAX_HZ', 'f'),
+    ('', None), ('/* F0: b10 is a pitch period of 160 - 2*code samples (ROM $B930; params.c). The pitch movement\n'
+                 '   of an utterance is widened by CAL_F0_RANGE_GAIN around its median (render passes the centre). */', None),
+    ('CAL_F0_RANGE_GAIN', 'f'), ('CAL_F0_MIN_HZ', 'f'), ('CAL_F0_MAX_HZ', 'f'),
     ('', None), ('/* Output level: synth units -> int16 full scale (the corpus must peak between -12 and -1 dBFS\n'
                  '   without clipping; see suite_synth) */', None),
     ('CAL_MASTER_GAIN', 'f'), ('CAL_B11_GAIN_DB', 'f'),
 ]
 NOTES = {'CAL_FN_B': 'hypothesis H-FN: a low resonance, ~256 Hz at the usual code 32',
          'CAL_F4_HZ': 'the fixed fourth formant, driven by AHF',
-         'CAL_B11_GAIN_DB': 'level match of the b11 (Rosenberg) hypothesis to the impulse source'}
+         'CAL_B11_GAIN_DB': 'level match of the b11 (Rosenberg) hypothesis to the impulse source',
+         'CAL_F0_RANGE_GAIN': 'chosen by listening: 2.0 doubles the firmware contour in semitones'}
+
+# Seeds for constants that a calib.h written by an older generator does not have yet.
+DEFAULTS = {'CAL_B11_GAIN_DB': 0.0, 'CAL_F0_RANGE_GAIN': 2.0}
 
 
 def c_float(v):
@@ -73,7 +79,8 @@ def read_calib():
         m = re.match(r'#define (CAL_\w+) (\S+)', line)
         if m:
             vals[m.group(1)] = float(m.group(2).rstrip('f'))
-    vals.setdefault('CAL_B11_GAIN_DB', 0.0)   # seed, before the first measurement
+    for name, value in DEFAULTS.items():
+        vals.setdefault(name, value)
     return vals
 
 
@@ -147,14 +154,26 @@ def fit_amplitudes(frames, wells):
     return {'db_per_code': float(sol[0]), 'g2': float(sol[1]), 'g3': float(sol[2]), 'rms_db': rms}
 
 
-def golden_f0_codes():
-    codes = []
+def f0_hz(vals, codes):
+    """b10 codes -> Hz through the firmware period scale (params.c params_f0_hz)."""
+    period = np.maximum(160.0 - 2.0 * np.asarray(codes, float), 10000.0 / vals['CAL_F0_MAX_HZ'])
+    return np.clip(10000.0 / period, vals['CAL_F0_MIN_HZ'], vals['CAL_F0_MAX_HZ'])
+
+
+def golden_f0_hz(vals):
+    """F0 of the plain corpus's voiced frames as the synthesizer plays them: the period scale,
+    widened by CAL_F0_RANGE_GAIN around each utterance's lower median (render.c, params.c)."""
+    out = []
     for name in PLAIN_CORPUS:
-        for line in open(os.path.join(ROOT, 'tests', 'golden', name + '.frm')):
-            f = bytes.fromhex(line.strip())
-            if f[9] >= 40 and f[2] > 10:        # voiced speech frames
-                codes.append(f[10])
-    return np.array(codes, float)
+        frames = [bytes.fromhex(line.strip()) for line in open(os.path.join(ROOT, 'tests', 'golden', name + '.frm'))]
+        codes = sorted(f[10] for f in frames if f[9] >= 40 and f[2] > 10)
+        if not codes:
+            continue
+        raw = f0_hz(vals, [f[10] for f in frames if f[9] >= 40 and f[2] > 10])
+        centre = f0_hz(vals, [codes[(len(codes) - 1) // 2]])[0]
+        out.append(np.clip(centre * (raw / centre) ** vals['CAL_F0_RANGE_GAIN'],
+                           vals['CAL_F0_MIN_HZ'], vals['CAL_F0_MAX_HZ']))
+    return np.concatenate(out)
 
 
 def juno_audio():
@@ -170,14 +189,6 @@ def juno_f0(y, sr):
     import librosa
     f0, voiced, _ = librosa.pyin(y, fmin=60, fmax=300, sr=sr, frame_length=4096, hop_length=sr // 100)
     return f0[voiced & ~np.isnan(f0)]
-
-
-def fit_f0(codes, juno_hz):
-    qs = [5, 50, 95]
-    c = np.percentile(codes, qs)
-    h = np.percentile(juno_hz, qs)
-    b, a = np.polyfit(c, np.log(h), 1)
-    return {'lna': float(a), 'lnb': float(b), 'code_q': c.tolist(), 'juno_q': h.tolist()}
 
 
 def map_hz(vals, name, code):
@@ -198,11 +209,6 @@ def cmd_fit(args):
     vals['CAL_DB_PER_CODE'], vals['CAL_G_A2_DB'], vals['CAL_G_A3_DB'] = amp['db_per_code'], amp['g2'], amp['g3']
     print(f'amplitude: {amp["db_per_code"]:.3f} dB/code, g2 {amp["g2"]:.1f} dB, g3 {amp["g3"]:.1f} dB, '
           f'rms {amp["rms_db"]:.2f} dB')
-    y, sr = juno_audio()
-    f0 = fit_f0(golden_f0_codes(), juno_f0(y, sr))
-    vals['CAL_F0_LNA'], vals['CAL_F0_LNB'] = f0['lna'], f0['lnb']
-    print(f'F0: codes {f0["code_q"]} -> Juno {[round(h, 1) for h in f0["juno_q"]]} Hz; '
-          f'ln Hz = {f0["lna"]:.4f} + {f0["lnb"]:.4f} * code')
     if args.ltas:
         ltas = json.load(open(LTAS_JSON))
         if ltas.get('applied'):
@@ -216,6 +222,21 @@ def cmd_fit(args):
         vals['CAL_MASTER_GAIN'] = args.master_gain
     if args.b11_gain_db is not None:
         vals['CAL_B11_GAIN_DB'] = args.b11_gain_db
+    write_calib(vals)
+    print(f'wrote {os.path.relpath(CALIB_H, ROOT)}; rebuild with cmd //c ".\\build.bat test"')
+
+
+def cmd_set(args):
+    """Rewrites calib.h from its current values plus NAME=VALUE overrides. No fitting, so neither the
+    ROM nor ffmpeg is needed; with no overrides it only regenerates the file (new TEMPLATE entries
+    take their DEFAULTS)."""
+    vals = read_calib()
+    names = {name for name, kind in TEMPLATE if kind}
+    for item in args.assign:
+        name, _, value = item.partition('=')
+        if name not in names or not value:
+            sys.exit(f'unknown or malformed assignment {item!r}; known names: {", ".join(sorted(names))}')
+        vals[name] = float(value)
     write_calib(vals)
     print(f'wrote {os.path.relpath(CALIB_H, ROOT)}; rebuild with cmd //c ".\\build.bat test"')
 
@@ -273,14 +294,13 @@ def cmd_report(_args):
                     f'{err[0]:+.0f}/{err[1]:+.0f}/{err[2]:+.0f} |')
 
     # F0: corpus codes through the map vs the Juno snippet
-    codes = golden_f0_codes()
+    ours = golden_f0_hz(vals)
     y, sr = juno_audio()
     jf0 = juno_f0(y, sr)
-    ours = np.clip(np.exp(vals['CAL_F0_LNA'] + vals['CAL_F0_LNB'] * codes), vals['CAL_F0_MIN_HZ'], vals['CAL_F0_MAX_HZ'])
     fig, ax = plt.subplots(figsize=(7, 4))
     bins = np.arange(50, 320, 10)
     ax.hist(jf0, bins, alpha=0.5, density=True, label='Juno snippet (pyin)')
-    ax.hist(ours, bins, alpha=0.5, density=True, label='plain corpus b10 via calib.h')
+    ax.hist(ours, bins, alpha=0.5, density=True, label='plain corpus: period scale + range gain')
     ax.set_xlabel('F0 (Hz)')
     ax.legend()
     fig.tight_layout()
@@ -366,8 +386,10 @@ def main():
     fit.add_argument('--master-gain', type=float, default=None)
     fit.add_argument('--b11-gain-db', type=float, default=None, help='level match of the b11 hypothesis render')
     sub.add_parser('report')
+    st = sub.add_parser('set')
+    st.add_argument('assign', nargs='*', metavar='NAME=VALUE')
     args = p.parse_args()
-    {'fit': cmd_fit, 'report': cmd_report}[args.cmd](args)
+    {'fit': cmd_fit, 'report': cmd_report, 'set': cmd_set}[args.cmd](args)
 
 
 if __name__ == '__main__':

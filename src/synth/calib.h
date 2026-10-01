@@ -36,9 +36,9 @@
 #define CAL_G_A3_DB -26.7472f
 #define CAL_G_AHF_DB -33.8344f
 
-/* F0 code (b10) -> Hz = exp(CAL_F0_LNA + CAL_F0_LNB * code), clamped */
-#define CAL_F0_LNA -0.915283f
-#define CAL_F0_LNB 0.179297f
+/* F0: b10 is a pitch period of 160 - 2*code samples (ROM $B930; params.c). The pitch movement
+   of an utterance is widened by CAL_F0_RANGE_GAIN around its median (render passes the centre). */
+#define CAL_F0_RANGE_GAIN 2.0f    /* chosen by listening: 2.0 doubles the firmware contour in semitones */
 #define CAL_F0_MIN_HZ 40.0f
 #define CAL_F0_MAX_HZ 400.0f
 
