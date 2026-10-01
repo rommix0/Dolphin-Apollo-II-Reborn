@@ -77,7 +77,7 @@
     - **a 16-sample ramp** fixes both.
 - **The user's sound choices:**
   - keep the **impulse source**; the shaped Rosenberg and sawtooth pulses were rejected;
-  - add a **peaking filter on the voiced source: 110 Hz, Q 0.6, +12 dB**, which restores the fundamental (H1);
+  - add a **peaking filter on the voiced source: 110 Hz, Q 0.6, +10 dB**, which restores the fundamental (H1);
   - add a **4th-order Butterworth low-pass at 3.8 kHz** on the output, modelling the DAC reconstruction filter;
   - **both filters can be switched off from the CLI**.
 - **Remaining spectral mismatch** against the Juno's male passages (file time 5–14.4 s and 22.3–25 s): 300–500 Hz about +5 dB, 2–2.5 kHz about +5 dB, 3 kHz about −14 dB. Task 6 refits the channel levels.
@@ -405,15 +405,15 @@ static double measured_db(biquad *f, double hz)
     return 10.0 * log10(re * re + im * im);
 }
 
-/* The voiced-source low-end peak the user chose: 110 Hz, Q 0.6, +12 dB. */
+/* The voiced-source low-end peak the user chose: 110 Hz, Q 0.6, +10 dB. */
 static void test_peaking(void)
 {
     biquad f;
-    biquad_peaking(&f, 110.0f, 0.6f, 12.0f, (float)SYNTH_RATE);
-    CHECK(fabs(biquad_gain_db(&f, 110.0, SYNTH_RATE) - 12.0) < 0.05);
+    biquad_peaking(&f, 110.0f, 0.6f, 10.0f, (float)SYNTH_RATE);
+    CHECK(fabs(biquad_gain_db(&f, 110.0, SYNTH_RATE) - 10.0) < 0.05);
     CHECK(fabs(biquad_gain_db(&f, 0.0, SYNTH_RATE)) < 0.05);       /* unity at DC ... */
     CHECK(fabs(biquad_gain_db(&f, 5000.0, SYNTH_RATE)) < 0.05);    /* ... and at Nyquist */
-    CHECK(fabs(biquad_gain_db(&f, 1000.0, SYNTH_RATE) - 0.49) < 0.1);
+    CHECK(fabs(biquad_gain_db(&f, 1000.0, SYNTH_RATE) - 0.38) < 0.1);
     CHECK(fabs(biquad_gain_db(&f, 2000.0, SYNTH_RATE)) < 0.2);
     CHECK(fabs(measured_db(&f, 110.0) - biquad_gain_db(&f, 110.0, SYNTH_RATE)) < 0.05);
 }
@@ -742,7 +742,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   - `void synth_default_options(synth_options *opt);` (in `synth.h`) sets everything to zero/false except `peak_filter = true` and `lowpass = true`.
   - `synth_init(s, NULL)` uses those defaults.
   - `source_params` gains `bool peak_filter; float voiced_gain_db;` (fourth and fifth fields; `voiced_gain_db` 0 = unity).
-  - `calib.h` gains `CAL_PEAK_HZ` (110), `CAL_PEAK_Q` (0.6), `CAL_PEAK_DB` (12) and `CAL_LPF_HZ` (3800).
+  - `calib.h` gains `CAL_PEAK_HZ` (110), `CAL_PEAK_Q` (0.6), `CAL_PEAK_DB` (10) and `CAL_LPF_HZ` (3800).
   - The b11 level match `CAL_B11_GAIN_DB` now scales the voiced component only.
 
 - [ ] **Step 1: Write the failing tests**
@@ -932,7 +932,7 @@ Expected: the build fails. `synth_default_options`, `CAL_PEAK_*`, and the extra 
                  '   (4th-order Butterworth, like the DAC\'s analog filter); both chosen by listening. */', None),
     ('CAL_PEAK_HZ', 'f'), ('CAL_PEAK_Q', 'f'), ('CAL_PEAK_DB', 'f'), ('CAL_LPF_HZ', 'f'),
 ```
-- Add `'CAL_PEAK_HZ': 110.0, 'CAL_PEAK_Q': 0.6, 'CAL_PEAK_DB': 12.0, 'CAL_LPF_HZ': 3800.0` to `DEFAULTS`.
+- Add `'CAL_PEAK_HZ': 110.0, 'CAL_PEAK_Q': 0.6, 'CAL_PEAK_DB': 10.0, 'CAL_LPF_HZ': 3800.0` to `DEFAULTS`.
 - Change the `NOTES` text for `CAL_B11_GAIN_DB` to `'level match of the b11 (Rosenberg) voiced source to the impulse source'`.
 - Run `python tools/calibrate.py set`.
 
@@ -1018,7 +1018,7 @@ void synth_init(synth *s, const synth_options *opt)
 - [ ] **Step 4: Run, retune the level, and confirm it passes**
 
 Run: `cmd //c ".\build.bat test"`
-The +12 dB peak raises the voiced level, so `suite_synth` will probably report clipping or a peak above −1 dBFS.
+The +10 dB peak raises the voiced level, so `suite_synth` will probably report clipping or a peak above −1 dBFS.
 
 1. **Plain level.** Read the `corpus peak plain P` line. If P is above 29204, anything clipped, or P is below 8231:
    - set `G = <current CAL_MASTER_GAIN> * 18720 / P`, targeting −4.9 dBFS, the level the user has been listening at;
@@ -1408,7 +1408,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 6. **§5, the "Signal path" bullets.** Replace the whole list (the five bullets from `- The pulse source (shaped by F0 and b11)` to `- Amplitudes ramp linearly across each frame. Frequencies update once per frame.`) with:
 ```
 - The impulse source *(rev 5: the user's choice over Rosenberg and sawtooth pulses)* passes a
-  low-end peak (110 Hz, Q 0.6, +12 dB) that restores the fundamental. The peak acts on the voiced
+  low-end peak (110 Hz, Q 0.6, +10 dB) that restores the fundamental. The peak acts on the voiced
   component only. The noise source is mixed in by V and is never scaled with the voicing.
 - When V is mid-range (voiced fricatives), the noise is pitch-modulated.
 - The excitation drives parallel second-order resonators: FN×ALF, F1×A1, F2×A2,
@@ -1431,7 +1431,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   is a higher voice). The five channel levels get LTAS corrections (`CAL_LTAS_x_DB`) on top of the
   Wells fit. The rev 4 ALF/AHF corrections below came from the mixed snippet and were reset.
 - *(rev 5)* Listening-test choices: prosody @R4, pitch-range gain 2.0, impulse source, low-end peak
-  110 Hz/Q 0.6/+12 dB, 3.8 kHz output low-pass, a 16-sample transition ramp and mute-reset.
+  110 Hz/Q 0.6/+10 dB, 3.8 kHz output low-pass, a 16-sample transition ramp and mute-reset.
 ```
    Also change `- F0 is log-linear, fitted to the Juno snippet's 5/50/95th percentiles.` to `- ~~F0 is log-linear, fitted to the Juno snippet's 5/50/95th percentiles.~~ *(rev 5: superseded by the period scale)*`.
 
