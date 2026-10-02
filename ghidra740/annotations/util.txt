@@ -1,0 +1,3 @@
+# Shared helpers
+rom      C656  func      util_shl4                      -              A = A * 16 (one shift, then falls into util_shl3)
+rom      C657  func      util_shl3                      -              A = A * 8

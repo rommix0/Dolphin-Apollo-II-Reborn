@@ -1,0 +1,22 @@
+# RAM and zero-page variables, named with their owner's prefix
+ram      000A  data      isr_par_state                  byte           parallel-port handshake state, bits 0-1 (isr_int1)
+ram      000E  data      bank_current                   byte           bank number 1-7 of the selected ROM (bank_find_current)
+ram      000F  data      boot_selftest_fail             byte           1 when the power-up self-test failed (boot_selftest)
+ram      0010  data      boot_dip                       byte           DIP switches P4 & $0F: bit 0 = parallel interface, bit 1 = alternative bank table and self-test input P2.1
+ram      002A  data      isr_play_ptr                   ptr            timer ISR: the ping-pong frame being sent ($16A5 or $16B9)
+ram      002C  data      isr_fill_ptr                   ptr            producer pointer: the other ping-pong frame, filled by the frame builder
+ram      0059  data      isr_tick_div                   byte           timer ISR: ticks left until the next DSP word (10 per word)
+ram      005A  data      isr_word_ofs                   byte           timer ISR: byte offset of the next word in the playing frame
+ram      005B  data      isr_words_left                 byte           timer ISR: words left in the playing frame (10 per frame)
+ram      005C  data      isr_frame_flag                 byte           bit 0 set by the timer ISR at a buffer swap; the producer waits for it and clears it (isr_wait_frame)
+ram      005D  data      isr_swap_phase                 byte           timer ISR: counts 2, 1 to alternate the two ping-pong frames
+ram      006E  data      bank_absent                    byte           bit 0 set by bank_probe when the selected bank has no ROM header
+ram      0200  label     bank_ramcode_ram               -              RAM $0200-$03FE: copy of bank_ramcode_image (RAMCODE space), made at boot and by @=; the phoneme array reuses it after boot
+ram      0208  label     bank_ramcode_ram_alt           -              RAM copy of bank_p2_table_alt (base read by bank_select)
+ram      02FF  label     bank_ramcode_ram_hi            -              second half of the RAMCODE copy, written by bank_load_ramcode's second loop
+ram      168B  data      pros_params                    byte[26]       26 prosody parameters, one per letter A-Z (@R letter command, $A9DC); power-up values from boot_prosody_defaults
+ram      16A5  data      isr_frame_a                    frame20        ping-pong DSP frame A, sent by the timer ISR
+ram      16B9  data      isr_frame_b                    frame20        ping-pong DSP frame B, sent by the timer ISR
+ram      1819  data      bank_ver_major                 byte           copy of bank_hdr_version major ($FFE0), compared by bank_enter before entering another bank
+ram      181B  data      bank_ver_minor                 byte           copy of bank_hdr_version minor ($FFE1), compared by bank_enter
+ram      2026  data      bank_id_table                  char[98]       14-character ID per bank 1-7 (bank_read_id); the @L reply sends it

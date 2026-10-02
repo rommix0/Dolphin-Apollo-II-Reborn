@@ -1,0 +1,24 @@
+# Bank switching: the RAMCODE overlay (boot copy of $ADFE), the option-ROM header at $FFD0 and the @= command
+rom      9800  data      bank_hdr_engine_ver_text       char[4]        ID part 2: engine version digits (read by bank_read_id in every bank)
+rom      A600  func      bank_load_ramcode              -              save P2, X, Y in $75/$76/$78 and copy bank_ramcode_image ($ADFE-$AFFC) to RAM $0200-$03FE, which the phoneme array reuses after boot; A preserved
+rom      ABAF  func      bank_cmd_select                -              @= command: bank number from the argument ($C520), bank_load_ramcode, bank_enter (returns only when the bank is empty), bank_find_current, back to the parser $A8BD
+rom      ADFE  data      bank_ramcode_image             byte[275]      boot copy source of RAMCODE $0200-$0312 (bank tables and routines, disassembled in the ramcode space); $AF11-$AFFC, also copied, is ordinary ROM code
+rom      FFD0  func      bank_entry_cold                -              bank header: the signature byte $78 checked by bank_probe is this SEI; cold entry used by bank_enter, continues at boot_reentry_cold
+rom      FFD4  func      bank_entry_warm                -              bank header warm entry used by bank_enter when the version bytes match: continues at boot_reentry_warm
+rom      FFD8  label     bank_entry_reset               -              bank header entry that restarts at boot_reset (not used by this ROM; a label, not a function, so Ghidra does not make it a thunk)
+rom      FFD8  entry     -                              -
+rom      FFE0  data      bank_hdr_version               byte[2]        engine version major, minor in binary: copied to $1819/$181B at boot and compared by bank_enter of another bank
+rom      FFE2  data      bank_hdr_lang_code             char[6]        ID part 1: language code and extension digit (start of the @L record)
+rom      FFE8  data      bank_hdr_ffe8                  byte[2]        two header bytes not read by this ROM (by their place, probably the language version in binary)
+rom      FFEA  data      bank_hdr_lang_ver_text         char[4]        ID part 3: language version digits
+ramcode  0200  data      bank_p2_table                  byte[8]        P2 value per bank number 1-7 (bits 2-6 select the ROM bank; entry 0 unused), used while DIP bit 1 is clear
+ramcode  0208  data      bank_p2_table_alt              byte[8]        as bank_p2_table, used while DIP bit 1 is set
+ramcode  0210  func      bank_enter                     -              @= target, A = bank 1-7: select it; no ROM there -> restore P2/X/Y and return; else reset the stack and enter its warm entry $FFD4 (same version bytes $FFE0/$FFE1 as $1819/$181B) or clear zero page $01-$64 and enter its cold entry $FFD0
+ramcode  0241  func      bank_scan                      -              boot: for banks 7 down to 1 select, probe and read the 14-character ID into bank_id_table; then restore P2/X/Y saved by bank_load_ramcode; A and flags preserved
+ramcode  0252  label     bank_restore                   -              shared exit of bank_scan and bank_enter: P2/X/Y from $75/$76/$78, pull flags and A, return
+ramcode  025E  func      bank_select                    -              A = bank number: P2 bits 2-6 from bank_p2_table[A] (bank_p2_table_alt when DIP bit 1), P2 bits 0, 1 and 7 kept; A preserved, X destroyed
+ramcode  0277  func      bank_probe                     -              bank_absent ($6E) bit 0 = 1 unless the selected bank has the ROM header signature $78 at $FFD0; A preserved
+ramcode  0285  func      bank_read_id                   -              A = bank 1-7: its 14-character ID (6 from $FFE2, 4 from $9800, 4 from $FFEA) to bank_id_table + 14*(A-1), or 14 spaces when bank_absent bit 0; A preserved
+ramcode  02E1  func      bank_put_id_char               -              store A (through bank_safe_char) at bank_id_table + X; X += 1
+ramcode  02E9  func      bank_safe_char                 -              A below $20 becomes an asterisk
+ramcode  02F0  func      bank_find_current              -              bank_current ($0E) = the bank number whose table entry matches P2 bits 2-6 (table chosen by DIP bit 1); A and X preserved

@@ -1,0 +1,20 @@
+# Interrupt handlers, the DSP output (timer 3 ISR, ping-pong frames, volume) and the host handshake lines
+rom      ACE8  func      isr_set_volume                 -              A = volume 0-15 (0 = silent): P3 bits 3-6 = inverted level, other P3 bits kept
+rom      B2D9  func      isr_timer_dsp                  -              INT2 timer 3 ISR (10 kHz): every 10th tick writes the next word of the frame at isr_play_ptr to DSP_DATA; after 10 words swaps the ping-pong buffers at isr_swap_buffers unless isr_frame_flag is still set (then the frame repeats)
+rom      B306  label     isr_swap_buffers               -              frame boundary: isr_frame_flag = 1, isr_swap_phase counts 2 -> 1, isr_play_ptr/isr_fill_ptr low bytes exchanged ($A5/$B9)
+rom      B323  func      isr_speech_start               -              start DSP output: $1817/$1818 derived from $1815, ISR counters reset ($59 = $5B = 10, $5A = $5C = 0), isr_dsp_reset, isr_timer_start, wait one frame
+rom      B356  func      isr_wait_frames                -              wait for X frame boundaries (isr_wait_frame); X >= 1, returns X = 0
+rom      B35D  func      isr_timer_start                -              start the 10 kHz DSP tick: timers 2 and 3 synchronised (prescalers 0, timer 3 reload $28 then $31), P3.0 set, P23_FUNC = 1, ICR2 = $10 (timer 3 interrupt only); flags preserved
+rom      B38B  func      isr_dsp_reset                  -              pulse the DSP reset line P2.0 low-high-low with interrupts off
+rom      B398  func      isr_speech_stop                -              stop DSP output: P23_FUNC = 0, ICR2 = 0 (timer 3 interrupt off), isr_dsp_reset, $64 bit 0 cleared
+rom      B465  func      isr_wait_frame                 -              wait until the timer ISR has passed a frame boundary (isr_frame_flag bit 0), then clear the flag
+rom      B46C  func      isr_volume_half                -              volume at half the @A level $14 (isr_set_volume), used to ramp in and out
+rom      C2B4  func      isr_int1                       -              INT1 ISR. Serial mode (DIP bit 0 clear): UART receive at $C33C. Parallel mode: _INT1 host strobe, handshake on P0.3/P0.4 and P1, data byte from P1_LATCH queued ($C37E), code 5 answered with a status byte ($C4B5)
+rom      C3DF  func      isr_unused                     -              RTI: handler of the unused vectors INT3 ($FFF6) and INT0 ($FFFC)
+rom      C3E0  func      isr_int4_host_line             -              INT4 ISR: the host handshake input P0.2 changed: high -> isr_host_line_high, low -> isr_host_line_low
+rom      C3EB  func      isr_host_line_high             -              ICR3 = $40, busy line P0.5 set, $68 = 1 (a status byte is to be sent)
+rom      C3F4  func      isr_host_line_low              -              ICR3 = $48, busy line P0.5 cleared
+rom      C5D6  func      isr_par_ready                  -              parallel mode only (DIP bit 0): set P0.3 (ready for the next host byte); A preserved
+rom      C5DE  func      isr_par_hold                   -              parallel mode only: clear P0.3 and any pending _INT1 request (ICR1 bit 1) with interrupts off; A preserved
+rom      C5FE  func      isr_idle                       -              idle until an interrupt: WIT in serial mode, return at once in parallel mode (DIP bit 0); A preserved
+rom      C602  comment   -                              -              the firmware's only WIT

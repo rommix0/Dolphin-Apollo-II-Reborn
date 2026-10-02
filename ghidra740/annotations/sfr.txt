@@ -27,3 +27,4 @@ ram      00FB  data      UART_BAUD                      byte           UART baud
 ram      00FD  data      ICR3                           byte           interrupt control 3: enable/request bit pairs
 ram      00FE  data      ICR2                           byte           interrupt control 2: bit 4/5 timer 3 enable/request
 ram      00FF  data      ICR1                           byte           interrupt control 1: bit 0/1 _INT1 enable/request
+rom      8000  label     DSP_DATA                       -              DSP data port (write only)
