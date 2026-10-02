@@ -22,7 +22,7 @@ public class BuildProject extends GhidraScript {
         Path root = Annot.repoRoot(this);
         Path report = root.resolve("build/ghidra740/build.txt");
         Files.createDirectories(report.getParent());
-        String summary = "not built";
+        String summary = "SUMMARY not built";
         try {
             Annot.Annotations an = Annot.load(root.resolve("ghidra740/annotations"));
             Annot.Cov cov = Annot.loadCoverage(root.resolve("ghidra740/coverage/corpus.cov"));
@@ -42,7 +42,11 @@ public class BuildProject extends GhidraScript {
                 an.recs.size(), seeds.size(), currentProgram.getFunctionManager().getFunctionCount(),
                 currentProgram.getListing().getNumInstructions());
         } catch (Exception e) {
-            errors.add(e.getClass().getSimpleName() + ": " + e.getMessage());
+            // One ERROR line per problem (CheckProject criterion 0 reads them): a multi-line message such as the
+            // annotation loader's "annotation errors:" list is split and its header line dropped.
+            String[] lines = String.valueOf(e.getMessage()).split("\\R");
+            if (lines.length == 1) errors.add(e.getClass().getSimpleName() + ": " + lines[0]);
+            else for (int i = 1; i < lines.length; i++) if (!lines[i].isBlank()) errors.add(lines[i].strip());
         }
         StringBuilder sb = new StringBuilder();
         for (String e : errors) sb.append("ERROR ").append(e).append('\n');
