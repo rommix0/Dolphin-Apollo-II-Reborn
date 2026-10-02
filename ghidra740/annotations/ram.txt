@@ -23,9 +23,11 @@ ram      001A  data      cmd_phrase_pause               byte           @D end-of
 ram      001B  data      cmd_punct                      byte           @P punctuation mode 0/1
 ram      001C  data      cmd_source                     byte           @$ voice source and filter 0-7
 ram      001D  data      cmd_speaker                    byte           @K speaker table: 0 male (voice A tables), 1 non-male (voice B tables)
-ram      0020  data      tn_rule_ptr                    ptr            current rule in a rule list (tn_say_char, the letter-to-sound matcher), or the length-prefixed phonetic text of cmd_put_phonetic; tn_append_phonetic copies from it
+ram      001E  data      lts_affix_ptr                  ptr            affix list being matched by the context symbols % & @ (lts_suffixes, lts_sibilants or lts_at_consonants), indexed by Y
+ram      0020  data      tn_rule_ptr                    ptr            current rule in a rule list (tn_say_char, lts_match_list), or the length-prefixed phonetic text of cmd_put_phonetic; tn_append_phonetic copies from it
 ram      002A  data      isr_play_ptr                   ptr            timer ISR: the ping-pong frame being sent ($16A5 or $16B9)
 ram      002C  data      isr_fill_ptr                   ptr            producer pointer: the other ping-pong frame, filled by the frame builder
+ram      0038  data      lts_pair_table                 ptr            second-level table of the key letter (lts_pairs_a..z), from lts_pair_index; indexed by the second letter
 ram      003A  data      cmd_speed_map                  ptr            duration map of the current speed in cmd_speed_map_data (cmd_apply_speed)
 ram      003C  data      ser_rx_read                    ptr            input ring read pointer ($2100-$38FF; boot_get_clause)
 ram      003E  data      ser_rx_write                   ptr            input ring write pointer (ser_rx_put)
@@ -36,10 +38,13 @@ ram      0048  data      cmd_pat_ptr                    ptr            pattern b
 ram      004A  data      cmd_imm_vector                 ptr            handler of the matched immediate command (JMP ($4A) in cmd_imm_match)
 ram      004C  data      cmd_table_ofs                  byte           byte offset of the current entry in the pattern pointer table
 ram      004D  data      ser_cmd_table_ofs              byte           table offset where the immediate match resumes with the next received byte
+ram      004F  data      lts_match_pos                  byte           cmd_text position the next context byte is matched at; lts_match_symbol steps it in the direction lts_match_dir
 ram      0051  data      tn_pos                         byte           cmd_text position of the next character to convert; a rule that consumes further characters moves it past them
 ram      0052  data      tn_key_pos                     byte           cmd_text position of the character being converted (the rule key); tn_convert_clause runs the deferred commands of every position from it up to tn_pos
 ram      0053  data      tn_phon_len                    byte           length (write index) of tn_phonetic; command events are queued at this phonetic position
 ram      0054  data      boot_clause_len                byte           length of boot_clause (boot_get_clause), then of cmd_text (cmd_scan_clause)
+ram      0055  data      lts_key_char                   byte           the key character being converted, stored by lts_convert_char; no reader in the disassembly
+ram      0056  data      lts_key_next                   byte           the second letter of a two-letter key, or 0 for a one-character key; when set the right context starts one character later
 ram      0057  data      cmd_index_count                byte           @I+ text-unit counter: + 1 per @I+ received, - 1 per mark spoken (cmd_ev_index); reported by @I?
 ram      0059  data      isr_tick_div                   byte           timer ISR: ticks left until the next DSP word (10 per word)
 ram      005A  data      isr_word_ofs                   byte           timer ISR: byte offset of the next word in the playing frame
@@ -51,12 +56,14 @@ ram      005F  data      cmd_sound_active               byte           bit 0 set
 ram      0060  data      ser_cmd_mode                   byte           bit 0 set while an immediate command is collected after the command character
 ram      0061  data      ser_cmd_char                   byte           command character seen by the receiver ('@' from boot_set_defaults)
 ram      0062  data      cmd_char                       byte           command character seen by cmd_scan_clause; set from ser_cmd_char at each mute
+ram      0063  data      lts_low_bank                   byte           bit 0 set for a key letter K-Z, whose two-letter rule lists are in the LOW overlay (P2.7 set)
 ram      0064  data      boot_speaking                  byte           bit 0 set when boot_get_clause takes a clause, cleared by isr_speech_stop; @I? answers T while set
 ram      0065  data      ser_rx_idle                    byte           bit 0 set when no unspoken text waits (mute, boot_get_clause), cleared by ser_rx_put
 ram      0066  data      ser_rx_idle_saved              byte           ser_rx_idle saved at the command character; @I? restores it and reports from it
 ram      0068  data      ser_status_due                 byte           bit 0: a reply/status byte is due to the host (isr_host_line_high, ser_tx_service)
 ram      0069  data      ser_abort                      byte           bit 0 set by a mute (Ctrl-A or Ctrl-X): the main loop drops the clause and the utterance
 ram      006A  data      cmd_index_reset                byte           bit 0 set at power-up and mute: the next @I+ zeroes cmd_index_count first
+ram      006D  data      lts_match_dir                  byte           bit 0: 0 while the left context is matched (backwards), 1 for the right context (forwards)
 ram      006E  data      bank_absent                    byte           bit 0 set by bank_probe when the selected bank has no ROM header
 ram      006F  data      cmd_speed_limit                byte           value of the current speed from cmd_speed_limits, read by prosody playback ($BDD3)
 ram      0070  data      ser_reply_id                   byte           ser_tx_records: reply identifier character

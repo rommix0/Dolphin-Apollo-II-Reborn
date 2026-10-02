@@ -1,5 +1,9 @@
 # Padding and unused areas (unused_XXXX)
+rom      8FF4  data      unused_8FF4                    byte[2060]     padding ($FF) after the last ROM two-letter rule list (lts_rules_j)
+rom      B0C2  data      unused_B0C2                    byte           an RTS that no path reaches, after the symbol dispatch of lts_match_symbol
 rom      FFD7  data      unused_FFD7                    byte           bank header padding (a NOP byte) between the warm and reset entries
 rom      FFDB  data      unused_FFDB                    byte[5]        bank header padding ($FF)
 rom      FFEE  data      unused_FFEE                    byte[6]        bank header padding ($FF) before the vectors
+low      4000  data      unused_4000                    byte[16]       LOW overlay padding ($FF) before the first two-letter rule list (lts_rules_k)
+low      7832  data      unused_7832                    byte[1998]     LOW overlay padding ($FF) after the last two-letter rule list (lts_rules_z)
 ramcode  0313  data      unused_0313                    byte[236]      RAMCODE copy of the ROM code at $AF11-$AFFC: copied by bank_load_ramcode, never executed in RAM
