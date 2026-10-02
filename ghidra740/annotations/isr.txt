@@ -2,7 +2,7 @@
 rom      ACE8  func      isr_set_volume                 -              A = volume 0-15 (0 = silent): P3 bits 3-6 = inverted level, other P3 bits kept
 rom      B2D9  func      isr_timer_dsp                  -              INT2 timer 3 ISR (10 kHz): every 10th tick writes the next word of the frame at isr_play_ptr to DSP_DATA; after 10 words swaps the ping-pong buffers at isr_swap_buffers unless isr_frame_flag is still set (then the frame repeats)
 rom      B306  label     isr_swap_buffers               -              frame boundary: isr_frame_flag = 1, isr_swap_phase counts 2 -> 1, isr_play_ptr/isr_fill_ptr low bytes exchanged ($A5/$B9)
-rom      B323  func      isr_speech_start               -              start DSP output: $1817/$1818 derived from $1815, ISR counters reset ($59 = $5B = 10, $5A = $5C = 0), isr_dsp_reset, isr_timer_start, wait one frame
+rom      B323  func      isr_speech_start               -              start DSP output: $1817/$1818 derived from cmd_source_prosody, ISR counters reset ($59 = $5B = 10, $5A = $5C = 0), isr_dsp_reset, isr_timer_start, wait one frame
 rom      B356  func      isr_wait_frames                -              wait for X frame boundaries (isr_wait_frame); X >= 1, returns X = 0
 rom      B35D  func      isr_timer_start                -              start the 10 kHz DSP tick: timers 2 and 3 synchronised (prescalers 0, timer 3 reload $28 then $31), P3.0 set, P23_FUNC = 1, ICR2 = $10 (timer 3 interrupt only); flags preserved
 rom      B38B  func      isr_dsp_reset                  -              pulse the DSP reset line P2.0 low-high-low with interrupts off

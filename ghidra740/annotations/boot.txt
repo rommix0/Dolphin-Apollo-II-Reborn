@@ -1,5 +1,5 @@
 # Reset, start-up and the interrupt vectors (parent spec §1.1)
-rom      A61C  func      boot_reset                     -              RESET: port set-up, zero page $01-$C9 cleared, settings, ports and UART by DIP switch, self-test sound, RAMCODE copy and bank scan, then the main loop (boot_loop_text, prosody $CA92, boot_loop_play)
+rom      A61C  func      boot_reset                     -              RESET: port set-up, zero page $01-$C9 cleared, settings, ports and UART by DIP switch, self-test sound, RAMCODE copy and bank scan, then the main loop (boot_loop_text, prosody pros_make_segments, boot_loop_play)
 rom      A665  label     boot_reentry_cold              -              cold re-entry from another bank (bank_entry_cold): DIP switches and settings again, then boot_reentry_warm
 rom      A66B  label     boot_reentry_warm              -              warm re-entry from another bank (bank_entry_warm) and the tail of boot_reset: interrupts on, RAMCODE copy, bank scan, main loop
 rom      A68D  func      boot_loop_text                 -              main loop step 1: wait for and take one clause of input (boot_get_clause), then the command scan cmd_scan_clause and text conversion tn_convert_clause

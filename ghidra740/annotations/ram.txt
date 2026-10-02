@@ -25,6 +25,10 @@ ram      001C  data      cmd_source                     byte           @$ voice 
 ram      001D  data      cmd_speaker                    byte           @K speaker table: 0 male (voice A tables), 1 non-male (voice B tables)
 ram      001E  data      lts_affix_ptr                  ptr            affix list being matched by the context symbols % & @ (lts_suffixes, lts_sibilants or lts_at_consonants), indexed by Y
 ram      0020  data      tn_rule_ptr                    ptr            current rule in a rule list (tn_say_char, lts_match_list), or the length-prefixed phonetic text of cmd_put_phonetic; tn_append_phonetic copies from it
+ram      0022  data      pros_phoneme_ptr               ptr            playback array pointer: phonemes (pros_seg_phoneme, or a @T sound effect's array), indexed by the low byte of the segment index; moved on one page at each wrap
+ram      0024  data      pros_duration_ptr              ptr            playback array pointer: durations in frames (pros_seg_duration or a sound effect's array)
+ram      0026  data      pros_pitch_ptr                 ptr            playback array pointer: pitch targets (pros_seg_pitch or a sound effect's array)
+ram      0028  data      pros_flags_ptr                 ptr            playback array pointer: segment flags (pros_seg_flags or a sound effect's array); written, never read through
 ram      002A  data      isr_play_ptr                   ptr            timer ISR: the ping-pong frame being sent ($16A5 or $16B9)
 ram      002C  data      isr_fill_ptr                   ptr            producer pointer: the other ping-pong frame, filled by the frame builder
 ram      0036  data      ph_list_ptr                    ptr            phoneme list being decoded (ph_decode_symbol), indexed by Y
@@ -66,16 +70,19 @@ ram      0069  data      ser_abort                      byte           bit 0 set
 ram      006A  data      cmd_index_reset                byte           bit 0 set at power-up and mute: the next @I+ zeroes cmd_index_count first
 ram      006D  data      lts_match_dir                  byte           bit 0: 0 while the left context is matched (backwards), 1 for the right context (forwards)
 ram      006E  data      bank_absent                    byte           bit 0 set by bank_probe when the selected bank has no ROM header
-ram      006F  data      cmd_speed_limit                byte           value of the current speed from cmd_speed_limits, read by prosody playback ($BDD3)
+ram      006F  data      cmd_speed_limit                byte           value of the current speed from cmd_speed_limits, read by prosody playback (pros_scale_target, which caps @R at its bits 0-2)
 ram      0070  data      ser_reply_id                   byte           ser_tx_records: reply identifier character
 ram      0071  data      ser_reply_count                byte           ser_tx_records: number of records
 ram      0072  data      ser_reply_size                 byte           ser_tx_records: bytes per record
 ram      0073  data      ser_reply_ptr                  ptr            ser_tx_records: first record
 ram      0077  data      tn_resume_pos                  byte           cmd_text position where tn_convert_clause goes on after speaking a full tn_phonetic mid-clause; also a scratch byte of bank_select and cmd_reply_setting
 ram      0100  data      boot_stack                     byte[256]      hardware stack page; ser_tx_put, cmd_upcase and ser_hex_digits reach their callers' bytes through it (TSX, abs,X)
-ram      0200  label     bank_ramcode_ram               -              RAM $0200-$03FE: copy of bank_ramcode_image (RAMCODE space), made at boot and by @=; the phoneme array reuses it after boot
+ram      0200  data      pros_seg_phoneme               byte[1024]     segment array: phoneme per segment, indexed by the 16-bit segment index pros_seg_count through pros_phoneme_ptr (pros_append_segment, playback); its first $1FF bytes are also the RAM copy of bank_ramcode_image (RAMCODE space, $0200-$03FE) made at boot and by @=, which the segments overwrite
 ram      0208  label     bank_ramcode_ram_alt           -              RAM copy of bank_p2_table_alt (base read by bank_select)
 ram      02FF  label     bank_ramcode_ram_hi            -              second half of the RAMCODE copy, written by bank_load_ramcode's second loop
+ram      0600  data      pros_seg_duration              byte[1024]     segment array: duration in frames per segment (after the speed map), indexed like pros_seg_phoneme
+ram      0A00  data      pros_seg_pitch                 byte[1024]     segment array: pitch target per segment (pros_target + cmd_pitch_step; pauses repeat pros_last_target), 128 = the @F centre at playback (pros_scale_target)
+ram      0E00  data      pros_seg_flags                 byte[1024]     segment array: flags per segment, always $80 from the generator; playback never reads them
 ram      1200  data      cmd_ev_count                   byte           command events queued (write index)
 ram      1201  data      cmd_ev_next                    byte           next command event to run (cmd_run_event)
 ram      1202  data      cmd_ev_pos                     word           phonetic position of the following command event
@@ -90,20 +97,51 @@ ram      1489  data      cmd_vector                     ptr            handler o
 ram      148B  data      cmd_positions                  byte[128]      cmd_text position per deferred command
 ram      150B  data      cmd_handlers                   ptr[128]       handler per deferred command, copied from the word after its pattern in cmd_table
 ram      160B  data      cmd_arg_index                  byte[128]      boot_clause index of the last matched character per deferred command (its argument)
-ram      168B  data      pros_params                    byte[26]       26 prosody parameters, one per letter A-Z (@R letter command, $A9DC); power-up values from boot_prosody_defaults
+ram      168B  data      pros_params                    byte[26]       26 prosody parameters, one per letter A-Z (@R letter command, $A9DC); power-up values from boot_prosody_defaults. Five per phrase type (start baseline, end baseline, stress, nucleus and final terms): A-E for . and ; (also the default), F-J for , and :, K-O for ?, P-T for ! (pros_mark_phrases); U first symbol of a word, V word-final step, W accent, Y later stresses of a word, Z later symbols of a word (pros_phrase_gen); X has no reader
 ram      16A5  data      isr_frame_a                    frame20        ping-pong DSP frame A, sent by the timer ISR
 ram      16B9  data      isr_frame_b                    frame20        ping-pong DSP frame B, sent by the timer ISR
-ram      1800  data      cmd_sound_save                 ptr[4]         the playback array pointers $22-$29 saved by cmd_ev_sound_start and restored by cmd_ev_sound_end
+ram      17ED  data      pros_play_target               byte           pitch target of the segment playing, after pros_scale_target and pros_microprosody
+ram      17EE  data      pros_play_pitch                byte           current pitch, interpolated towards pros_play_target once per frame; frame byte b10 = pros_play_pitch / 4
+ram      17F0  data      pros_pitch_err                 byte           rounding error of the unreferenced pros_pitch_code_dither; cleared at playback start, otherwise unused
+ram      17F6  data      pros_seg_count                 word           segment index: write index of the generator (pros_append_segment, pauses), the last segment's index after pros_phrase_gen; counted down by playback
+ram      1800  data      cmd_sound_save                 ptr[4]         the playback array pointers pros_phoneme_ptr..pros_flags_ptr saved by cmd_ev_sound_start and restored by cmd_ev_sound_end
+ram      1815  data      cmd_source_prosody             byte           cmd_source * 16 + cmd_prosody (cmd_apply_pitch); bits 0-2 = @R for pros_scale_target, the source bits for isr_speech_start
+ram      1816  data      pros_pitch_centre              byte           cmd_pitch * 16 (cmd_apply_pitch): the @F centre around which pros_scale_target scales the targets
 ram      1819  data      bank_ver_major                 byte           copy of bank_hdr_version major ($FFE0), compared by bank_enter before entering another bank
 ram      181B  data      bank_ver_minor                 byte           copy of bank_hdr_version minor ($FFE1), compared by bank_enter
-ram      1900  data      tn_phonetic                    char[256]      phonetic buffer: the clause converted to phonetic text (rule outputs, copied spaces and punctuation), length tn_phon_len; input of the prosody pass $CA92
+ram      1900  data      tn_phonetic                    char[256]      phonetic buffer: the clause converted to phonetic text (rule outputs, copied spaces and punctuation), length tn_phon_len; input of the prosody passes (pros_make_segments)
 ram      1A00  data      cmd_text                       char[256]      the clause without its commands, upper-cased (cmd_scan_clause); input of text conversion
 ram      1B00  data      boot_clause                    char[256]      one clause taken from the input ring by boot_get_clause (length in $54)
-ram      1C01  data      ph_phoneme                     byte           phoneme of the segment being appended: from the list (ph_decode_symbol) or $3B for a pause (ph_append_pause, ph_append_phrase_pause); stored by $CA3B
+ram      1C00  data      pros_pos                       byte           tn_phonetic position of the symbol being processed by the prosody passes and the generator
+ram      1C01  data      ph_phoneme                     byte           phoneme of the segment being appended: from the list (ph_decode_symbol) or $3B for a pause (ph_append_pause, ph_append_phrase_pause); stored by pros_append_segment
+ram      1C02  data      pros_prev_features             byte           features of the neighbouring phonetic symbol just passed (the previous one in pros_mark_stress, the following one in pros_mark_phrases)
+ram      1C03  data      pros_symbol                    byte           the symbol at pros_pos (also read by ph_append_phrase_pause and ph_decode_symbol)
+ram      1C04  data      pros_features                  byte           ph_symbol_features of pros_symbol
+ram      1C05  data      pros_class                     byte           ph_symbol_class of pros_symbol
+ram      1C0E  data      pros_word_pos                  byte           phonetic symbols of the current word so far (pros_mark_phrases, pros_phrase_gen)
+ram      1C0F  data      pros_phrase_len                byte           phonetic symbols of the phrase counted by pros_mark_phrases (pros_store_phrase_len), then the divisor of pros_declination_step
+ram      1C10  data      pros_func_word                 byte           1 from a function-word marker ~ to the next space or punctuation (pros_phrase_gen): no accent, and no segment in hypermode
 ram      1C17  data      ph_min_dur                     byte           minimum duration of the current triple (ph_decode_symbol)
 ram      1C18  data      ph_max_dur                     byte           maximum duration of the current triple (ph_decode_symbol)
-ram      1C32  data      ph_duration                    byte           duration in frames of the segment being appended, after the speed map (ph_decode_symbol); stored by $CA3B
+ram      1C1B  data      pros_accent_state              byte           accent state of the passes: in pros_phrase_gen 1 after an accent until the next stressed symbol or punctuation; stress state in pros_mark_stress; the nucleus position in pros_mark_phrases
+ram      1C20  data      pros_sym_flag                  byte           pros_sym_flags of the symbol at pros_pos
+ram      1C23  data      pros_term_tail                 byte           target term: after-accent, tail and word-final offsets (pros_params V and W, pros_final_param)
+ram      1C24  data      pros_word_len                  byte           phonetic symbols of the current word (pros_sym_flags at the space or punctuation before it)
+ram      1C25  data      pros_term_accent               byte           target term: pros_params W on an accented symbol, else 0
+ram      1C26  data      pros_baseline                  byte           declining baseline: the phrase's start value, lowered by pros_decl_step per phonetic symbol; the target takes it / 8
+ram      1C27  data      pros_target                    byte           pitch target of the current phonetic symbol (pros_phrase_gen)
+ram      1C28  data      pros_decl_step                 byte           declination step per phonetic symbol (pros_declination), signed
+ram      1C29  data      pros_last_target               byte           pitch target of the last segment appended ($80 at the start); the pause segments repeat it
+ram      1C2B  data      pros_baseline_end              byte           the phrase's end value of the baseline
+ram      1C2D  data      pros_stress_param              byte           phrase parameter 3 (pros_params C, H, M or R by phrase type): target term of the first stressed but unaccented symbol of a word
+ram      1C2E  data      pros_nucleus_param             byte           phrase parameter 4 (pros_params D, I, N or S): target term of the nucleus
+ram      1C2F  data      pros_final_param               byte           phrase parameter 5 (pros_params E, J, O or T): tail term of a word-final symbol after the nucleus
+ram      1C30  data      pros_term_stress               byte           target term: pros_params U (first symbol of a word) or Z, replaced by a stress or nucleus term; cleared after a consonant
+ram      1C32  data      ph_duration                    byte           duration in frames of the segment being appended, after the speed map (ph_decode_symbol); stored by pros_append_segment
 ram      1C33  data      ph_dur_range                   byte           max - min duration of the current triple, then scaled by the shortening and lengthening steps (ph_decode_symbol)
+ram      1D00  data      pros_sym_flags                 byte[256]      per tn_phonetic position: $40 stressed vowel, $20 accent (so $60), bits 0-2 = 7 from the nucleus to the phrase end, $10 stop before a stop (only its closure is played), $08 function-word marker ~; at a space or punctuation the phonetic-symbol count of the following word, at position 0 that of the first word
+ram      1E00  data      pros_sym_shorten               byte[256]      per tn_phonetic position: shortening count from the context rules (ph_decode_symbol applies (n + 1) / 2 steps of ph_dur_shorten); at a space or punctuation the word's vowel count, then at a punctuation the phrase length (pros_store_phrase_len)
+ram      1F00  data      pros_sym_lengthen              byte[256]      per tn_phonetic position: lengthening count (accent, phrase-final and context rules; ph_lengthen_count turns it into ph_dur_lengthen steps); at a space or punctuation as pros_sym_shorten, and the phrase length there is the divisor of pros_declination_step (bits 0-6)
 ram      2014  data      cmd_formant_ofs                byte[10]       @u signed offsets of the ten parameters (Fn F1 F2 F3 ALF A1 A2 A3 A4 voicing), cleared by cmd_clear_formant and @V
 ram      2020  data      ser_cmd_buf                    char[6]        zero-terminated characters of the immediate command being collected
 ram      2026  data      bank_id_table                  char[98]       14-character ID per bank 1-7 (bank_read_id); the @L reply sends it
