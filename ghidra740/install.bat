@@ -6,7 +6,10 @@ rem next run. Writes repo.txt (this checkout's root) so the scripts can find the
 rem The installed m740.sla and repo.txt are never purged: the mirror excludes them, the SLEIGH is compiled
 rem to build\ghidra740\m740.new.sla, and the installed copy is replaced only when it is missing or differs
 rem (copy to a .tmp beside it, then move over it), so an open Ghidra GUI never sees it vanish or half-written.
+rem The headless runs have their own settings directory (ghidra_env.bat), so the installed module, .sla and
+rem repo.txt included, is then mirrored to its Extensions\MELPS740 (GHIDRA740_EXT) as well.
 setlocal
+call "%~dp0ghidra_env.bat" || exit /b 1
 rem Unset, or stale (a Ghidra that has since moved), means the standard location.
 if not exist "%GHIDRA_INSTALL_DIR%\support\sleigh.bat" set "GHIDRA_INSTALL_DIR=C:\ghidra_12.1.3_PUBLIC"
 if not exist "%GHIDRA_INSTALL_DIR%\support\sleigh.bat" (
@@ -42,6 +45,11 @@ if errorlevel 1 (
     copy /y "%OUT%\m740.new.sla" "%SLA%.tmp" >nul || (echo install: could not stage m740.sla & popd & exit /b 1)
     move /y "%SLA%.tmp" "%SLA%" >nul || (echo install: could not replace m740.sla & popd & exit /b 1)
 )
-echo installed MELPS740 into %EXT%
+robocopy "%EXT%" "%GHIDRA740_EXT%" /MIR /NFL /NDL /NJH /NJS /NP >nul
+if errorlevel 8 (
+    echo install: copying the module to %GHIDRA740_EXT% failed
+    popd & exit /b 1
+)
+echo installed MELPS740 into %EXT% and %GHIDRA740_EXT%
 popd
 exit /b 0

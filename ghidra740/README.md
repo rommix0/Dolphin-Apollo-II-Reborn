@@ -11,7 +11,7 @@ Design: `docs/superpowers/specs/2026-10-01-m3-ghidra740-design.md`.
 
 | Command | Does |
 |---|---|
-| `ghidra740\install.bat` | Compiles the language and installs module and scripts into `%APPDATA%\ghidra\ghidra_12.1.3_PUBLIC\Extensions\MELPS740`, with `repo.txt` naming this checkout. The installed `m740.sla` is replaced only when it changes. Restart a running Ghidra after SLEIGH changes. |
+| `ghidra740\install.bat` | Compiles the language and installs module and scripts into `%APPDATA%\ghidra\ghidra_12.1.3_PUBLIC\Extensions\MELPS740`, with `repo.txt` naming this checkout, and mirrors that into the headless runs' `build\ghidra740\settings\ghidra\ghidra_12.1.3_PUBLIC\Extensions\MELPS740`. The installed `m740.sla` is replaced only when it changes. Restart a running Ghidra after SLEIGH changes. |
 | `ghidra740\validate.bat [N]` | Checks the module against `cpu740` (N vectors per opcode, default 64). |
 | `ghidra740\coverage.bat` | Regenerates `coverage/corpus.cov`. |
 | `ghidra740\rebuild.bat [--format\|--roundtrip\|--reset]` | Rebuilds the headless scratch project in `build\ghidra740\project` and writes `build\ghidra740\check.txt`. Exits 0 only when every criterion passes. `--reset` reuses the program (`ResetProject.java`, as in the GUI procedure) instead of importing the ROM again, and runs the `--roundtrip` check. |
@@ -21,6 +21,9 @@ The bats use `GHIDRA_INSTALL_DIR` only when it holds a Ghidra (`support\analyzeH
 otherwise `C:\ghidra_12.1.3_PUBLIC`. `ghidra_env.bat` also passes the project directory in its 8.3
 form, because `analyzeHeadless` rejects a path with a directory starting with `.` (a `.worktrees`
 checkout).
+Every headless run (and the SLEIGH compile) uses `build\ghidra740\settings` as its Ghidra settings
+directory (`XDG_CONFIG_HOME`, set by `ghidra_env.bat`), so it never disturbs a running GUI: a headless start
+recreates its settings directory's `osgi\felixcache`, which in the GUI's `%APPDATA%\ghidra` breaks script loading.
 
 ## Labelling loop
 
