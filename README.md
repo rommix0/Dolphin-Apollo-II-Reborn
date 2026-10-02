@@ -39,3 +39,16 @@ listening tests (see `docs/calibration/report.md`).
 
 The voice is shaped by a low-end peak on the voiced source and a 3.8 kHz low-pass that models the
 device's DAC filter; both are always on.
+
+## Ghidra project (milestone 3)
+
+`ghidra740/` holds a Ghidra 12.1.3 processor module for the MELPS 740 and the scripts that rebuild
+a fully labelled Ghidra project of the ROM from the committed text annotations in
+`ghidra740/annotations/`. Those files are the source of truth. See `ghidra740/README.md` for the
+details and the GUI procedure. The entry points need Ghidra and the ROM, and are not part of
+`build.bat test`:
+
+    cmd //c "ghidra740\install.bat"     # compile the language, install module and scripts (restart Ghidra after SLEIGH changes)
+    cmd //c "ghidra740\validate.bat"    # check the module against the cpu740 emulator core
+    cmd //c "ghidra740\rebuild.bat"     # rebuild the headless project, write build/ghidra740/check.txt
+    cmd //c "ghidra740\dump.bat"        # per-function disassembly and decompiled C in build/ghidra740/dump/

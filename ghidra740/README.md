@@ -40,13 +40,17 @@ GUI's script path includes `Extensions\MELPS740\ghidra_scripts`, where `Annot.ja
 
 ```java
 import ghidra.app.script.GhidraScript;
-public class Run740 extends GhidraScript {
+public class Run740a extends GhidraScript {
     @Override
     public void run() throws Exception {
         runScript("BuildProject.java", new String[0]);   // or CheckProject.java, or ExportAnnotations.java with {"check"} / {"write"}
     }
 }
 ```
+
+Give the wrapper class a fresh name on every call (`Run740a`, `Run740b`, ...). Ghidra's bundle cache
+remembers a class name, and a changed body under a reused name fails with "Failed to execute on
+Swing thread: null".
 
 The program is refreshed in place, never deleted and imported again: ghidra-mcp leaks a DomainFile
 consumer per script run and per import or open, so Ghidra refuses to delete the program ("in use")
@@ -56,13 +60,19 @@ file bytes and the analysis options stay), and `rebuild.bat --reset` proves that
 gives the same program as a fresh import plus build.
 
 **Warning:** ResetProject discards everything in the current program, GUI edits included. Run it
-only after step 1 reports `RESULT PASS`. It refuses a program whose language is not
+only after step 1 shows no GUI edits. It refuses a program whose language is not
 `MELPS740:LE:16:default`.
 
 1. Run `ExportAnnotations.java` with `check`. Its verdict is in `build\ghidra740\export.txt`
    (`RESULT PASS|FAIL`, then `EXPORT DONE`). If the marker is missing the check did not complete:
    stop. If it says FAIL, stop: there are GUI edits; export them with `ExportAnnotations.java write`,
    review and commit them, and run the check again until it passes.
+   The check compares with the working tree. When that already holds annotation commits newer than
+   the GUI build, a FAIL can come from those alone, and `write` would undo them. In that case
+   compare the export
+   (`build\ghidra740\export\`) with the annotations at the commit the GUI was last built from, as
+   sorted record sets, because labelling moves records between files. Only a difference there is a
+   GUI edit.
 2. Run `ResetProject.java`, then `BuildProject.java`, then `CheckProject.java`, as one wrapper body
    with the three `runScript` calls in that order.
    - ResetProject prints `removed N blocks, ... program is as imported`. If anything survives it

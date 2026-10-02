@@ -1,7 +1,7 @@
 # Software Apollo 2 — Design
 
 **Date:** 2026-09-30
-**Status:** Approved. Revision 5 records the firmware intonation model and the synthesizer revision chosen in the user's listening test. Revision 4 records what milestone 2 verified (command-driven frame bytes, the raw DSP stream, the calibration). Revision 3 makes the finished project ROM-free (R5). Revision 2 adds facts found while planning milestone 1
+**Status:** Approved. *(rev 6)* Revision 6 records milestone 3: the MELPS740 Ghidra module and the annotation-built project, plus the firmware facts the labelling verified (marked *(rev 6)*). Revision 5 records the firmware intonation model and the synthesizer revision chosen in the user's listening test. Revision 4 records what milestone 2 verified (command-driven frame bytes, the raw DSP stream, the calibration). Revision 3 makes the finished project ROM-free (R5). Revision 2 adds facts found while planning milestone 1
 (MAME's M50734 register map and the lower-ROM banking); the changes are marked *(rev 2)*.
 **Goal:** A software Dolphin Apollo 2. Text typed on a PC goes through the real
 firmware logic (first emulated, then decompiled to C) and produces DSP frames.
@@ -28,8 +28,11 @@ ROM. "Hypothesis" means it still has to be proven by the work in this spec.
   10 ms. Verified (MAME `m740`/`m50734` sources plus the ROM's timer setup).
 - **Opcodes used in the 8.2 KB of traced code:** the 6502 base set plus 740 bit
   ops, LDM, TST, COM, CLT and WIT (once). These never appear: SET (so the T flag is
-  never enabled), SED, MUL, DIV, RRF, STP, BRK. Re-check this once code coverage
-  is complete.
+  never enabled), SED, MUL, DIV, RRF, STP, BRK. *(rev 6)* Confirmed over the full code
+  (the M3 project's opcode census, every byte of ROM, the lower-ROM window and RAMCODE classified):
+  60 mnemonics. The 740-only ones are BBC 79, BBS 36, BRA 44, CLB 42, SEB 27, LDM 156, TST 4,
+  CLT 1 and WIT 1 (at `$C602`). None of SET, SED, MUL, DIV, STP or BRK occurs, and neither do RRF
+  or COM: the trace's COM above was wrong. The 6502 decimal flag is only ever cleared (CLD 1).
 - **Synthesizer:** an NEC µPD77C20 ("D77C20AC 295", "LSI PFSA") mask-ROM DSP. Its
   program is not available. Its serial output feeds 4094 shift registers and then
   an MX7541 12-bit DAC. This spec replaces it entirely.
@@ -49,6 +52,15 @@ ROM. "Hypothesis" means it still has to be proven by the work in this spec.
 
 - At boot, `$ADFE–$AFFC` is copied to RAM `$0200–$03FE`. That RAM code switches
   banks and probes `$FFD0 == $78` to detect option ROMs.
+- *(rev 6)* **An observed ROM bug in the letter-to-sound rules.** In the two-letter index, the L-M and
+  L-O entries point at the same list (lower ROM at `$4317`, read with P2.7 set). Just before it, at
+  `$4310–$4316`, sits a one-rule list that nothing points at: an L-O rule for "LOOP". Verified in
+  the emulator on patched copies of the ROM (scratch copies only). The shared L-M entry is harmless,
+  because L-M words give identical frames whether it points at that list, at the orphan or at
+  nothing. Making the orphan reachable, ahead of the real L-O list, changes only
+  loop/loops/looped/loophole/bloop of 32 words tested ("sloop" is unchanged). So the bug is that
+  the LOOP rule can never fire: an extra end marker, or a pointer that is 7 bytes off. It is not a
+  missing L-M list. The port keeps the ROM's behaviour.
 
 ### 1.3 Peripherals *(rev 2: register map from MAME `m50734.cpp`; the UART is inferred from the ROM)*
 
@@ -91,11 +103,15 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 | 2 | b4 A2 | b5 F2 |
 | 3 | b6 A3 | b7 F3 |
 | 4 | b8 AHF (high-frequency amplitude) | b9 V (degree of voicing, 1..63) |
-| 5 | b10 pitch period: 160 − 2·code samples at 10 kHz (the mark-space clamp at $B930); @F0..@FF = codes 2..63 ≈ 64..294 Hz *(rev 5)* | b11 mark-space ratio (@M, clamped by F0) *(rev 4: verified)* |
-| 6 | b12 constant `$17` | b13 transition flags (bit 7 spectral jump, bit 6 onset, bit 4 multi-channel drop, bit 3 F0 jump). *(rev 5: bit 7 is set at stop closures ($C0), releases ($80/$90), onsets after silence and many vowel/sonorant boundaries.)* |
-| 7 | b14 | b15: b14–b15 are a 16-bit value from tables `$B573`/`$B673`, indexed by (ALF−A1−4)·(F1−33) |
+| 5 | b10 pitch period: 160 − 2·code samples at 10 kHz (the mark-space clamp at $B930); @F0..@FF = codes 2..63 ≈ 64..294 Hz *(rev 5)* | b11 mark-space ratio (@M, clamped by F0) *(rev 4: verified)*. *(rev 6: with c = the b10 code, `$B930` takes b11 = min(@M, 160 − 2c), unsigned; then 47 − 2c if that is not negative (signed) and not below b11; then at least 11 in every case.)* |
+| 6 | b12 constant `$17` | b13 transition flags (bit 7 spectral jump, bit 6 onset, bit 4 multi-channel drop, bit 3 F0 jump). *(rev 5: bit 7 is set at stop closures ($C0), releases ($80/$90), onsets after silence and many vowel/sonorant boundaries.)* *(rev 6, verified in code and emulator, 0 mismatches over 147 frames; the rev-5 names of bits 6 and 4 were swapped. `$BA3F` compares this frame with the previous one: bit 7 = a frequency (FN/F1/F2/F3) moved by ≥ 16 or an amplitude (ALF/A1/A2/A3/AHF) by ≥ 12; bit 6 = an amplitude **fell** by ≥ 28, or by ≥ 19 to the silent value 1 (a closure); bit 4 = two or more amplitudes **rose** by ≥ 12 (an onset or release); bit 3 = b10 moved by ≥ 7. Bit 5 is never computed, but the rest-frame template has it set, so the first set-up frames carry it.)* |
+| 7 | b14 | b15: b14–b15 are a 16-bit value from tables `$B573`/`$B673`, indexed by (ALF−A1−4)·(F1−33). *(rev 6: the value is 82·index. The index is 0 when either factor is ≤ 0 (signed), and saturates at `$FF` when the product exceeds the limit table `$B473` = ⌊255/e⌋ for e = F1−33; e = 1 always saturates.)* |
 | 8 | b16 voicing source (@$: $82 default, $58 spike, $9B cut-down, $BA reduced-HF) | b17 voice filter (@$: $4A male, $54 female) *(rev 4: verified)* |
 | 9 | `$FF` | `$FF` |
+
+- *(rev 6)* Rest frames (the voice set-up and the frames after an utterance) skip the b14–b17
+  lookups, so they keep the template's b16/b17 whatever @$ selects. Our synthesizer uses only b13
+  bit 7, so none of the rev-6 frame facts changes the audio.
 
 - **Commands that change frame bytes** *(rev 4, verified by prefixing `_AR.`)*:
 
@@ -111,18 +127,33 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 
 - **Intonation model** *(rev 5, from the ROM)*. The phrase generator ($D129–$D3DD) writes per-segment arrays: phoneme
   $0200, duration $0600, pitch target $0A00 and flags $0E00, appended by $CA3B. A segment's target is
-  ($1C26>>3) + $1C25 + $1C30 + $1C23 + 105 plus the centre, built from the per-symbol flags at $1D00:
+  ($1C26>>3) + $1C25 + $1C30 + $1C23 + 105 plus the centre, built from the per-symbol flags at $1D00.
+  *(rev 6, verified: the baseline term is rounded, ⌊($1C26 + 4)/8⌋, because the bit shifted out last
+  goes in through the carry, and each later ADC takes the previous carry, the terms being signed. What
+  $CA3B adds when it stores the target is not the centre but zero-page `$16`, the @F+/@F− offset
+  (8 normally, `$10` after @F+, 0 after @F−). The @F centre `$1816` = @F·16 is applied only at
+  playback, by $BDD3. The flags array $0E00 is never read: patching its stores gives identical
+  frames.)*
   - accented head syllables `$60` get +15;
   - stressed but unaccented syllables `$40` get +8;
   - the nucleus (the last accent) `$67` gets +15 −10, a lower peak;
   - the nuclear tail `$07` gets −15, and the final syllable −20;
   - the onset after an accent gets −15;
   - function words carry no accent (the same classification drives Hypermode @H1);
-  - the baseline declines across the phrase ($D3DD/$D40D).
+  - the baseline declines across the phrase ($D3DD/$D40D). *(rev 6, verified: the step is
+    (start − end) / a symbol count, at most 25, and the baseline drops by it at every symbol that has
+    features. The generator computes the step once per text, at position 0. The divisor is the
+    first phrase's symbol count, +1 for the final phrase or a text with no punctuation. So in a text
+    of several phrases, only the first has a matched step.)*
 
   At playback, $BDD3 scales each deviation from 128 by @R/4 around the @F centre: @R4 is the
   generator's own contour, the default @R3 is 0.75 of it, and @R8/@R9 are ignored because R is an octal
-  digit. The `?` rise is added at playback. The emulated CPU was verified against py65 (447k random
+  digit. The `?` rise is added at playback. *(rev 6, verified: the scaled deviation is rounded
+  ($BE2C). @R is capped by the speed through `cmd_speed_limits`: @W1–@W4 leave it alone, @W5 caps it
+  at 4, @W6 at 2, and @W7–@W9 at 0, where the contour is the centre plus the microprosody's ±5, so not
+  perfectly flat. The final "at least 4" test is signed (CMP #4 / BPL, then ORA #4): results 0–3
+  become 4–7, and bit 2 is also set in every result from `$84` up. A port must reproduce this. The
+  unreferenced code at $C131 is dead: a b10 store that rounds with error feedback.)* The emulated CPU was verified against py65 (447k random
   cases over the 149 standard opcodes) and MAME semantics (134k cases for the 740-only ops), so the
   frames carry exactly what V2.01 computes.
 
@@ -130,9 +161,24 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
   voice B has its count at `$E5E2` and data at `$E5E3`. Each table has 2 rows of N,
   then parameters P1..P10 spaced 5N apart. P1..P10 map to bytes 1, 3, 5, 7, 0, 2,
   4, 6, 8, 9 through the slot map at `$B797`. Values are clamped to 1..63.
+  *(rev 6, verified. Row 0 is the rank and row 1 is never read. Each parameter has 5 rows: target,
+  fixed contribution, proportion (eighths), external and internal transition duration. The scheme
+  matches the Holmes–Mattingly–Shearme (1964) scheme. The higher-ranked of two neighbours sets the
+  boundary value, its fixed contribution plus a proportion of the other's target, and the
+  transition durations. The Apollo adds a jump when both ranks are ≥ 29, a per-parameter target bias,
+  the @u shares and the clamps. "Clamped to 1..63" is only partly true:
+  targets go through a signed clamp, so 0 and `$81–$FF` become 1, and `$40–$80` become 63. A boundary
+  with proportion 0 is the clamped fixed contribution. Any other boundary of 0 or ≥ 64 (unsigned)
+  becomes 1. Where both ranks are ≥ 29, the boundary is the next phoneme's raw target, with no @u and
+  no clamp; every table target lies in 1..63. Voice B differs from voice A only in rows 2, 3, 7, 8, 12,
+  13, 17 and 18, the target and fixed contribution of P1–P4.)*
 - **Symbols to phonemes:** pointer tables at `$9D74` (ASCII) and `$9E74` (≥`$80`).
   Each entry is a list of (phoneme, max duration, min duration) triples ending in
   `$FF`. The decoder is at `$D31B`. Punctuation produces phoneme `$3B` (pause).
+  *(rev 6: the `$9D74` table is used from symbol `$20` up. The slots of `$00–$1F` overlap the
+  symbol-feature table and are never decoded. The punctuation symbols' own lists are empty. Their
+  pause comes from `$C9B8`, whose length is @D, in full after `. ? !`, halved after `, ; :` and
+  quartered otherwise. For the 17 phonemes that no ASCII symbol reaches, see §10.)*
 
 ## 2. Requirements
 - **R1 — CLI:** `apollo2 "text" [-o out.wav] [--voice a|b] [--prosody 0-7] [--engine rom|hybrid|native] [--rom PATH] [--hyp b11,b13] [--stream produced|raw] [--text-file FILE] [--audio-check]`. *(rev 4: `--voice b` sends `@K1`; `--stream raw` is for comparison listening only. rev 5: `--prosody` sends `@Rn`, default 4; the output filters are always on.)*
@@ -179,7 +225,7 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 | `audio/` *(rev 4)* | WAV writer, live playback (waveOut) | `wav_write`, `playback_pcm16` | — |
 | `render/` *(rev 4)* | Frame stream → synthesizer → 16-bit samples, through the `engine/` rom engine | `render_text` | engine, synth |
 | `apps/` *(rev 4)* | `apollo2` CLI (R1) and the `apollo2_frames` dev CLI | R1 | all |
-| `ghidra740/` | Ghidra SLEIGH module for the 740 | Ghidra extension | — |
+| `ghidra740/` | Ghidra SLEIGH module for the 740 + project scripts; annotations are the source of truth (M3 spec) *(rev 6)* | Ghidra extension; `install`, `validate`, `coverage`, `rebuild`, `dump` `.bat` entry points | — |
 | `tools/` | `extract_tables.py` (a one-time converter, ROM → readable C, rev 3), `calibrate.py`, corpus/golden runners | scripts | Python |
 | `tests/` | unit, differential, golden-frame and synth tests | `apollo2_tests.exe`: runs all suites, non-zero exit on any failure | all |
 
@@ -299,6 +345,13 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
 2. **Project setup:** apply the memory map; import all known labels (SFRs, buffers,
    tables, slot maps); resolve the RAM jump tables `$1306`, `$150B` and `JMP ($4A)`
    to reach full code coverage.
+
+   *(rev 6)* Steps 1 and 2 are done; the design is
+   `docs/superpowers/specs/2026-10-01-m3-ghidra740-design.md`. The module matches `cpu740` on all
+   256 opcodes (`validate.bat`: 14336 executed vectors, 32 decode-only opcodes, 0 mismatches). The project
+   is rebuilt from `ghidra740/annotations` and passes every M3 done criterion: 0 undefined bytes,
+   168 named functions, 280 named data items and 78 named RAM bases, with the three indirect jumps
+   resolved.
 3. **Replacement:**
    - Each C routine gets a thunk keyed by its ROM entry address. The thunk maps
      A/X/Y/flags to and from C arguments and return values, then emulates the RTS.
@@ -361,6 +414,7 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
    - `synth` and calibration.
    - `apollo2 "text" -o out.wav` works end to end on the `rom` engine.
 3. **Ghidra module and project:** full code coverage and labelled routines.
+   *(rev 6)* **Done 2026-10-02** (M3 spec; §6 steps 1–2).
 4. **Progressive replacement:** routines move to C under differential and golden tests.
 5. **Native:** every routine and every table is in committed C. The `native`
    engine builds without `cpu740`/`machine`.
@@ -382,7 +436,12 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
 - ~~The timer period~~: resolved, 200 CPU cycles (§1.1).
 - The exact external RAM extent (M1 logs any access outside `$0000–$3FFF`).
 - The P4 DIP switches beyond bit 0. *(rev 4: the P3 baud jumpers are pins 20/21 in docs/apollo2.txt Appendix 1: 9600 default, 1200, 300, 19200.)*
-- The meanings of b14–b15, and how the DSP realises the @$ source/filter variants (listening tests). *(rev 4: b11, b16 and b17 are identified, §1.4. rev 5: b13 bit 7 is handled as a fast amplitude transition, §5; the meanings of bits 6, 4 and 3 are still open.)*
+- The meanings of b14–b15, and how the DSP realises the @$ source/filter variants (listening tests). *(rev 4: b11, b16 and b17 are identified, §1.4. rev 5: b13 bit 7 is handled as a fast amplitude transition, §5; the meanings of bits 6, 4 and 3 are still open.)* *(rev 6: ~~what sets b13 bits 6, 4 and 3~~ is resolved on the firmware side (§1.4): an amplitude fall (closure), a multi-channel rise (onset or release) and a jump in b10. How the DSP uses them, and what b14–b15 mean, are still open.)*
 - *(rev 5)* Recordings of real units show deeper function-word dips (4–6 semitones) than V2.01's frames give at any @R/@F. Possible causes are the newer V2.02 EPROM in the user's photos, different settings, or the DSP itself.
-- The 17 phoneme indices not reachable from ASCII symbols (6, 7, 22, 23, 25, 40,
-  41, 58, 77–85), probably reached via `$9E74` (M3).
+- ~~The 17 phoneme indices not reachable from ASCII symbols (6, 7, 22, 23, 25, 40,
+  41, 58, 77–85), probably reached via `$9E74` (M3).~~ *(rev 6)* Resolved by M3, and only 6 of the
+  17 come through `$9E74`. Symbol `$83` gives 7, `$84` gives 6, `$87` gives 21 and 22, and `$8C`
+  gives 40; these four come only from @X phonetic text. Symbol `$98` gives 21 and 23 (from the
+  letter-to-sound rules, e.g. MEGATON), and `$C0` gives 41 (e.g. LEVEL, NOVEL). Phonemes 77 and
+  82–84 come only from the @T sound-effect arrays. Phonemes 25, 58, 78–81 and 85 are never reached
+  by any path. Verified in the emulator.
