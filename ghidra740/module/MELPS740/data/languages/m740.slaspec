@@ -256,14 +256,25 @@ STXOP: imm8,Y  is bbb=5 & Y; imm8     { tmp:2 = zext(imm8 + Y); export *:1 tmp; 
 :INC A  is op=0x3A & A  { A = A + 1; resultFlags(A); }
 :DEC A  is op=0x1A & A  { A = A - 1; resultFlags(A); }
 
-:BBS^bitn A,REL       is bitn & bbb=0 & cc=3 & A; REL   { local n:1 = bitn; local m:1 = 1 << n; if ((A & m) != 0) goto REL; }
-:BBC^bitn A,REL       is bitn & bbb=4 & cc=3 & A; REL   { local n:1 = bitn; local m:1 = 1 << n; if ((A & m) == 0) goto REL; }
-:BBS^bitn ZP,REL2     is bitn & bbb=1 & cc=3; ZP; REL2   { local n:1 = bitn; local m:1 = 1 << n; local v:1 = ZP; if ((v & m) != 0) goto REL2; }
-:BBC^bitn ZP,REL2     is bitn & bbb=5 & cc=3; ZP; REL2   { local n:1 = bitn; local m:1 = 1 << n; local v:1 = ZP; if ((v & m) == 0) goto REL2; }
-:SEB^bitn A           is bitn & bbb=2 & cc=3 & A         { local n:1 = bitn; local m:1 = 1 << n; A = A | m; }
-:CLB^bitn A           is bitn & bbb=6 & cc=3 & A         { local n:1 = bitn; local m:1 = 1 << n; A = A & ~m; }
-:SEB^bitn ZP          is bitn & bbb=3 & cc=3; ZP         { local n:1 = bitn; local m:1 = 1 << n; local v:1 = ZP; ZP = v | m; }
-:CLB^bitn ZP          is bitn & bbb=7 & cc=3; ZP         { local n:1 = bitn; local m:1 = 1 << n; local v:1 = ZP; ZP = v & ~m; }
+# Bit number of the bit operations, displayed as a plain decimal digit (a bare "bitn" field prints as 0x<n>).
+BITNUM: "0" is bitn=0 { }
+BITNUM: "1" is bitn=1 { }
+BITNUM: "2" is bitn=2 { }
+BITNUM: "3" is bitn=3 { }
+BITNUM: "4" is bitn=4 { }
+BITNUM: "5" is bitn=5 { }
+BITNUM: "6" is bitn=6 { }
+BITNUM: "7" is bitn=7 { }
+
+
+:BBS^BITNUM A,REL       is BITNUM & bitn & bbb=0 & cc=3 & A; REL   { local n:1 = bitn; local m:1 = 1 << n; if ((A & m) != 0) goto REL; }
+:BBC^BITNUM A,REL       is BITNUM & bitn & bbb=4 & cc=3 & A; REL   { local n:1 = bitn; local m:1 = 1 << n; if ((A & m) == 0) goto REL; }
+:BBS^BITNUM ZP,REL2     is BITNUM & bitn & bbb=1 & cc=3; ZP; REL2   { local n:1 = bitn; local m:1 = 1 << n; local v:1 = ZP; if ((v & m) != 0) goto REL2; }
+:BBC^BITNUM ZP,REL2     is BITNUM & bitn & bbb=5 & cc=3; ZP; REL2   { local n:1 = bitn; local m:1 = 1 << n; local v:1 = ZP; if ((v & m) == 0) goto REL2; }
+:SEB^BITNUM A           is BITNUM & bitn & bbb=2 & cc=3 & A         { local n:1 = bitn; local m:1 = 1 << n; A = A | m; }
+:CLB^BITNUM A           is BITNUM & bitn & bbb=6 & cc=3 & A         { local n:1 = bitn; local m:1 = 1 << n; A = A & ~m; }
+:SEB^BITNUM ZP          is BITNUM & bitn & bbb=3 & cc=3; ZP         { local n:1 = bitn; local m:1 = 1 << n; local v:1 = ZP; ZP = v | m; }
+:CLB^BITNUM ZP          is BITNUM & bitn & bbb=7 & cc=3; ZP         { local n:1 = bitn; local m:1 = 1 << n; local v:1 = ZP; ZP = v & ~m; }
 
 :LDM "#"imm8,ZP2  is op=0x3C; imm8; ZP2  { ZP2 = imm8; }
 :TST ZP           is op=0x64; ZP         { local v:1 = ZP; resultFlags(v); }

@@ -27,9 +27,11 @@ public class CheckProject extends GhidraScript {
                 MemoryBlock blk = currentProgram.getMemory().getBlock(b);
                 code.add(blk.getStart(), blk.getEnd());
             }
-            dynamicCoverage(Annot.loadCoverage(root.resolve("ghidra740/coverage/corpus.cov")));
+            Path covFile = root.resolve("ghidra740/coverage/corpus.cov");
+            Annot.Cov cov = Annot.loadCoverage(covFile);
+            dynamicCoverage(cov, Files.exists(covFile));
             staticCoverage(code);
-            indirectFlow(code);
+            indirectFlow(code, cov);
             names(code);
             census(code);
         }
@@ -63,8 +65,10 @@ public class CheckProject extends GhidraScript {
         return CODE_BLOCKS.stream().allMatch(b -> currentProgram.getMemory().getBlock(b) != null);
     }
 
-    private void dynamicCoverage(Annot.Cov cov) {
+    private void dynamicCoverage(Annot.Cov cov, boolean present) {
         List<String> bad = new ArrayList<>();
+        if (!present) bad.add("ghidra740/coverage/corpus.cov is absent: no dynamic coverage to check against");
+        else if (cov.exec.isEmpty()) bad.add("ghidra740/coverage/corpus.cov lists no executed addresses");
         int n = 0;
         for (String[] x : cov.exec) {
             if (x[0].equals("ram")) { bad.add("ram " + x[1] + ": executed in RAM outside RAMCODE"); continue; }
@@ -93,19 +97,31 @@ public class CheckProject extends GhidraScript {
 
     private static boolean isIndirect(int op) { return op == 0x6C || op == 0xB2 || op == 0x02; }
 
-    private void indirectFlow(AddressSet code) throws Exception {
+    /**
+     * M3 spec 6.4: JMP ($4A) and the RAM jump tables (the indirect jumps with edges in the corpus) must be resolved,
+     * so every target is a function; every other indirect jump needs resolved targets or a comment.
+     */
+    private void indirectFlow(AddressSet code, Annot.Cov cov) throws Exception {
         List<String> bad = new ArrayList<>();
+        Set<String> dispatch = new HashSet<>();
+        for (String[] e : cov.edges) dispatch.add(e[0] + " " + String.format("%04X", Integer.parseInt(e[1], 16)));
         int n = 0;
         InstructionIterator it = currentProgram.getListing().getInstructions(code, true);
         while (it.hasNext()) {
             Instruction in = it.next();
-            if (!isIndirect(in.getByte(0) & 0xFF)) continue;
+            int op = in.getByte(0) & 0xFF;
+            if (!isIndirect(op)) continue;
             n++;
+            String rule = null;
+            if (op != 0x6C && (in.getByte(1) & 0xFF) == 0x4A) rule = "JMP ($4A) must be resolved";
+            else if (dispatch.contains(where(in.getAddress()))) rule = "RAM jump table dispatch (edges in corpus.cov) must be resolved";
             List<Address> targets = new ArrayList<>();
             for (Reference r : in.getReferencesFrom())
                 if (r.getReferenceType().isComputed()) targets.add(r.getToAddress());
-            if (targets.isEmpty() && getEOLComment(in.getAddress()) == null)
-                bad.add(where(in.getAddress()) + " " + in + ": no resolved targets and no comment");
+            if (targets.isEmpty()) {
+                if (rule != null) bad.add(where(in.getAddress()) + " " + in + ": no resolved targets (" + rule + "; a comment does not count)");
+                else if (getEOLComment(in.getAddress()) == null) bad.add(where(in.getAddress()) + " " + in + ": no resolved targets and no comment");
+            }
             for (Address t : targets)
                 if (getFunctionAt(t) == null) bad.add(where(in.getAddress()) + " " + in + ": target " + where(t) + " is not a function entry");
         }
@@ -167,7 +183,7 @@ public class CheckProject extends GhidraScript {
         InstructionIterator it = currentProgram.getListing().getInstructions(code, true);
         while (it.hasNext()) {
             Instruction in = it.next();
-            String m = in.getMnemonicString().toUpperCase(Locale.ROOT).replaceAll("(0X)?[0-7]$", "");
+            String m = in.getMnemonicString().toUpperCase(Locale.ROOT).replaceAll("[0-7]$", "");
             counts.merge(m, 1, Integer::sum);
             if (NEVER_USED.contains(m)) where.computeIfAbsent(m, k -> new ArrayList<>()).add(where(in.getAddress()));
         }
