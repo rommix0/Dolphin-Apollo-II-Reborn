@@ -6,13 +6,13 @@ rom      B323  func      isr_speech_start               -              start DSP
 rom      B356  func      isr_wait_frames                -              wait for X frame boundaries (isr_wait_frame); X >= 1, returns X = 0
 rom      B35D  func      isr_timer_start                -              start the 10 kHz DSP tick: timers 2 and 3 synchronised (prescalers 0, timer 3 reload $28 then $31), P3.0 set, P23_FUNC = 1, ICR2 = $10 (timer 3 interrupt only); flags preserved
 rom      B38B  func      isr_dsp_reset                  -              pulse the DSP reset line P2.0 low-high-low with interrupts off
-rom      B398  func      isr_speech_stop                -              stop DSP output: P23_FUNC = 0, ICR2 = 0 (timer 3 interrupt off), isr_dsp_reset, $64 bit 0 cleared
+rom      B398  func      isr_speech_stop                -              stop DSP output: P23_FUNC = 0, ICR2 = 0 (timer 3 interrupt off), isr_dsp_reset, boot_speaking bit 0 cleared
 rom      B465  func      isr_wait_frame                 -              wait until the timer ISR has passed a frame boundary (isr_frame_flag bit 0), then clear the flag
 rom      B46C  func      isr_volume_half                -              volume at half the @A level $14 (isr_set_volume), used to ramp in and out
 rom      C2B4  func      isr_int1                       -              INT1 ISR. Serial mode (DIP bit 0 clear) at ser_int1_serial: a UART byte, or on an _INT1 pin request the P1_LATCH byte (ser_int1_latch), goes to ser_rx_byte. Parallel mode: _INT1 host strobe, handshake on P0.3/P0.4 and P1, data byte from P1_LATCH to ser_rx_byte, code 5 answered with the next reply byte (ser_tx_get)
 rom      C3DF  func      isr_unused                     -              RTI: handler of the unused vectors INT3 ($FFF6) and INT0 ($FFFC)
 rom      C3E0  func      isr_int4_host_line             -              INT4 ISR: the host handshake input P0.2 changed: high -> isr_host_line_high, low -> isr_host_line_low
-rom      C3EB  func      isr_host_line_high             -              ICR3 = $40, busy line P0.5 set, $68 = 1 (a status byte is to be sent)
+rom      C3EB  func      isr_host_line_high             -              ICR3 = $40, busy line P0.5 set, ser_status_due = 1 (a status byte is to be sent)
 rom      C3F4  func      isr_host_line_low              -              ICR3 = $48, busy line P0.5 cleared
 rom      C5D6  func      isr_par_ready                  -              parallel mode only (DIP bit 0): set P0.3 (ready for the next host byte); A preserved
 rom      C5DE  func      isr_par_hold                   -              parallel mode only: clear P0.3 and any pending _INT1 request (ICR1 bit 1) with interrupts off; A preserved

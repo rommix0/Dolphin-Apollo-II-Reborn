@@ -105,7 +105,7 @@ rom      AB70  func      cmd_set_voicing                -              @B handle
 rom      AB99  func      cmd_echo                       -              @E handler: queue the argument character as the reply (ser_tx_put)
 rom      AB9F  func      cmd_set_phonetic               -              @X handler: cmd_phonetic = 0 or 1
 rom      ABBE  func      cmd_list_languages             -              @L handler: reply L, 7 records of 14 characters from bank_id_table, CR (ser_tx_records)
-rom      ABD3  func      cmd_query                      -              @c? handler: A = the setting letter read at $1AFF+X (cmd_text at the letter's index in boot_clause), answered by cmd_reply_setting
+rom      ABD3  func      cmd_query                      -              @c? handler: A = the setting letter, read at $1AFF+X (X = index of the ?), answered by cmd_reply_setting
 rom      ABDC  func      cmd_ignore                     -              handler of the commands without effect (@G, @I with a caret, @+)
 rom      ABDF  func      cmd_find_back                  -              X = 1 + index of the last character before X in boot_clause whose upper-case form equals A (stops at index 1); lets a handler re-read its whole argument
 rom      ACFA  func      cmd_scan_clause                -              copy boot_clause (length $54) to cmd_text, upper-cased by cmd_case_map unless cmd_phonetic; at each cmd_char match cmd_table (cmd_match_table): a matched command is left out of cmd_text and queued (position cmd_positions, handler cmd_handlers, argument index cmd_arg_index, count cmd_count); an unmatched one stays as text; $54 = new length, cmd_next_pos = first position
