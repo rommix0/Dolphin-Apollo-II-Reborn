@@ -13,7 +13,7 @@ for %%d in (src\cpu740 src\machine src\engine src\synth src\audio src\render) do
     if exist %%d\*.c set LIBSRC=!LIBSRC! %%d\*.c
 )
 cl %CFLAGS% /Fobuild\ /Fdbuild\ /Febuild\apollo2_tests.exe tests\*.c !LIBSRC! %LIBS% || exit /b 1
-for %%a in (apollo2_frames apollo2) do (
+for %%a in (apollo2_frames apollo2 apollo2_coverage cpu740_vectors) do (
     if exist src\apps\%%a.c (
         cl %CFLAGS% /Fobuild\ /Fdbuild\ /Febuild\%%a.exe src\apps\%%a.c !LIBSRC! %LIBS% || exit /b 1
     )
