@@ -1,7 +1,8 @@
 # M3 — Ghidra 740 Module and Project — Design
 
 **Date:** 2026-10-01
-**Status:** Draft for review.
+**Status:** Draft for review. Revised 2026-10-02: the module is installed automatically, and the
+rebuild targets the user's open Ghidra project over MCP as well as a headless scratch project.
 **Parent spec:** `docs/superpowers/specs/2026-09-30-software-apollo2-design.md` (rev 5), §6 steps 1–2
 and §8 milestone 3: *"Ghidra module and project: full code coverage and labelled routines."*
 **Goal:** A Ghidra processor module for the MELPS 740, checked against our `cpu740` oracle, and a
@@ -12,13 +13,23 @@ routines to C using these names and boundaries.
 ## 1. Decisions (user, 2026-10-01)
 
 - **Annotations are the source of truth.** The labels, functions, data types and comments live in
-  committed, diffable text files under `ghidra740/annotations/`. A headless script rebuilds the
-  Ghidra project from the ROM plus these files. The Ghidra project (`apollo_ghidra/`) stays
-  machine-local and git-ignored. Edits made interactively, in the GUI or over MCP, are exported back
-  into the text files.
-- **The module ships as an extension zip.** The build produces `build/ghidra740/MELPS740.zip`. The
-  user installs it once with *File › Install Extensions* and restarts Ghidra. Nothing is copied into
-  `C:\ghidra_12.1.3_PUBLIC`.
+  committed, diffable text files under `ghidra740/annotations/`. The same Ghidra scripts rebuild a
+  program from the ROM plus these files in two places (§5.4):
+  - the user's open GUI project `apollo_disasm` (`apollo_ghidra/`), over MCP;
+  - a headless scratch project under `build/ghidra740/`, for the automated check and dumps.
+
+  Both projects stay machine-local and git-ignored. Edits made interactively, in the GUI or over
+  MCP, are exported back into the text files.
+- **The module is installed automatically** *(revised 2026-10-02; this replaces the extension zip)*.
+  `ghidra740\install.bat`:
+  - compiles the `.sla`;
+  - mirrors the module folder, together with its `ghidra_scripts/`, into the user's Ghidra extension
+    directory, `%APPDATA%\ghidra\ghidra_12.1.3_PUBLIC\Extensions\MELPS740`.
+
+  Nothing is copied into `C:\ghidra_12.1.3_PUBLIC`. Ghidra registers processor languages only at
+  startup, so after the first install, or after any change to the SLEIGH files, the GUI must be
+  restarted. Script changes need only a reinstall. Headless runs always start a fresh JVM, so they
+  pick up both kinds of change.
 - **Labelling depth:**
   - every function gets a subsystem-prefixed name and a one-line plate comment;
   - every ROM table gets a name, an extent and an element type;
@@ -31,8 +42,13 @@ routines to C using these names and boundaries.
 - Ghidra 12.1.3 at `C:\ghidra_12.1.3_PUBLIC`. It needs JDK 21 or newer; JDK 23 and JDK 27 are
   installed. Headless runs use `support\analyzeHeadless.bat`, and the SLEIGH compiler is
   `support\sleigh.bat`.
-- Scripts are written in Java. They are GhidraScripts run with `-scriptPath ghidra740/scripts`, so
-  no PyGhidra install is needed.
+- Scripts are written in Java. They are GhidraScripts kept in `ghidra740/module/MELPS740/ghidra_scripts/`,
+  so no PyGhidra install is needed. Because they ship inside the installed extension, Ghidra puts them
+  on its script path automatically:
+  - the GUI runs them by name, over MCP with `run_ghidra_script`;
+  - headless runs find them the same way.
+- **MCP:** the bridge (`ghidra-mcp`) runs scripts only when a program is open. It can import files
+  into the open project (`import_file`).
 - The scripts and tools that need Ghidra are **not** part of `build.bat test`. They have their own
   entry points (§7). `build.bat test` stays runnable without Ghidra.
 - Everything Ghidra produces from the ROM (the project, dumps, reports) goes to `build/` or
@@ -45,11 +61,12 @@ routines to C using these names and boundaries.
 ghidra740/module/MELPS740/
   extension.properties     name, description, version=12.1.3
   Module.manifest
+  ghidra_scripts/          BuildProject, CheckProject, DumpProject, ExportAnnotations, ValidateModule (.java)
   data/languages/m740.slaspec   derived from Ghidra's 6502.slaspec (not 65c02: the opcode maps differ)
   data/languages/m740.ldefs     id MELPS740:LE:16:default
   data/languages/m740.pspec     SFR labels $DA–$FF (parent §1.3), vectors $FFF4–$FFFF
   data/languages/m740.cspec     JSR/RTS calling convention, stack in page 1
-ghidra740/build_extension.bat   sleigh.bat → .sla, then zip → build/ghidra740/MELPS740.zip
+ghidra740/install.bat          sleigh.bat → .sla, then mirror the module into %APPDATA%\ghidra\ghidra_12.1.3_PUBLIC\Extensions\MELPS740
 ```
 
 - **Base:** the 6502 instruction set as Ghidra's 6502 module models it. The 740 extensions all
@@ -84,8 +101,8 @@ The generator seeds the operand bytes and memory so that every addressing mode a
 each branch are exercised. Opcodes `cpu740` faults on (MUL, DIV, SET, STP, SED, BRK and the illegal
 ones) get disassembly-only lines.
 
-**Ghidra check.** `ghidra740/scripts/ValidateModule.java` runs headless on a scratch program in the
-MELPS740 language. For each vector it:
+**Ghidra check.** `ValidateModule.java` runs headless on a scratch program in the MELPS740
+language, in a temporary project under `build/ghidra740/`. For each vector it:
 1. disassembles the instruction and compares the text with `cpu740_disasm`, after normalising
    case, spacing and hex formatting;
 2. on non-fault vectors, sets up the state, steps once with Ghidra's `EmulatorHelper`, and compares
@@ -178,9 +195,14 @@ annotated as a `func` or `entry`.
   of their name prefix and are kept in canonical sorted order, so that a round trip with no edits
   changes nothing.
 
-### 5.4 Build order (`ghidra740\rebuild.bat`)
+### 5.4 Build order (`BuildProject.java`)
 
-1. Create a fresh program from the ROM with the language and blocks of §5.2.
+The program is always created the same way: the ROM is imported raw, with language
+`MELPS740:LE:16:default`, base `$0000` and no auto-analysis, into a program named `UK_V2.01_4.04`.
+`BuildProject.java` then runs on that freshly imported program:
+
+1. Replace the single imported block with the blocks of §5.2. Their bytes are taken from the imported
+   file image.
 2. Apply `types.txt`, then the data and jumptable records, then the labels and comments.
 3. Disassemble from:
    - the reset and interrupt vectors;
@@ -192,12 +214,27 @@ annotated as a `func` or `entry`.
    comments.
 6. Run `CheckProject.java` (§6) and write `build/ghidra740/check.txt`.
 
-The project is written to `apollo_ghidra/` as program `UK_V2.01_4.04` and can be opened in the GUI
-or over MCP.
+There are two targets, built by the same scripts:
+
+- **Headless scratch** (`ghidra740\rebuild.bat`). This one is used by the automated loop, the check
+  and the dumps.
+  - It runs `analyzeHeadless` on `build/ghidra740/project/`, importing the ROM and running
+    `BuildProject.java` and then `CheckProject.java` as post-scripts.
+  - It never touches the GUI project, so it works while Ghidra is open.
+- **The GUI project** `apollo_disasm` (`apollo_ghidra/`), the user's working view, rebuilt over MCP
+  while Ghidra is open. If a program `UK_V2.01_4.04` already exists it is deleted (`delete_file`)
+  after any edits have been exported. Then:
+  1. `import_file` with the ROM, the language above and `auto_analyze=false`;
+  2. `run_ghidra_script BuildProject.java`;
+  3. `run_ghidra_script CheckProject.java`.
+
+  The program stays open in the CodeBrowser. The plan's first use of this path is to fill the
+  currently empty `apollo_disasm` project.
 
 ## 6. Done criteria for M3 (`CheckProject.java`)
 
-M3 is done when `ghidra740\rebuild.bat` reports all of these:
+M3 is done when the check reports all of these, both from `ghidra740\rebuild.bat` and in the GUI
+project:
 
 1. **Module:** `validate.bat` passes, with zero mismatches.
 2. **Dynamic coverage:** every address in `corpus.cov` is the start of an instruction inside a
@@ -228,12 +265,13 @@ The check report lists each criterion with PASS/FAIL and the offending addresses
 | Entry point | Needs | Does |
 |---|---|---|
 | `build.bat test` | MSVC | As before, plus unit tests for the coverage hook and the vector writer |
-| `ghidra740\build_extension.bat` | Ghidra | Compiles the `.sla` and writes `build/ghidra740/MELPS740.zip` |
-| `ghidra740\validate.bat` | Ghidra + installed extension | Writes the vectors, runs `ValidateModule.java` |
+| `ghidra740\install.bat` | Ghidra | Compiles the `.sla` and mirrors the module and scripts into the user's extension directory; a GUI restart is needed after SLEIGH changes |
+| `ghidra740\validate.bat` | Ghidra + installed extension | Writes the vectors, runs `ValidateModule.java` headless |
 | `ghidra740\coverage.bat` | ROM | Writes `ghidra740/coverage/corpus.cov` |
-| `ghidra740\rebuild.bat` | ROM, Ghidra + extension | Rebuilds `apollo_ghidra/`, runs `CheckProject.java` |
-| `ghidra740\dump.bat` | the rebuilt project | `DumpProject.java`: per-function disassembly + decompiled C → `build/ghidra740/dump/` |
-| `ghidra740\export.bat` | the project | `ExportAnnotations.java`: writes GUI/MCP edits back to the annotation files |
+| `ghidra740\rebuild.bat` | ROM, Ghidra + extension | Rebuilds the headless scratch project `build/ghidra740/project/`, runs `CheckProject.java` |
+| `ghidra740\dump.bat` | the scratch project | `DumpProject.java`: per-function disassembly + decompiled C → `build/ghidra740/dump/` |
+| MCP: import + `BuildProject.java` + `CheckProject.java` | Ghidra open, extension installed | Rebuilds `UK_V2.01_4.04` in the open GUI project (§5.4) |
+| MCP: `run_ghidra_script ExportAnnotations.java` | Ghidra open | Writes GUI/MCP edits back to the annotation files |
 
 **The labelling loop.** It runs one subsystem at a time and works without the GUI, so subagents
 can do it:
@@ -242,9 +280,11 @@ can do it:
    the emulator.
 3. Edit that subsystem's annotation file.
 4. Run `rebuild.bat` and read `check.txt`. Repeat until the subsystem's addresses pass criteria 3–5.
+5. Refresh the GUI project over MCP (§5.4), so the user sees the new names.
 
 The GUI and MCP stay available for exploration. Anything named there is brought back with
-`export.bat` before it is committed.
+`ExportAnnotations.java` over MCP before it is committed, and before the GUI program is rebuilt.
+Rebuilding the GUI program replaces it.
 
 **Subsystem order:**
 1. boot, bank and ISR (mostly known from M1);
@@ -266,7 +306,9 @@ The GUI and MCP stay available for exploration. Anything named there is brought 
 - **Module:** `validate.bat` (§4).
 - **Project:** `CheckProject.java` (§6).
 - **Round trip:** a rebuild followed by an export, with no edits in between, leaves the annotation
-  files byte-identical. This is checked by `rebuild.bat` when it is run with `--roundtrip`.
+  files byte-identical. `ExportAnnotations.java` takes an output directory. `rebuild.bat --roundtrip`
+  exports the scratch project to `build/ghidra740/export/` and compares the result with
+  `ghidra740/annotations/`.
 - **Unchanged goldens:** the goldens and all existing suites stay unchanged. M3 does not touch the
   emulator's behaviour, and the coverage hook is off by default.
 
@@ -280,6 +322,9 @@ The GUI and MCP stay available for exploration. Anything named there is brought 
 
 ## 10. Risks
 
+- **GUI restarts:** a running Ghidra does not load new or changed SLEIGH languages, so SLEIGH work
+  is validated headless, and the GUI is restarted once the module passes. The plan asks the user to
+  restart Ghidra at that point. It is the one manual step.
 - **JDK 27:** Ghidra 12.1.3 targets JDK 21. If headless runs misbehave on JDK 27, the `.bat`
   wrappers pin JDK 23 through `JAVA_HOME`.
 - **Undecodable regions:** some bytes may be unreachable both statically and dynamically and still
