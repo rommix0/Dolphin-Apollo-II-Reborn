@@ -537,6 +537,20 @@ x rom AB23
 x rom AB25
 x rom AB28
 x rom AB2B
+x rom AB2E
+x rom AB30
+x rom AB32
+x rom AB35
+x rom AB36
+x rom AB37
+x rom AB38
+x rom AB3A
+x rom AB3D
+x rom AB3F
+x rom AB42
+x rom AB44
+x rom AB47
+x rom AB4A
 x rom AB4D
 x rom AB50
 x rom AB52
@@ -570,6 +584,8 @@ x rom AB8E
 x rom AB90
 x rom AB93
 x rom AB96
+x rom AB99
+x rom AB9C
 x rom AB9F
 x rom ABA2
 x rom ABA4
@@ -577,9 +593,17 @@ x rom ABA6
 x rom ABA8
 x rom ABAA
 x rom ABAC
+x rom ABBE
+x rom ABC1
+x rom ABC4
+x rom ABC7
+x rom ABCA
+x rom ABCD
+x rom ABD0
 x rom ABD3
 x rom ABD6
 x rom ABD9
+x rom ABDC
 x rom ABDF
 x rom ABE1
 x rom ABE2
@@ -1731,6 +1755,10 @@ x rom BB96
 x rom BB99
 x rom BB9A
 x rom BB9D
+x rom BBA0
+x rom BBA2
+x rom BBA4
+x rom BBA6
 x rom BBA7
 x rom BBAA
 x rom BBAB
@@ -2622,6 +2650,21 @@ x rom C442
 x rom C444
 x rom C446
 x rom C449
+x rom C44C
+x rom C44E
+x rom C450
+x rom C452
+x rom C454
+x rom C456
+x rom C45C
+x rom C45D
+x rom C45F
+x rom C461
+x rom C462
+x rom C464
+x rom C466
+x rom C468
+x rom C46A
 x rom C46C
 x rom C46D
 x rom C46F
@@ -2638,6 +2681,25 @@ x rom C47E
 x rom C47F
 x rom C481
 x rom C482
+x rom C483
+x rom C486
+x rom C489
+x rom C48B
+x rom C48D
+x rom C48F
+x rom C492
+x rom C495
+x rom C497
+x rom C49A
+x rom C49C
+x rom C49F
+x rom C4A1
+x rom C4A4
+x rom C4A9
+x rom C4AC
+x rom C4AE
+x rom C4B0
+x rom C4B2
 x rom C4DD
 x rom C4DE
 x rom C4DF
@@ -2718,6 +2780,35 @@ x rom C57B
 x rom C57C
 x rom C57F
 x rom C580
+x rom C5A4
+x rom C5A5
+x rom C5A6
+x rom C5A7
+x rom C5A8
+x rom C5A9
+x rom C5AB
+x rom C5AE
+x rom C5B0
+x rom C5B3
+x rom C5B5
+x rom C5B8
+x rom C5BA
+x rom C5BC
+x rom C5BE
+x rom C5C1
+x rom C5C2
+x rom C5C3
+x rom C5C5
+x rom C5C7
+x rom C5C9
+x rom C5CB
+x rom C5CD
+x rom C5D0
+x rom C5D1
+x rom C5D2
+x rom C5D3
+x rom C5D4
+x rom C5D5
 x rom C5D6
 x rom C5D7
 x rom C5DE
@@ -2989,6 +3080,10 @@ x rom CBD6
 x rom CBD8
 x rom CBF1
 x rom CBF3
+x rom CBF5
+x rom CBF7
+x rom CBFA
+x rom CBFD
 x rom CC00
 x rom CC02
 x rom CC0C
@@ -3940,12 +4035,19 @@ e rom A8BA rom AA61
 e rom A8BA rom AA74
 e rom A8BA rom AAF5
 e rom A8BA rom AB05
+e rom A8BA rom AB2E
 e rom A8BA rom AB4D
 e rom A8BA rom AB5D
 e rom A8BA rom AB70
+e rom A8BA rom AB99
 e rom A8BA rom AB9F
+e rom A8BA rom ABBE
 e rom A8BA rom ABD3
+e rom A8BA rom ABDC
+e rom BB9D rom BBA0
 e rom BB9D rom BBA7
 e rom BB9D rom BC80
 e rom BB9D rom BCEA
 e rom BB9D rom BCED
+e rom C46A rom C483
+e rom C46A rom C495
