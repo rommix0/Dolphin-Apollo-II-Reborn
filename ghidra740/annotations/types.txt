@@ -1,0 +1,20 @@
+# Struct types used by the annotations (format: M3 spec §5.3; struct NAME SIZE / field STRUCT OFFSET NAME TYPE)
+struct frame20                     20  One DSP frame: ten little-endian words (parent spec §1.4)
+field  frame20                      0  alf                      byte       b0 low-frequency amplitude
+field  frame20                      1  fn                       byte       b1 nasal/low resonance frequency
+field  frame20                      2  a1                       byte       b2
+field  frame20                      3  f1                       byte       b3
+field  frame20                      4  a2                       byte       b4
+field  frame20                      5  f2                       byte       b5
+field  frame20                      6  a3                       byte       b6
+field  frame20                      7  f3                       byte       b7
+field  frame20                      8  ahf                      byte       b8 high-frequency amplitude
+field  frame20                      9  voicing                  byte       b9 degree of voicing 1..63
+field  frame20                     10  pitch_code               byte       b10 period = 160 - 2*code samples
+field  frame20                     11  mark_space               byte       b11 mark-space ratio (@M)
+field  frame20                     12  const17                  byte       b12 always $17
+field  frame20                     13  transitions              byte       b13 transition flags
+field  frame20                     14  b14_15                   word       from tables $B573/$B673
+field  frame20                     16  source                   byte       b16 voicing source (@$)
+field  frame20                     17  filter                   byte       b17 voice filter (@$)
+field  frame20                     18  end_marker               word       always $FFFF

@@ -1,0 +1,8 @@
+# Reset, start-up and the interrupt vectors (parent spec §1.1)
+rom      A61C  func      boot_reset                     -              RESET entry: SFR set-up, RAM init, RAMCODE copy, main loop
+rom      FFF4  data      vec_int4_timerx                ptr            INT4 Timer X / CNTR
+rom      FFF6  data      vec_int3_step                  ptr            INT3 stepper counters
+rom      FFF8  data      vec_int2_timers                ptr            INT2 timers 1-3 (timer 3 = DSP tick)
+rom      FFFA  data      vec_int1_serial                ptr            INT1 _INT1 pin and UART receive
+rom      FFFC  data      vec_int0                       ptr            INT0 _INT2 pin
+rom      FFFE  data      vec_reset                      ptr            RESET

@@ -1,0 +1,29 @@
+# M50734 special function registers $DA-$FF (parent spec §1.3; MAME m50734.cpp)
+ram      00DC  data      T1_PRE                         byte           timer 1 prescaler
+ram      00DD  data      T1_RELOAD                      byte           timer 1 reload
+ram      00DE  data      T2_PRE                         byte           timer 2 prescaler (startup delay)
+ram      00DF  data      T2_RELOAD                      byte           timer 2 reload
+ram      00E0  data      T3_PRE                         byte           timer 3 prescaler: 0 -> 10 kHz DSP tick
+ram      00E1  data      T3_RELOAD                      byte           timer 3 reload: $31 -> 200 CPU cycles
+ram      00E4  data      UART_TX                        byte           UART transmit (write only)
+ram      00E5  data      UART_RX                        byte           UART receive data
+ram      00E6  data      UART_CTRL                      byte           UART control, bit 4 = RX interrupt enable
+ram      00E7  data      UART_STATUS                    byte           bit 1 TX ready, bits 2-4 errors
+ram      00E9  data      AD_CTRL                        byte           A/D control
+ram      00EA  data      AD_DATA                        byte           A/D data
+ram      00EB  data      P4                             byte           port P4 input; bits 0-3 DIP switches
+ram      00ED  data      P23_FUNC                       byte           P2/P3 function
+ram      00EE  data      P3                             byte           port P3 data; bits 1-2 baud jumpers
+ram      00EF  data      P3_DIR                         byte           port P3 direction
+ram      00F0  data      P2                             byte           port P2: bit0 DSP reset, bits2-6 ROM bank ($70 main), bit7 lower-ROM window
+ram      00F1  data      P2_DIR                         byte           port P2 direction
+ram      00F2  data      P1_LATCH                       byte           port P1 latched input (parallel data)
+ram      00F3  data      P1                             byte           port P1 data
+ram      00F4  data      P1_DIR                         byte           port P1 direction
+ram      00F5  data      P0_FUNC                        byte           port P0 function
+ram      00F6  data      P0                             byte           port P0 data; bit 5 host busy line
+ram      00F7  data      P0_DIR                         byte           port P0 direction
+ram      00FB  data      UART_BAUD                      byte           UART baud rate
+ram      00FD  data      ICR3                           byte           interrupt control 3: enable/request bit pairs
+ram      00FE  data      ICR2                           byte           interrupt control 2: bit 4/5 timer 3 enable/request
+ram      00FF  data      ICR1                           byte           interrupt control 1: bit 0/1 _INT1 enable/request
