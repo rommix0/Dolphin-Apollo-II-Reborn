@@ -184,6 +184,7 @@ public class Annot {
                 if (!names.add(r.name)) errors.add(r.where() + ": duplicate name " + r.name);
                 if (!namedAt.add(at)) errors.add(r.where() + ": a second named record at " + at);
             }
+            if (r.kind.equals("comment") && r.comment.isEmpty()) errors.add(r.where() + ": a comment record needs text");
             if (!r.kind.equals("func") && !r.kind.equals("entry") && !r.comment.isEmpty() && !eolAt.add(at))
                 errors.add(r.where() + ": a second EOL comment at " + at);
             boolean typed = r.kind.equals("data") || r.kind.equals("jumptable");
