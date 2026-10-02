@@ -2,7 +2,7 @@
 rom      A61C  func      boot_reset                     -              RESET: port set-up, zero page $01-$C9 cleared, settings, ports and UART by DIP switch, self-test sound, RAMCODE copy and bank scan, then the main loop (boot_loop_text, prosody $CA92, boot_loop_play)
 rom      A665  label     boot_reentry_cold              -              cold re-entry from another bank (bank_entry_cold): DIP switches and settings again, then boot_reentry_warm
 rom      A66B  label     boot_reentry_warm              -              warm re-entry from another bank (bank_entry_warm) and the tail of boot_reset: interrupts on, RAMCODE copy, bank scan, main loop
-rom      A68D  func      boot_loop_text                 -              main loop step 1: wait for and take one clause of input (boot_get_clause), then the command scan $ACFA and text conversion $B1E6
+rom      A68D  func      boot_loop_text                 -              main loop step 1: wait for and take one clause of input (boot_get_clause), then the command scan cmd_scan_clause and text conversion tn_convert_clause
 rom      A697  func      boot_get_clause                -              wait (isr_idle) until the input ring ($3C read, $3E write) holds data, then copy one clause into $1B00 up to CR, punctuation or the length limit; X = length, also stored in $54
 rom      A742  func      boot_set_defaults              -              power-up defaults of the @-command settings in zero page and $1200/$1486/$1827, then $2014 work area cleared ($A7DF) and boot_load_prosody_defaults
 rom      A79F  func      boot_selftest_sound            -              self-test (boot_selftest), queue the OK or FAIL sound command string (boot_queue_string) and speak it at once through the main loop steps

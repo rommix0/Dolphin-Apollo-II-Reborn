@@ -79,7 +79,7 @@ rom      A7FE  func      cmd_select_voice_a             -              cmd_speak
 rom      A814  func      cmd_select_voice_b             -              cmd_speaker = 1; as cmd_select_voice_a with voice B (count $E5E2, data $E5E3)
 rom      A832  func      cmd_apply_pitch                -              $1815 = cmd_source * 16 + cmd_prosody, $1816 = cmd_pitch * 16, then $B3A4 recomputes the voice set-up; A preserved
 rom      A84A  func      cmd_apply_speed                -              from cmd_speed (1-9): cmd_speed_limit = cmd_speed_limits[speed-1], cmd_speed_map = cmd_speed_maps[speed-1]; A, Y preserved
-rom      A868  func      cmd_put_phonetic               -              append the length-prefixed phonetic text at ($20) to the phonetic buffer ($B154); A, Y preserved
+rom      A868  func      cmd_put_phonetic               -              append the length-prefixed phonetic text at ($20) to the phonetic buffer tn_phonetic (tn_append_phonetic); A, Y preserved
 rom      A876  func      cmd_say_phonetic               -              speak the length-prefixed phonetic text at ($20) at once: cmd_put_phonetic, prosody ($CA92), boot_loop_play
 rom      A880  func      cmd_run_due                    -              X = the clause position being converted: run every queued deferred command whose position cmd_next_pos equals X (cmd_run_next)
 rom      A893  func      cmd_run_next                   -              dispatch the next deferred command (cmd_next): cmd_vector from cmd_handlers, cmd_next += 1, cmd_next_pos from cmd_positions, X = its argument index from cmd_arg_index, A = boot_clause[X]; JMP (cmd_vector); every handler ends at cmd_run_done
