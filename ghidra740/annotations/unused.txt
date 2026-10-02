@@ -1,10 +1,13 @@
 # Padding and unused areas (unused_XXXX)
 rom      8FF4  data      unused_8FF4                    byte[2060]     padding ($FF) after the last ROM two-letter rule list (lts_rules_j)
+rom      9824  data      unused_9824                    byte           a $00 after cmd_version_engine_text (a length-prefixed text, so no reader stops at it) and before lts_suffixes, whose code base is $9825; nothing reads it (cmd_version_lang_text is followed by one too, unused_F77B)
 rom      A397  data      unused_A397                    byte[617]      padding ($FF) after the phoneme lists (the last is that of symbol $FF), up to bank_load_ramcode
 rom      B0C2  data      unused_B0C2                    byte           an RTS that no path reaches, after the symbol dispatch of lts_match_symbol
 rom      B77D  data      unused_B77D                    byte[6]        unreferenced bytes after frm_snapshot_map in its 16-byte slot (they decode like a leftover code fragment); nothing reads them, frm_build_rest_frame reads frm_template from frm_template_base + 1
 rom      B7A1  data      unused_B7A1                    byte[6]        zero bytes after par_slot_map (a 16-byte slot with 10 used); nothing reads them
 rom      B7B1  data      unused_B7B1                    byte[198]      unreferenced leftover up to par_play: zero bytes after par_target_bias, a short ASCII fragment and rows of small values; no code or pointer reaches it
+rom      C675  data      unused_C675                    byte[6]        unreferenced bytes after boot_prosody_defaults in its 32-byte slot (26 used): a few small signed values that nothing reads (boot_load_prosody_defaults copies 26 bytes, and no other code or pointer reaches them)
+rom      F77B  data      unused_F77B                    byte[2133]     a $00 after the length-prefixed cmd_version_lang_text (nothing reads it), then $FF padding up to the bank header bank_entry_cold at $FFD0
 rom      FFD7  data      unused_FFD7                    byte           bank header padding (a NOP byte) between the warm and reset entries
 rom      FFDB  data      unused_FFDB                    byte[5]        bank header padding ($FF)
 rom      FFEE  data      unused_FFEE                    byte[6]        bank header padding ($FF) before the vectors

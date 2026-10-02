@@ -82,7 +82,7 @@ ram      0077  data      tn_resume_pos                  byte           cmd_text 
 ram      0100  data      boot_stack                     byte[256]      hardware stack page; ser_tx_put, cmd_upcase and ser_hex_digits reach their callers' bytes through it (TSX, abs,X)
 ram      0200  data      pros_seg_phoneme               byte[1024]     segment array: phoneme per segment, indexed by the 16-bit segment index pros_seg_count through pros_phoneme_ptr (pros_append_segment, playback); its first $1FF bytes are also the RAM copy of bank_ramcode_image (RAMCODE space, $0200-$03FE) made at boot and by @=, which the segments overwrite
 ram      0208  label     bank_ramcode_ram_alt           -              RAM copy of bank_p2_table_alt (base read by bank_select)
-ram      02FF  label     bank_ramcode_ram_hi            -              second half of the RAMCODE copy, written by bank_load_ramcode's second loop
+ram      02FF  label     bank_ramcode_ram_hi            -              second half of the RAMCODE copy, written by the second copy (base $02FF,X) inside bank_load_ramcode's one loop
 ram      0600  data      pros_seg_duration              byte[1024]     segment array: duration in frames per segment (after the speed map), indexed like pros_seg_phoneme
 ram      0A00  data      pros_seg_pitch                 byte[1024]     segment array: pitch target per segment (pros_target + cmd_pitch_step; pauses repeat pros_last_target), 128 = the @F centre at playback (pros_scale_target)
 ram      0E00  data      pros_seg_flags                 byte[1024]     segment array: flags per segment, always $80 from the generator; playback never reads them
@@ -90,7 +90,7 @@ ram      1200  data      cmd_ev_count                   byte           command e
 ram      1201  data      cmd_ev_next                    byte           next command event to run (cmd_run_event)
 ram      1202  data      cmd_ev_pos                     word           phonetic position of the following command event
 ram      1204  data      cmd_ev_vector                  ptr            handler of the running command event (JMP ($1204) in cmd_run_event)
-ram      1206  data      cmd_ev_positions               word[128]      phonetic position ($53 at queueing) per command event
+ram      1206  data      cmd_ev_positions               word[128]      phonetic position (tn_phon_len at queueing) per command event
 ram      1306  data      cmd_ev_handlers                ptr[128]       handler per command event: cmd_ev_index, cmd_ev_sound_start, cmd_ev_sound_end, cmd_ev_set_voicing, cmd_ev_set_volume
 ram      1406  data      cmd_ev_args                    byte[128]      argument per command event
 ram      1486  data      cmd_count                      byte           deferred commands queued by cmd_scan_clause
@@ -103,7 +103,8 @@ ram      160B  data      cmd_arg_index                  byte[128]      boot_clau
 ram      168B  data      pros_params                    byte[26]       26 prosody parameters, one per letter A-Z (@R letter command, $A9DC); power-up values from boot_prosody_defaults. Five per phrase type (start baseline, end baseline, stress, nucleus and final terms): A-E for . and ; (also the default), F-J for , and :, K-O for ?, P-T for ! (pros_mark_phrases); U first symbol of a word, V word-final step, W accent, Y later stresses of a word, Z later symbols of a word (pros_phrase_gen); X has no reader
 ram      16A5  data      isr_frame_a                    frame20        ping-pong DSP frame A, sent by the timer ISR
 ram      16B9  data      isr_frame_b                    frame20        ping-pong DSP frame B, sent by the timer ISR
-ram      16CD  data      frm_snap                       byte[10]       producer-frame bytes b10, AHF, A3, A2, A1, ALF, FN, F1, F2, F3 of the latest frame (frm_snapshot via frm_snapshot_map; par_reset_tracks loads it from frm_rest_frame); read 0-based as $16CD,Y and 1-based as $16CC,X (the base is the last byte of isr_frame_b)
+ram      16CC  label     frm_snap_base                  -              1-based base of frm_snap, accessed as $16CC,X / $16CC,Y with an index 1-10 (frm_snapshot, par_reset_tracks); the address is the last byte (end marker) of isr_frame_b
+ram      16CD  data      frm_snap                       byte[10]       producer-frame bytes b10, AHF, A3, A2, A1, ALF, FN, F1, F2, F3 of the latest frame (frm_snapshot via frm_snapshot_map; par_reset_tracks loads it from frm_rest_frame); read 0-based as $16CD,Y and 1-based through frm_snap_base ($16CC, the last byte of isr_frame_b)
 ram      16DC  label     frm_snap_prev_base             -              1-based base of frm_snap_prev, written as $16DC,Y with Y = 1-10 by frm_snapshot
 ram      16DD  data      frm_snap_prev                  byte[10]       frm_snap of the frame before, for the b13 transition flags (frm_transition_flags)
 ram      16EC  data      par_boundary                   byte[11]       per parameter P1..P10 (1-based, entry 0 unused): value at the end of the playing segment, the boundary with the next phoneme (par_store_boundary); the next segment's tracks start from it
@@ -124,6 +125,7 @@ ram      17CF  data      par_frames_left                byte           frames le
 ram      17D0  data      par_next_phoneme               byte           phoneme of the segment at par_seg_index, the one after the playing segment (its pitch target is the one pros_play_pitch moves to)
 ram      17D1  data      par_cur_phoneme                byte           phoneme of the playing segment, whose P1..P10 targets are in par_seg_target
 ram      17D2  data      par_seg_index                  word           segment index of par_next_phoneme, counted up from 0 (par_read_segment); command events run when it reaches their position
+ram      17D4  data      cmd_sound_seg_index            word           par_seg_index saved by cmd_ev_sound_start while a @T sound effect plays, restored by cmd_ev_sound_end
 ram      17D6  data      par_next_rank                  byte           par_table rank of par_next_phoneme
 ram      17D7  data      par_cur_rank                   byte           par_table rank of par_cur_phoneme
 ram      17D8  data      par_trans_dur                  byte           transition duration being set up: the end transition of the playing segment (par_store_boundary)
@@ -131,14 +133,14 @@ ram      17D9  data      par_target_phoneme             byte           the domin
 ram      17DA  data      par_dominant_phoneme           byte           the dominating phoneme of the boundary, whose fixed contribution, proportion and durations are taken
 ram      17DB  data      par_fixed                      byte           fixed contribution of the dominant phoneme, with its share of the @u offset (par_read_dominance)
 ram      17DC  data      par_prop                       byte           proportion 0-8 of the dominant phoneme (par_read_dominance)
-ram      17DD  data      par_dom_target                 byte           target of the dominated phoneme + @u offset, clamped (par_read_dominance)
+ram      17DD  data      par_dominated_target           byte           target of the dominated phoneme + @u offset, clamped (par_read_dominance)
 ram      17DE  data      par_bias_sum                   byte           par_boundary_value: running sum of the par_target_bias halves
-ram      17DF  data      par_target_x2                  byte           par_boundary_value: par_dom_target * 2
-ram      17E0  data      par_target_half                byte           par_boundary_value: par_dom_target / 2
+ram      17DF  data      par_target_x2                  byte           par_boundary_value: par_dominated_target * 2
+ram      17E0  data      par_target_half                byte           par_boundary_value: par_dominated_target / 2
 ram      17E1  data      par_bias_x2                    byte           par_boundary_value: par_target_bias * 2
 ram      17E2  data      par_bias_half                  byte           par_boundary_value: par_target_bias / 2
 ram      17E3  data      par_prop_low                   byte           par_boundary_value: proportion bits 0-1 (the count of halves to add)
-ram      17E4  data      par_target_sum                 byte           par_boundary_value: running sum of the par_dom_target halves
+ram      17E4  data      par_target_sum                 byte           par_boundary_value: running sum of the par_dominated_target halves
 ram      17E5  data      util_interp_quot               byte           util_interp_step: the rounded quotient added to the current value
 ram      17E6  data      util_interp_steps              byte           util_interp_step: steps left (the divisor; halved for rounding)
 ram      17E7  data      util_interp_cur                byte           util_interp_step: current value of the track
@@ -150,11 +152,12 @@ ram      17ED  data      pros_play_target               byte           pitch tar
 ram      17EE  data      pros_play_pitch                byte           current pitch, interpolated towards pros_play_target once per frame; frame byte b10 = pros_play_pitch / 4
 ram      17F0  data      pros_pitch_err                 byte           rounding error of the unreferenced pros_pitch_code_dither; cleared at playback start, otherwise unused
 ram      17F6  data      pros_seg_count                 word           segment index: write index of the generator (pros_append_segment, pauses), the last segment's index after pros_phrase_gen; counted down by playback
+ram      17F8  data      cmd_sound_state                byte[8]        playback state saved by cmd_ev_sound_start and restored by cmd_ev_sound_end: pros_seg_count (2 bytes), cmd_voicing, pros_pitch_centre, cmd_source_prosody, pros_play_target, par_next_rank, par_next_phoneme
 ram      1800  data      cmd_sound_save                 ptr[4]         the playback array pointers pros_phoneme_ptr..pros_flags_ptr saved by cmd_ev_sound_start and restored by cmd_ev_sound_end
 ram      1810  data      par_row_len                    byte           N, the row length of the selected par_table (par_setup_voice)
 ram      1815  data      cmd_source_prosody             byte           cmd_source * 16 + cmd_prosody (cmd_apply_pitch); bits 0-2 = @R for pros_scale_target, the source bits for isr_speech_start
 ram      1816  data      pros_pitch_centre              byte           cmd_pitch * 16 (cmd_apply_pitch): the @F centre around which pros_scale_target scales the targets
-ram      1817  data      frm_source_index               byte           @$ bits 1-2 (cmd_source_prosody bits 5-7, set by isr_speech_start): index into frm_source_codes for b16
+ram      1817  data      frm_source_index               byte           @$ bits 1-2 (cmd_source_prosody bits 5-6, rolled in with bit 7, which is always 0; set by isr_speech_start): index into frm_source_codes for b16
 ram      1818  data      frm_filter_index               byte           @$ bit 0 (cmd_source_prosody bit 4, set by isr_speech_start): index into frm_filter_codes for b17
 ram      1819  data      bank_ver_major                 byte           copy of bank_hdr_version major ($FFE0), compared by bank_enter before entering another bank
 ram      181B  data      bank_ver_minor                 byte           copy of bank_hdr_version minor ($FFE1), compared by bank_enter
