@@ -64,7 +64,7 @@ ghidra740/module/MELPS740/
   ghidra_scripts/          BuildProject, CheckProject, DumpProject, ExportAnnotations, ValidateModule (.java)
   data/languages/m740.slaspec   derived from Ghidra's 6502.slaspec (not 65c02: the opcode maps differ)
   data/languages/m740.ldefs     id MELPS740:LE:16:default
-  data/languages/m740.pspec     SFR labels $DA–$FF (parent §1.3), vectors $FFF4–$FFFF
+  data/languages/m740.pspec     program counter only; SFR and vector labels come from annotations (sfr.txt, boot.txt)
   data/languages/m740.cspec     JSR/RTS calling convention, stack in page 1
 ghidra740/install.bat          sleigh.bat → .sla, then mirror the module into %APPDATA%\ghidra\ghidra_12.1.3_PUBLIC\Extensions\MELPS740
 ```
@@ -83,6 +83,9 @@ ghidra740/install.bat          sleigh.bat → .sla, then mirror the module into 
   T-mode addressing is not modelled. The project check (§6) fails if SET appears in the ROM.
 - **Decimal mode:** not modelled, as in Ghidra's 6502 and our `cpu740` (which faults on D=1
   arithmetic). Validation vectors use D=0.
+- **Stack:** SP is 16-bit with SH = 1, as in Ghidra's 6502 module, which keeps the decompiler's stack analysis
+  working. Stack-page wrap is not modelled; the firmware never wraps, and validation vectors keep S in
+  `$10–$EF`. *(Plan ruling 2026-10-02.)*
 - **Special instructions:** WIT and STP become custom pcodeops (`wait()`, `stop()`). WIT does not
   end the flow, because in the firmware it falls through after an interrupt.
 
@@ -115,10 +118,10 @@ It prints one line per mismatch and a summary, and exits non-zero on any mismatc
 
 ## 5. The project rebuild
 
-### 5.1 Emulator coverage (`apollo2_frames --coverage FILE`)
+### 5.1 Emulator coverage (`apollo2_coverage`)
 
-`machine` gets an optional per-instruction hook. With `--coverage FILE`, `apollo2_frames` records
-across the run:
+`machine` gets an optional per-instruction hook (`machine_config.coverage`). A dedicated dev tool,
+`apollo2_coverage`, runs boot plus every golden-corpus text with the hook on, and records:
 
 - every executed instruction address, tagged with its space:
   - `rom` for main ROM and the default `$4000–$7FFF` window;
@@ -127,9 +130,12 @@ across the run:
   - `ram` for any other RAM;
 - every observed target of an indirect `JMP`/`JSR`, together with the address of the jump.
 
-The file is merged across runs (a union) and sorted, one record per line. `ghidra740/coverage.bat`
-runs the whole corpus (`tests/corpus/*.txt` plus boot) and writes
-`ghidra740/coverage/corpus.cov`. That file is committed: it holds only addresses.
+The output is the union over all runs, sorted, one record per line. `ghidra740/coverage.bat` runs
+the tool and writes `ghidra740/coverage/corpus.cov`. That file is committed: it holds only
+addresses.
+
+*(Plan ruling 2026-10-02:* this replaces `apollo2_frames --coverage`, because the corpus texts hold
+control bytes that a `.bat` loop cannot pass on a command line.)
 
 Execution in `ram` other than `ramcode` is reported as a finding. None is expected.
 
@@ -138,7 +144,7 @@ Execution in `ram` other than `ramcode` is reported as a finding. None is expect
 | Block | Space | Range | Source |
 |---|---|---|---|
 | `ZP` | default | `$0000–$00D9` | uninitialised RAM |
-| `SFR` | default | `$00DA–$00FF` | volatile, labelled from the pspec |
+| `SFR` | default | `$00DA–$00FF` | volatile, labelled from `sfr.txt` |
 | `RAM` | default | `$0100–$3FFF` | uninitialised RAM |
 | `ROM_LO` | default | `$4000–$7FFF` | file `0x4000–0x7FFF` (P2.7 = 0) |
 | `ROM` | default | `$8000–$FFFF` | file `0x8000–0xFFFF` (bank `$70`) |
@@ -157,7 +163,10 @@ There is one file per subsystem, following the split in parent §6.6:
 - `ram.txt` for RAM variables;
 - `types.txt` for struct definitions.
 
-Each line is one record: tab-separated fields, `#` starts a comment, and blank lines are ignored.
+Each line is one record: whitespace-separated fields, with the comment taking the rest of the line. Only a
+first-line `#` header survives an export. Other `#` lines and blank lines are ignored on load and dropped by
+`rebuild.bat --format`. The plan (2026-10-02) fixes the exact field rules, `ptrm1[n]` jumptables (tables of
+target − 1) and the extra files `sfr.txt`, `util.txt`, `unused.txt` and `new.txt`.
 
 ```
 # space    addr   kind      name                 type          comment
@@ -198,7 +207,9 @@ annotated as a `func` or `entry`.
 ### 5.4 Build order (`BuildProject.java`)
 
 The program is always created the same way: the ROM is imported raw, with language
-`MELPS740:LE:16:default`, base `$0000` and no auto-analysis, into a program named `UK_V2.01_4.04`.
+`MELPS740:LE:16:default`, base `$0000` and no auto-analysis. The program is named after the file,
+`UK_V2.01_4.04_ROM.BIN`. The scripts find the repo through the `repo.txt` that `install.bat` writes
+into the installed extension.
 `BuildProject.java` then runs on that freshly imported program:
 
 1. Replace the single imported block with the blocks of §5.2. Their bytes are taken from the imported
@@ -208,11 +219,12 @@ The program is always created the same way: the ROM is imported raw, with langua
    - the reset and interrupt vectors;
    - every `func`, `entry` and `jumptable` target;
    - every address in `corpus.cov`.
-4. Run Ghidra's auto-analysis, with the disassembly analysers that guess at unknown bytes turned
-   off. Code only comes from the seeds above.
+4. No auto-analysis runs. Code comes only from the seeds above, which keeps the rebuild
+   deterministic. *(Plan ruling 2026-10-02.)*
 5. Create functions at the `func` addresses and at every call target, then apply the names and plate
    comments.
-6. Run `CheckProject.java` (§6) and write `build/ghidra740/check.txt`.
+6. `BuildProject.java` writes its errors to `build/ghidra740/build.txt`. `CheckProject.java` (§6) reports
+   them as criterion 0 and writes `build/ghidra740/check.txt`.
 
 There are two targets, built by the same scripts:
 
@@ -222,7 +234,7 @@ There are two targets, built by the same scripts:
     `BuildProject.java` and then `CheckProject.java` as post-scripts.
   - It never touches the GUI project, so it works while Ghidra is open.
 - **The GUI project** `apollo_disasm` (`apollo_ghidra/`), the user's working view, rebuilt over MCP
-  while Ghidra is open. If a program `UK_V2.01_4.04` already exists it is deleted (`delete_file`)
+  while Ghidra is open. If a program `UK_V2.01_4.04_ROM.BIN` already exists it is deleted (`delete_file`)
   after any edits have been exported. Then:
   1. `import_file` with the ROM, the language above and `auto_analyze=false`;
   2. `run_ghidra_script BuildProject.java`;
@@ -270,7 +282,7 @@ The check report lists each criterion with PASS/FAIL and the offending addresses
 | `ghidra740\coverage.bat` | ROM | Writes `ghidra740/coverage/corpus.cov` |
 | `ghidra740\rebuild.bat` | ROM, Ghidra + extension | Rebuilds the headless scratch project `build/ghidra740/project/`, runs `CheckProject.java` |
 | `ghidra740\dump.bat` | the scratch project | `DumpProject.java`: per-function disassembly + decompiled C → `build/ghidra740/dump/` |
-| MCP: import + `BuildProject.java` + `CheckProject.java` | Ghidra open, extension installed | Rebuilds `UK_V2.01_4.04` in the open GUI project (§5.4) |
+| MCP: import + `BuildProject.java` + `CheckProject.java` | Ghidra open, extension installed | Rebuilds `UK_V2.01_4.04_ROM.BIN` in the open GUI project (§5.4) |
 | MCP: `run_ghidra_script ExportAnnotations.java` | Ghidra open | Writes GUI/MCP edits back to the annotation files |
 
 **The labelling loop.** It runs one subsystem at a time and works without the GUI, so subagents
