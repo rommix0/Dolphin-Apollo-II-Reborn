@@ -5,7 +5,7 @@ rem works while the Ghidra GUI is open. Options:
 rem   --format     afterwards rewrite ghidra740\annotations in canonical form (ExportAnnotations write)
 rem   --roundtrip  afterwards check that an export reproduces ghidra740\annotations byte for byte
 rem Reports: build\ghidra740\build.txt, check.txt, roundtrip.txt; log: build\ghidra740\rebuild.log.
-rem Exit code: 0 when check.txt says RESULT PASS (and, with --roundtrip, roundtrip.txt does too), else 1.
+rem Exit code: 0 when check.txt says RESULT PASS (and, with --roundtrip, the RESULT line in export.txt does too), else 1.
 rem With --format or --roundtrip the exit code is also 1 unless build\ghidra740\export.txt ends in EXPORT DONE.
 setlocal
 pushd "%~dp0.." || exit /b 1
@@ -36,9 +36,9 @@ if defined EXPORT findstr /b /c:"EXPORT DONE" build\ghidra740\export.txt >nul 2>
 )
 findstr /b /c:"RESULT PASS" build\ghidra740\check.txt >nul || set RC=1
 if /i "%~1"=="--roundtrip" (
-    findstr /b /c:"RESULT PASS" build\ghidra740\roundtrip.txt >nul 2>nul || (
+    findstr /b /c:"RESULT PASS" build\ghidra740\export.txt >nul 2>nul || (
         echo roundtrip:
-        type build\ghidra740\roundtrip.txt 2>nul
+        type build\ghidra740\export.txt 2>nul
         set RC=1
     )
 )

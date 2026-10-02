@@ -211,7 +211,8 @@ public class Annot {
         }
     }
 
-    /** Writes every file in canonical form: header, then records in ORDER (types.txt: structs by name). */
+    /** Writes every file in canonical form: header, then records in ORDER (types.txt: structs by name).
+     *  Any other *.txt left in dir is deleted: a file whose records are all gone must not bring them back on a rebuild. */
     public static void write(Annotations a, Path dir) throws IOException {
         Files.createDirectories(dir);
         Map<String, List<Rec>> byFile = new TreeMap<>();
@@ -220,6 +221,7 @@ public class Annot {
         Set<String> files = new TreeSet<>(byFile.keySet());
         files.addAll(a.headers.keySet());
         files.remove(TYPES_FILE);
+        Set<String> produced = new TreeSet<>(files);
         for (String f : files) {
             StringBuilder sb = new StringBuilder();
             if (a.headers.containsKey(f)) sb.append(a.headers.get(f)).append('\n');
@@ -228,8 +230,19 @@ public class Annot {
             for (Rec r : rs) sb.append(r.format()).append('\n');
             Files.writeString(dir.resolve(f), sb.toString(), StandardCharsets.UTF_8);
         }
-        if (a.structs.isEmpty() && !a.headers.containsKey(TYPES_FILE))
-            return;
+        if (!a.structs.isEmpty() || a.headers.containsKey(TYPES_FILE)) {
+            produced.add(TYPES_FILE);
+            writeTypes(a, dir);
+        }
+        try (Stream<Path> s = Files.list(dir)) {
+            for (Path p : s.collect(Collectors.toList())) {
+                String n = p.getFileName().toString();
+                if (n.endsWith(".txt") && !produced.contains(n)) Files.delete(p);
+            }
+        }
+    }
+
+    private static void writeTypes(Annotations a, Path dir) throws IOException {
         StringBuilder sb = new StringBuilder();
         if (a.headers.containsKey(TYPES_FILE)) sb.append(a.headers.get(TYPES_FILE)).append('\n');
         for (Struct s : a.structs.values()) {

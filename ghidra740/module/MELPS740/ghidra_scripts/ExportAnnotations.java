@@ -1,9 +1,10 @@
 // Writes the program's names, types, comments and seeds back to the annotation files (M3 spec §5.3).
 // Args: "write" (default) rewrites ghidra740/annotations; "check" writes build/ghidra740/export and compares
 // (build/ghidra740/roundtrip.txt). A record keeps the file it came from; new records go to new.txt.
-// build/ghidra740/export.txt ends in "EXPORT DONE" only when the run completed (rebuild.bat checks it).
-// write refuses to run on a program whose BuildProject reported errors: an export of a half-built project
-// would silently drop records.
+// build/ghidra740/export.txt ends in "EXPORT DONE" only when the run completed; in check mode it also carries the
+// verdict (DIFF lines and RESULT PASS|FAIL), and roundtrip.txt is deleted first so no stale verdict can survive.
+// Headless write refuses to run unless BuildProject completed without errors (build.txt): an export of a
+// half-built project would silently drop records. write deletes annotation files that no longer hold anything.
 //@category ghidra740
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.*;
@@ -31,10 +32,17 @@ public class ExportAnnotations extends GhidraScript {
         Files.createDirectories(done.getParent());
         Files.deleteIfExists(done);
         Path dir = root.resolve("ghidra740/annotations");
-        Path buildReport = root.resolve("build/ghidra740/build.txt");
-        if (mode.equals("write") && Files.exists(buildReport)
-                && Files.readAllLines(buildReport, StandardCharsets.UTF_8).stream().anyMatch(l -> l.startsWith("ERROR ")))
-            throw new IllegalStateException("BuildProject reported errors (build/ghidra740/build.txt): not exporting a partial project");
+        if (mode.equals("write") && isRunningHeadless()) {
+            // Headless, build.txt is this run's own BuildProject report: no report, no SUMMARY (BuildProject did not
+            // complete) or an ERROR line means the program is not the full project. In the GUI there is no such
+            // report to trust (build.txt would be whichever unrelated run wrote it last), so the caller checks.
+            Path buildReport = root.resolve("build/ghidra740/build.txt");
+            List<String> lines = Files.exists(buildReport) ? Files.readAllLines(buildReport, StandardCharsets.UTF_8) : List.of();
+            boolean built = lines.stream().anyMatch(l -> l.startsWith("SUMMARY ") && !l.equals("SUMMARY not built"));
+            if (!built || lines.stream().anyMatch(l -> l.startsWith("ERROR ")))
+                throw new IllegalStateException("BuildProject did not complete cleanly (build/ghidra740/build.txt): not exporting a partial project");
+        }
+        if (mode.equals("check")) Files.deleteIfExists(root.resolve("build/ghidra740/roundtrip.txt"));
         Annot.Annotations old = Annot.load(dir);
         for (Annot.Rec r : old.recs) {
             fileOfKey.put(key(r.space, r.addr) + ":" + r.kind, r.file);
@@ -70,7 +78,7 @@ public class ExportAnnotations extends GhidraScript {
         sb.append(sb.length() == 0 ? "RESULT PASS\n" : "RESULT FAIL\n");
         Files.writeString(root.resolve("build/ghidra740/roundtrip.txt"), sb.toString(), StandardCharsets.UTF_8);
         println("ExportAnnotations check: " + sb.toString().replace('\n', ' '));
-        Files.writeString(done, "checked " + now.recs.size() + " records\nEXPORT DONE\n", StandardCharsets.UTF_8);
+        Files.writeString(done, "checked " + now.recs.size() + " records\n" + sb + "EXPORT DONE\n", StandardCharsets.UTF_8);
     }
 
     private static String key(String space, long addr) { return space + ":" + String.format("%04X", addr); }
