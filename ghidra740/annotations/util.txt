@@ -1,4 +1,4 @@
 # Shared helpers
-rom      C1A1  func      util_interp_step               -              one interpolation step: A = target, $17E7 = current value, Y = steps left (at least 1, also in $17E6): returns current + round((target - current) / Y); Y = 1 returns the target, Y = 2 the 9-bit average, an equal target returns $17E8 (the callers pass the target there too); used by the pitch and parameter tracks
+rom      C1A1  func      util_interp_step               -              one interpolation step: A = target, util_interp_cur = current value, Y = steps left (at least 1, also in util_interp_steps): returns current + round((target - current) / Y); Y = 1 returns the target, Y = 2 the 9-bit average, an equal target returns util_interp_target (the callers pass the target there too); used by the pitch and parameter tracks
 rom      C656  func      util_shl4                      -              A = A * 16 (one shift, then falls into util_shl3)
 rom      C657  func      util_shl3                      -              A = A * 8

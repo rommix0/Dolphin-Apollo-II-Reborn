@@ -31,6 +31,9 @@ ram      0026  data      pros_pitch_ptr                 ptr            playback 
 ram      0028  data      pros_flags_ptr                 ptr            playback array pointer: segment flags (pros_seg_flags or a sound effect's array); written, never read through
 ram      002A  data      isr_play_ptr                   ptr            timer ISR: the ping-pong frame being sent ($16A5 or $16B9)
 ram      002C  data      isr_fill_ptr                   ptr            producer pointer: the other ping-pong frame, filled by the frame builder
+ram      002E  data      par_rank_ptr                   ptr            rank row of the selected voice's par_table (par_setup_voice), indexed by phoneme
+ram      0030  data      par_row2_ptr                   ptr            the spare row of the selected par_table (par_setup_voice); never read
+ram      0032  data      par_row_ptr                    ptr            current row of the selected par_table, indexed by phoneme; moved on by par_next_row (N) and par_next_param (5N), reset to par_params_ptr
 ram      0036  data      ph_list_ptr                    ptr            phoneme list being decoded (ph_decode_symbol), indexed by Y
 ram      0038  data      lts_pair_table                 ptr            second-level table of the key letter (lts_pairs_a..z), from lts_pair_index; indexed by the second letter
 ram      003A  data      cmd_speed_map                  ptr            duration map of the current speed in cmd_speed_map_data (cmd_apply_speed)
@@ -100,15 +103,59 @@ ram      160B  data      cmd_arg_index                  byte[128]      boot_clau
 ram      168B  data      pros_params                    byte[26]       26 prosody parameters, one per letter A-Z (@R letter command, $A9DC); power-up values from boot_prosody_defaults. Five per phrase type (start baseline, end baseline, stress, nucleus and final terms): A-E for . and ; (also the default), F-J for , and :, K-O for ?, P-T for ! (pros_mark_phrases); U first symbol of a word, V word-final step, W accent, Y later stresses of a word, Z later symbols of a word (pros_phrase_gen); X has no reader
 ram      16A5  data      isr_frame_a                    frame20        ping-pong DSP frame A, sent by the timer ISR
 ram      16B9  data      isr_frame_b                    frame20        ping-pong DSP frame B, sent by the timer ISR
+ram      16EC  data      par_boundary                   byte[11]       per parameter P1..P10 (1-based, entry 0 unused): value at the end of the playing segment, the boundary with the next phoneme (par_store_boundary); the next segment's tracks start from it
+ram      16FC  data      par_start_val                  byte[11]       per parameter (1-based): start-transition track, from the previous boundary towards par_seg_target
+ram      170C  data      par_line_val                   byte[11]       per parameter (1-based): straight line from the previous boundary to par_boundary over the segment (par_track_overlap)
+ram      171C  data      par_next_start_dur             byte[11]       per parameter (1-based): start-transition duration of the next segment, set with the boundary (par_boundary_cur_dom, par_boundary_next_dom)
+ram      172C  data      par_start_dur                  byte[11]       per parameter (1-based): frames left of the start transition
+ram      173C  data      par_end_dur                    byte[11]       per parameter (1-based): frames left of the end transition towards par_boundary
+ram      174C  data      par_sequential                 byte[11]       per parameter (1-based): 1 when the start and end transitions fit apart in the segment (par_track_sequential), 0 when they overlap (par_track_overlap)
+ram      175C  data      par_end_val                    byte[11]       per parameter (1-based): end-transition track of par_track_overlap, from par_seg_target towards par_boundary
+ram      176C  data      par_end_wait                   byte[11]       per parameter (1-based): frames before the end transition starts (par_track_overlap)
+ram      177C  data      par_steady                     byte[11]       per parameter (1-based): frames the target holds between the transitions (par_track_sequential)
+ram      178D  data      par_count                      byte           phoneme count N of the selected voice table (cmd_select_voice_a/b)
+ram      178E  data      par_table_ptr                  ptr            the selected voice table, par_voice_a or par_voice_b (cmd_select_voice_a/b)
+ram      1790  data      par_spare                      word           cleared by cmd_select_voice_a/b; never read
+ram      17BF  data      par_seg_target                 byte[11]       entry 0: duration in frames of the playing segment; entries 1-10: its P1..P10 targets (par_read_segment); par_track_sequential moves an entry on to par_boundary in its end transition
+ram      17CF  data      par_frames_left                byte           frames left of the playing segment; the tracks and the pitch step use it as their step count
+ram      17D0  data      par_next_phoneme               byte           phoneme of the segment at par_seg_index, the one after the playing segment (its pitch target is the one pros_play_pitch moves to)
+ram      17D1  data      par_cur_phoneme                byte           phoneme of the playing segment, whose P1..P10 targets are in par_seg_target
+ram      17D2  data      par_seg_index                  word           segment index of par_next_phoneme, counted up from 0 (par_read_segment); command events run when it reaches their position
+ram      17D6  data      par_next_rank                  byte           par_table rank of par_next_phoneme
+ram      17D7  data      par_cur_rank                   byte           par_table rank of par_cur_phoneme
+ram      17D8  data      par_trans_dur                  byte           transition duration being set up: the end transition of the playing segment (par_store_boundary)
+ram      17D9  data      par_target_phoneme             byte           the dominated phoneme of the boundary, whose target is taken (par_read_dominance)
+ram      17DA  data      par_dominant_phoneme           byte           the dominating phoneme of the boundary, whose fixed contribution, proportion and durations are taken
+ram      17DB  data      par_fixed                      byte           fixed contribution of the dominant phoneme, with its share of the @u offset (par_read_dominance)
+ram      17DC  data      par_prop                       byte           proportion 0-8 of the dominant phoneme (par_read_dominance)
+ram      17DD  data      par_dom_target                 byte           target of the dominated phoneme + @u offset, clamped (par_read_dominance)
+ram      17DE  data      par_bias_sum                   byte           par_boundary_value: running sum of the par_target_bias halves
+ram      17DF  data      par_target_x2                  byte           par_boundary_value: par_dom_target * 2
+ram      17E0  data      par_target_half                byte           par_boundary_value: par_dom_target / 2
+ram      17E1  data      par_bias_x2                    byte           par_boundary_value: par_target_bias * 2
+ram      17E2  data      par_bias_half                  byte           par_boundary_value: par_target_bias / 2
+ram      17E3  data      par_prop_low                   byte           par_boundary_value: proportion bits 0-1 (the count of halves to add)
+ram      17E4  data      par_target_sum                 byte           par_boundary_value: running sum of the par_dom_target halves
+ram      17E5  data      util_interp_quot               byte           util_interp_step: the rounded quotient added to the current value
+ram      17E6  data      util_interp_steps              byte           util_interp_step: steps left (the divisor; halved for rounding)
+ram      17E7  data      util_interp_cur                byte           util_interp_step: current value of the track
+ram      17E8  data      util_interp_target             byte           util_interp_step: returned when the target equals the current value (callers pass the target)
+ram      17E9  data      par_start_track                byte           par_track_overlap: value of the start track this frame
+ram      17EA  data      par_end_track                  byte           par_track_overlap: value of the end track this frame
+ram      17EB  data      par_table_copy                 ptr            copy of par_table_ptr (par_setup_voice); never read
 ram      17ED  data      pros_play_target               byte           pitch target of the segment playing, after pros_scale_target and pros_microprosody
 ram      17EE  data      pros_play_pitch                byte           current pitch, interpolated towards pros_play_target once per frame; frame byte b10 = pros_play_pitch / 4
 ram      17F0  data      pros_pitch_err                 byte           rounding error of the unreferenced pros_pitch_code_dither; cleared at playback start, otherwise unused
 ram      17F6  data      pros_seg_count                 word           segment index: write index of the generator (pros_append_segment, pauses), the last segment's index after pros_phrase_gen; counted down by playback
 ram      1800  data      cmd_sound_save                 ptr[4]         the playback array pointers pros_phoneme_ptr..pros_flags_ptr saved by cmd_ev_sound_start and restored by cmd_ev_sound_end
+ram      1810  data      par_row_len                    byte           N, the row length of the selected par_table (par_setup_voice)
 ram      1815  data      cmd_source_prosody             byte           cmd_source * 16 + cmd_prosody (cmd_apply_pitch); bits 0-2 = @R for pros_scale_target, the source bits for isr_speech_start
 ram      1816  data      pros_pitch_centre              byte           cmd_pitch * 16 (cmd_apply_pitch): the @F centre around which pros_scale_target scales the targets
 ram      1819  data      bank_ver_major                 byte           copy of bank_hdr_version major ($FFE0), compared by bank_enter before entering another bank
 ram      181B  data      bank_ver_minor                 byte           copy of bank_hdr_version minor ($FFE1), compared by bank_enter
+ram      1821  data      par_param_index                byte           parameter loop counter of the boundary pass
+ram      1822  data      par_param_stride               word           5N, the distance between the rows of two parameters (par_next_param)
+ram      1824  data      par_params_ptr                 ptr            row 0 (target) of P1 in the selected par_table: par_table_ptr + 2N
 ram      1900  data      tn_phonetic                    char[256]      phonetic buffer: the clause converted to phonetic text (rule outputs, copied spaces and punctuation), length tn_phon_len; input of the prosody passes (pros_make_segments)
 ram      1A00  data      cmd_text                       char[256]      the clause without its commands, upper-cased (cmd_scan_clause); input of text conversion
 ram      1B00  data      boot_clause                    char[256]      one clause taken from the input ring by boot_get_clause (length in $54)
@@ -143,6 +190,8 @@ ram      1D00  data      pros_sym_flags                 byte[256]      per tn_ph
 ram      1E00  data      pros_sym_shorten               byte[256]      per tn_phonetic position: shortening count from the context rules (ph_decode_symbol applies (n + 1) / 2 steps of ph_dur_shorten); at a space or punctuation the word's vowel count, then at a punctuation the phrase length (pros_store_phrase_len)
 ram      1F00  data      pros_sym_lengthen              byte[256]      per tn_phonetic position: lengthening count (accent, phrase-final and context rules; ph_lengthen_count turns it into ph_dur_lengthen steps); at a space or punctuation as pros_sym_shorten, and the phrase length there is the divisor of pros_declination_step (bits 0-6)
 ram      2014  data      cmd_formant_ofs                byte[10]       @u signed offsets of the ten parameters (Fn F1 F2 F3 ALF A1 A2 A3 A4 voicing), cleared by cmd_clear_formant and @V
+ram      201E  data      par_ofs                        byte           @u offset (cmd_formant_ofs) of the parameter being bounded (par_read_dominance); also cleared by cmd_clear_formant
+ram      201F  data      par_ofs_weight                 byte           8 - proportion: the share of par_ofs added to the fixed contribution (par_read_dominance)
 ram      2020  data      ser_cmd_buf                    char[6]        zero-terminated characters of the immediate command being collected
 ram      2026  data      bank_id_table                  char[98]       14-character ID per bank 1-7 (bank_read_id); the @L reply sends it
 ram      2100  data      ser_rx_ring                    byte[6144]     input ring, pages $21-$38 (ser_rx_put, boot_get_clause)

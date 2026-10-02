@@ -21,6 +21,59 @@ field  frame20                     14  b14_15                   word       from 
 field  frame20                     16  source                   byte       b16 voicing source (@$)
 field  frame20                     17  filter                   byte       b17 voice filter (@$)
 field  frame20                     18  end_marker               word       always $FFFF
+struct par_table                 4472  Phoneme parameter table of one voice (par_voice_a, par_voice_b): 52 rows of N = 86 bytes, each indexed by phoneme: rank, a spare row, then five rows per parameter P1..P10 (5N apart)
+field  par_table                    0  rank                     byte[86]   rank: of two neighbouring phonemes the higher rank dominates the boundary (a tie goes to the following one); both 29 or more: no transition
+field  par_table                   86  spare                    byte[86]   second per-phoneme row: par_setup_voice points par_row2_ptr at it, nothing reads it
+field  par_table                  172  p1_fn_target             byte[86]   P1 FN (b1) target (par_read_segment adds @u and clamps to 1..63)
+field  par_table                  258  p1_fn_fixed              byte[86]   P1 fixed contribution (signed) to the boundary value when this phoneme dominates
+field  par_table                  344  p1_fn_prop               byte[86]   P1 proportion 0-8 (eighths) of the other phoneme's target taken into the boundary value when this phoneme dominates
+field  par_table                  430  p1_fn_ext_dur            byte[86]   P1 external transition duration in frames (in the dominated neighbour) when this phoneme dominates
+field  par_table                  516  p1_fn_int_dur            byte[86]   P1 internal transition duration in frames (in this phoneme) when it dominates
+field  par_table                  602  p2_f1_target             byte[86]   P2 F1 (b3) target (par_read_segment adds @u and clamps to 1..63)
+field  par_table                  688  p2_f1_fixed              byte[86]   P2 fixed contribution (signed) to the boundary value when this phoneme dominates
+field  par_table                  774  p2_f1_prop               byte[86]   P2 proportion 0-8 (eighths) of the other phoneme's target taken into the boundary value when this phoneme dominates
+field  par_table                  860  p2_f1_ext_dur            byte[86]   P2 external transition duration in frames (in the dominated neighbour) when this phoneme dominates
+field  par_table                  946  p2_f1_int_dur            byte[86]   P2 internal transition duration in frames (in this phoneme) when it dominates
+field  par_table                 1032  p3_f2_target             byte[86]   P3 F2 (b5) target (par_read_segment adds @u and clamps to 1..63)
+field  par_table                 1118  p3_f2_fixed              byte[86]   P3 fixed contribution (signed) to the boundary value when this phoneme dominates
+field  par_table                 1204  p3_f2_prop               byte[86]   P3 proportion 0-8 (eighths) of the other phoneme's target taken into the boundary value when this phoneme dominates
+field  par_table                 1290  p3_f2_ext_dur            byte[86]   P3 external transition duration in frames (in the dominated neighbour) when this phoneme dominates
+field  par_table                 1376  p3_f2_int_dur            byte[86]   P3 internal transition duration in frames (in this phoneme) when it dominates
+field  par_table                 1462  p4_f3_target             byte[86]   P4 F3 (b7) target (par_read_segment adds @u and clamps to 1..63)
+field  par_table                 1548  p4_f3_fixed              byte[86]   P4 fixed contribution (signed) to the boundary value when this phoneme dominates
+field  par_table                 1634  p4_f3_prop               byte[86]   P4 proportion 0-8 (eighths) of the other phoneme's target taken into the boundary value when this phoneme dominates
+field  par_table                 1720  p4_f3_ext_dur            byte[86]   P4 external transition duration in frames (in the dominated neighbour) when this phoneme dominates
+field  par_table                 1806  p4_f3_int_dur            byte[86]   P4 internal transition duration in frames (in this phoneme) when it dominates
+field  par_table                 1892  p5_alf_target            byte[86]   P5 ALF (b0) target (par_read_segment adds @u and clamps to 1..63)
+field  par_table                 1978  p5_alf_fixed             byte[86]   P5 fixed contribution (signed) to the boundary value when this phoneme dominates
+field  par_table                 2064  p5_alf_prop              byte[86]   P5 proportion 0-8 (eighths) of the other phoneme's target taken into the boundary value when this phoneme dominates
+field  par_table                 2150  p5_alf_ext_dur           byte[86]   P5 external transition duration in frames (in the dominated neighbour) when this phoneme dominates
+field  par_table                 2236  p5_alf_int_dur           byte[86]   P5 internal transition duration in frames (in this phoneme) when it dominates
+field  par_table                 2322  p6_a1_target             byte[86]   P6 A1 (b2) target (par_read_segment adds @u and clamps to 1..63)
+field  par_table                 2408  p6_a1_fixed              byte[86]   P6 fixed contribution (signed) to the boundary value when this phoneme dominates
+field  par_table                 2494  p6_a1_prop               byte[86]   P6 proportion 0-8 (eighths) of the other phoneme's target taken into the boundary value when this phoneme dominates
+field  par_table                 2580  p6_a1_ext_dur            byte[86]   P6 external transition duration in frames (in the dominated neighbour) when this phoneme dominates
+field  par_table                 2666  p6_a1_int_dur            byte[86]   P6 internal transition duration in frames (in this phoneme) when it dominates
+field  par_table                 2752  p7_a2_target             byte[86]   P7 A2 (b4) target (par_read_segment adds @u and clamps to 1..63)
+field  par_table                 2838  p7_a2_fixed              byte[86]   P7 fixed contribution (signed) to the boundary value when this phoneme dominates
+field  par_table                 2924  p7_a2_prop               byte[86]   P7 proportion 0-8 (eighths) of the other phoneme's target taken into the boundary value when this phoneme dominates
+field  par_table                 3010  p7_a2_ext_dur            byte[86]   P7 external transition duration in frames (in the dominated neighbour) when this phoneme dominates
+field  par_table                 3096  p7_a2_int_dur            byte[86]   P7 internal transition duration in frames (in this phoneme) when it dominates
+field  par_table                 3182  p8_a3_target             byte[86]   P8 A3 (b6) target (par_read_segment adds @u and clamps to 1..63)
+field  par_table                 3268  p8_a3_fixed              byte[86]   P8 fixed contribution (signed) to the boundary value when this phoneme dominates
+field  par_table                 3354  p8_a3_prop               byte[86]   P8 proportion 0-8 (eighths) of the other phoneme's target taken into the boundary value when this phoneme dominates
+field  par_table                 3440  p8_a3_ext_dur            byte[86]   P8 external transition duration in frames (in the dominated neighbour) when this phoneme dominates
+field  par_table                 3526  p8_a3_int_dur            byte[86]   P8 internal transition duration in frames (in this phoneme) when it dominates
+field  par_table                 3612  p9_ahf_target            byte[86]   P9 AHF (b8) target (par_read_segment adds @u and clamps to 1..63)
+field  par_table                 3698  p9_ahf_fixed             byte[86]   P9 fixed contribution (signed) to the boundary value when this phoneme dominates
+field  par_table                 3784  p9_ahf_prop              byte[86]   P9 proportion 0-8 (eighths) of the other phoneme's target taken into the boundary value when this phoneme dominates
+field  par_table                 3870  p9_ahf_ext_dur           byte[86]   P9 external transition duration in frames (in the dominated neighbour) when this phoneme dominates
+field  par_table                 3956  p9_ahf_int_dur           byte[86]   P9 internal transition duration in frames (in this phoneme) when it dominates
+field  par_table                 4042  p10_v_target             byte[86]   P10 voicing (b9) target (par_read_segment adds @u and clamps to 1..63)
+field  par_table                 4128  p10_v_fixed              byte[86]   P10 fixed contribution (signed) to the boundary value when this phoneme dominates
+field  par_table                 4214  p10_v_prop               byte[86]   P10 proportion 0-8 (eighths) of the other phoneme's target taken into the boundary value when this phoneme dominates
+field  par_table                 4300  p10_v_ext_dur            byte[86]   P10 external transition duration in frames (in the dominated neighbour) when this phoneme dominates
+field  par_table                 4386  p10_v_int_dur            byte[86]   P10 internal transition duration in frames (in this phoneme) when it dominates
 struct ph_list1                     4  A phoneme list with one (phoneme, max duration, min duration) triple, then the list end $FF (ph_decode_symbol)
 field  ph_list1                     0  phoneme                  byte       phoneme index 0-85: row of the phoneme parameter tables
 field  ph_list1                     1  max_dur                  byte       maximum duration, before scaling

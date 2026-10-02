@@ -19,7 +19,7 @@ rom      ACCA  data      boot_baud_text_300             char[14]       length-pr
 rom      ACD8  data      boot_baud_text_1200            char[16]       length-prefixed phonetic text (length byte, text ending in CR) announcing 1200 baud (UART_BAUD $2F)
 rom      ADE0  func      boot_read_dip                  -              A/D off; DIP switches P4 & $0F -> boot_dip ($10)
 rom      ADEB  func      boot_init_settings             -              boot_clear_input_state, boot_set_defaults, and the engine version bytes $FFE0/$FFE1 copied to $1819/$181B
-rom      B2B3  label     boot_play_body                 -              boot_loop_play body: hold the host, prosody playback set-up $BAF2, isr_speech_start, volume ramp, frame loop $B877, volume off, isr_speech_stop
+rom      B2B3  label     boot_play_body                 -              boot_loop_play body: hold the host, prosody playback set-up par_play_start, isr_speech_start, volume ramp, frame loop par_play, volume off, isr_speech_stop
 rom      C605  func      boot_selftest                  -              self-test: boot_selftest_fail ($0F) = 1 when DIP bit 1 is set and input P2.1 is high, else 0
 rom      C612  func      boot_queue_string              -              queue the zero-terminated string at ($46) into the input ring ($C3CC) with interrupts off, as if the host had sent it; A and Y preserved
 rom      C65B  data      boot_prosody_defaults          byte[26]       power-up values of the 26 prosody parameters pros_params, one per letter A-Z (@R letter command)
