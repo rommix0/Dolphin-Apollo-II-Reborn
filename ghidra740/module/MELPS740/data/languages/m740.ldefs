@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<language_definitions>
+  <language processor="MELPS740"
+            endian="little"
+            size="16"
+            variant="default"
+            version="1.0"
+            slafile="m740.sla"
+            processorspec="m740.pspec"
+            id="MELPS740:LE:16:default">
+    <description>Mitsubishi MELPS 740 core of the M50734 (T flag assumed 0)</description>
+    <compiler name="default" spec="m740.cspec" id="default"/>
+  </language>
+</language_definitions>

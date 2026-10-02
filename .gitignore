@@ -12,6 +12,7 @@ build/
 *.exe
 *.pdb
 *.ilk
+*.sla
 firmware/generated/
 __pycache__/
 

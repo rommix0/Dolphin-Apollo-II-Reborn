@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SFR and vector labels come from ghidra740/annotations (sfr.txt, boot.txt), so that one source holds every name. -->
+<processor_spec>
+  <programcounter register="PC"/>
+</processor_spec>
