@@ -1,0 +1,20 @@
+# Serial input (INT1 receive, the input ring, the immediate-command collector) and the reply output ring
+rom      C33C  label     ser_int1_serial                -              isr_int1 in serial mode: an _INT1 request (ICR1 bit 1) goes to ser_int1_latch; else UART receive with the busy line P0.5 set and RX interrupts off: a byte without error bits (UART_STATUS & $1C) goes to ser_rx_byte, then UART_RX is cleared and RX re-enabled
+rom      C367  label     ser_int1_latch                 -              serial mode, _INT1 pin request: the byte from P1_LATCH goes to ser_rx_byte
+rom      C37E  func      ser_rx_byte                    -              A = received byte (interrupt level): Ctrl-A or Ctrl-X mutes (ser_rx_mute); the command character ser_cmd_char starts an immediate-command check (ser_rx_cmd_start); while ser_cmd_mode bit 0 is set cmd_imm_match takes it; anything else goes to the input ring (ser_rx_put)
+rom      C391  label     ser_rx_mute                    -              mute: ser_abort and cmd_index_reset set, cmd_char = ser_cmd_char, ser_rx_idle/ser_rx_idle_saved set, command mode off, input ring emptied (read pointer = write pointer)
+rom      C3AC  label     ser_rx_cmd_start               -              command character: ser_cmd_mode bit 0 set, ser_rx_idle saved to ser_rx_idle_saved, ser_cmd_ptr = ser_cmd_buf, ser_cmd_table_ofs = 0, ser_cmd_buf cleared
+rom      C3CC  func      ser_rx_put                     -              append A to the input ring at ser_rx_write ($2100-$38FF, ser_rx_next_page) and clear ser_rx_idle bit 0; Y destroyed
+rom      C3FA  func      ser_rx_flush_cmd               -              not an immediate command: queue the command character and the zero-terminated ser_cmd_buf into the input ring as ordinary input (the clause scan handles them); A and X preserved
+rom      C4B5  func      ser_tx_get                     -              A = next reply byte from the output ring (ser_tx_read), ser_tx_count decremented, ser_tx_pending cleared when it empties; A = NAK ($15) when nothing is pending; interrupts off inside
+rom      C4DD  func      ser_tx_put                     -              append A to the reply output ring at ser_tx_write, ser_tx_count += 1, ser_tx_pending = 1; A, X, Y preserved
+rom      C500  func      ser_tx_wait                    -              wait until the UART can transmit (UART_STATUS bit 1)
+rom      C504  func      ser_tx_send                    -              send A on the UART (ser_tx_wait, then UART_TX); flags preserved
+rom      C53A  func      ser_hex_digits                 -              turn the byte pushed by the caller into two ASCII hex digits in place on the stack (low nibble at S+5, high nibble at S+6 as seen inside); X, Y preserved
+rom      C55A  func      ser_hex_digit                  -              A = ASCII hex digit of A & $0F (ser_hex_chars); Y destroyed
+rom      C561  data      ser_hex_chars                  char[16]       the sixteen hex digit characters, indexed by nibble value
+rom      C571  func      ser_tx_hex                     -              queue A as two ASCII hex digits, low nibble first (so volume 6 answers A60, as the manual shows); A preserved
+rom      C581  func      ser_tx_service                 -              serial mode only, when the host line P0.2 is high: busy line P0.5 cleared, one byte from the output ring (ser_tx_get) sent (ser_tx_send), ser_status_due = ser_tx_pending; when the ring is empty, P0.5 set again after the send completes; A preserved
+rom      C5A4  func      ser_tx_records                 -              queue a record reply: id character ser_reply_id, ser_reply_count and ser_reply_size in hex (ser_tx_hex), then ser_reply_count records of ser_reply_size bytes from ser_reply_ptr, then CR; A, X, Y preserved
+rom      C5EC  func      ser_rx_next_page               -              Y = next page of the input ring: Y + 1, wrapping $39 -> $21
+rom      C5F5  func      ser_tx_next_page               -              Y = next page of the output ring: Y + 1, wrapping $3A -> $39 (the ring is the one page $3900)

@@ -1,4 +1,7 @@
 # Struct types used by the annotations (format: M3 spec §5.3; struct NAME SIZE / field STRUCT OFFSET NAME TYPE)
+struct cmd_query_entry              2  One entry of the @c? query table: setting letter and the zero-page address of its value
+field  cmd_query_entry              0  letter                   char       setting letter
+field  cmd_query_entry              1  var                      byte       zero-page address of the setting
 struct frame20                     20  One DSP frame: ten little-endian words (parent spec §1.4)
 field  frame20                      0  alf                      byte       b0 low-frequency amplitude
 field  frame20                      1  fn                       byte       b1 nasal/low resonance frequency

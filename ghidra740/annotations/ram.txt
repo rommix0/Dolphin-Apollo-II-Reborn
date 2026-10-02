@@ -1,22 +1,91 @@
 # RAM and zero-page variables, named with their owner's prefix
+ram      0000  data      ser_tx_read                    ptr            reply output ring read pointer ($3900 page, ser_tx_get)
+ram      0002  data      ser_tx_write                   ptr            reply output ring write pointer (ser_tx_put)
+ram      0006  data      ser_tx_count                   byte           bytes waiting in the reply output ring
+ram      0008  data      ser_tx_pending                 byte           bit 0 set while reply bytes wait in the output ring (ser_tx_put; cleared by ser_tx_get)
 ram      000A  data      isr_par_state                  byte           parallel-port handshake state, bits 0-1 (isr_int1)
+ram      000B  data      cmd_spell                      byte           @S spell mode 0/1
+ram      000C  data      cmd_phonetic                   byte           @X phonetic mode 0/1 (cmd_scan_clause then keeps the case)
+ram      000D  data      cmd_hyper                      byte           @H hypermode 0/1
 ram      000E  data      bank_current                   byte           bank number 1-7 of the selected ROM (bank_find_current)
 ram      000F  data      boot_selftest_fail             byte           1 when the power-up self-test failed (boot_selftest)
 ram      0010  data      boot_dip                       byte           DIP switches P4 & $0F: bit 0 = parallel interface, bit 1 = alternative bank table and self-test input P2.1
+ram      0011  data      cmd_voice                      byte           @V preset voice 1-6; 0 = voice off (no phonetic text is appended)
+ram      0012  data      cmd_speed                      byte           @W speed 1-9
+ram      0013  data      cmd_voicing                    byte           degree of voicing: @B (through cmd_ev_set_voicing) and the @V presets
+ram      0014  data      cmd_volume                     byte           @A volume 0-F (through cmd_ev_set_volume)
+ram      0015  data      cmd_prosody                    byte           @R prosody level 0-7
+ram      0016  data      cmd_pitch_step                 byte           @F+ / @F- pitch step: $10 raised, 0 lowered, 8 after any @F digit
+ram      0017  data      cmd_pitch                      byte           @F pitch centre 0-F
+ram      0018  data      cmd_mark_space                 byte           @M mark-space ratio 0-$3F (frame b11 source)
+ram      0019  data      cmd_word_pause                 byte           @Q pause between words 0-9
+ram      001A  data      cmd_phrase_pause               byte           @D end-of-phrase pause 0-F
+ram      001B  data      cmd_punct                      byte           @P punctuation mode 0/1
+ram      001C  data      cmd_source                     byte           @$ voice source and filter 0-7
+ram      001D  data      cmd_speaker                    byte           @K speaker table: 0 male (voice A tables), 1 non-male (voice B tables)
 ram      002A  data      isr_play_ptr                   ptr            timer ISR: the ping-pong frame being sent ($16A5 or $16B9)
 ram      002C  data      isr_fill_ptr                   ptr            producer pointer: the other ping-pong frame, filled by the frame builder
+ram      003A  data      cmd_speed_map                  ptr            duration map of the current speed in cmd_speed_map_data (cmd_apply_speed)
+ram      003C  data      ser_rx_read                    ptr            input ring read pointer ($2100-$38FF; boot_get_clause)
+ram      003E  data      ser_rx_write                   ptr            input ring write pointer (ser_rx_put)
+ram      0042  data      ser_cmd_ptr                    ptr            write pointer into ser_cmd_buf while an immediate command is collected
+ram      0044  data      cmd_table_ptr                  ptr            pattern pointer table being searched (cmd_imm_table or cmd_table)
+ram      0046  data      cmd_text_ptr                   ptr            text being matched against a pattern; also the string pointer of boot_queue_string
+ram      0048  data      cmd_pat_ptr                    ptr            pattern being matched; after a match its handler pointer follows the terminator
+ram      004A  data      cmd_imm_vector                 ptr            handler of the matched immediate command (JMP ($4A) in cmd_imm_match)
+ram      004C  data      cmd_table_ofs                  byte           byte offset of the current entry in the pattern pointer table
+ram      004D  data      ser_cmd_table_ofs              byte           table offset where the immediate match resumes with the next received byte
+ram      0054  data      boot_clause_len                byte           length of boot_clause (boot_get_clause), then of cmd_text (cmd_scan_clause)
+ram      0057  data      cmd_index_count                byte           @I+ text-unit counter: + 1 per @I+ received, - 1 per mark spoken (cmd_ev_index); reported by @I?
 ram      0059  data      isr_tick_div                   byte           timer ISR: ticks left until the next DSP word (10 per word)
 ram      005A  data      isr_word_ofs                   byte           timer ISR: byte offset of the next word in the playing frame
 ram      005B  data      isr_words_left                 byte           timer ISR: words left in the playing frame (10 per frame)
 ram      005C  data      isr_frame_flag                 byte           bit 0 set by the timer ISR at a buffer swap; the producer waits for it and clears it (isr_wait_frame)
 ram      005D  data      isr_swap_phase                 byte           timer ISR: counts 2, 1 to alternate the two ping-pong frames
+ram      005F  data      cmd_sound_active               byte           bit 0 set while a @T sound effect plays (cmd_ev_sound_start, cmd_ev_sound_end)
+ram      0060  data      ser_cmd_mode                   byte           bit 0 set while an immediate command is collected after the command character
+ram      0061  data      ser_cmd_char                   byte           command character seen by the receiver ('@' from boot_set_defaults)
+ram      0062  data      cmd_char                       byte           command character seen by cmd_scan_clause; set from ser_cmd_char at each mute
+ram      0064  data      boot_speaking                  byte           bit 0 set when boot_get_clause takes a clause, cleared by isr_speech_stop; @I? answers T while set
+ram      0065  data      ser_rx_idle                    byte           bit 0 set when no unspoken text waits (mute, boot_get_clause), cleared by ser_rx_put
+ram      0066  data      ser_rx_idle_saved              byte           ser_rx_idle saved at the command character; @I? restores it and reports from it
+ram      0068  data      ser_status_due                 byte           bit 0: a reply/status byte is due to the host (isr_host_line_high, ser_tx_service)
+ram      0069  data      ser_abort                      byte           bit 0 set by a mute (Ctrl-A or Ctrl-X): the main loop drops the clause and the utterance
+ram      006A  data      cmd_index_reset                byte           bit 0 set at power-up and mute: the next @I+ zeroes cmd_index_count first
 ram      006E  data      bank_absent                    byte           bit 0 set by bank_probe when the selected bank has no ROM header
+ram      006F  data      cmd_speed_limit                byte           value of the current speed from cmd_speed_limits, read by prosody playback ($BDD3)
+ram      0070  data      ser_reply_id                   byte           ser_tx_records: reply identifier character
+ram      0071  data      ser_reply_count                byte           ser_tx_records: number of records
+ram      0072  data      ser_reply_size                 byte           ser_tx_records: bytes per record
+ram      0073  data      ser_reply_ptr                  ptr            ser_tx_records: first record
+ram      0100  data      boot_stack                     byte[256]      hardware stack page; ser_tx_put, cmd_upcase and ser_hex_digits reach their callers' bytes through it (TSX, abs,X)
 ram      0200  label     bank_ramcode_ram               -              RAM $0200-$03FE: copy of bank_ramcode_image (RAMCODE space), made at boot and by @=; the phoneme array reuses it after boot
 ram      0208  label     bank_ramcode_ram_alt           -              RAM copy of bank_p2_table_alt (base read by bank_select)
 ram      02FF  label     bank_ramcode_ram_hi            -              second half of the RAMCODE copy, written by bank_load_ramcode's second loop
+ram      1200  data      cmd_ev_count                   byte           command events queued (write index)
+ram      1201  data      cmd_ev_next                    byte           next command event to run (cmd_run_event)
+ram      1202  data      cmd_ev_pos                     word           phonetic position of the following command event
+ram      1204  data      cmd_ev_vector                  ptr            handler of the running command event (JMP ($1204) in cmd_run_event)
+ram      1206  data      cmd_ev_positions               word[128]      phonetic position ($53 at queueing) per command event
+ram      1306  data      cmd_ev_handlers                ptr[128]       handler per command event: cmd_ev_index, cmd_ev_sound_start, cmd_ev_sound_end, cmd_ev_set_voicing, cmd_ev_set_volume
+ram      1406  data      cmd_ev_args                    byte[128]      argument per command event
+ram      1486  data      cmd_count                      byte           deferred commands queued by cmd_scan_clause
+ram      1487  data      cmd_next                       byte           next deferred command to run (cmd_run_next)
+ram      1488  data      cmd_next_pos                   byte           cmd_text position of the next deferred command ($FF when none)
+ram      1489  data      cmd_vector                     ptr            handler of the running deferred command (JMP ($1489) in cmd_run_next)
+ram      148B  data      cmd_positions                  byte[128]      cmd_text position per deferred command
+ram      150B  data      cmd_handlers                   ptr[128]       handler per deferred command, copied from the word after its pattern in cmd_table
+ram      160B  data      cmd_arg_index                  byte[128]      boot_clause index of the last matched character per deferred command (its argument)
 ram      168B  data      pros_params                    byte[26]       26 prosody parameters, one per letter A-Z (@R letter command, $A9DC); power-up values from boot_prosody_defaults
 ram      16A5  data      isr_frame_a                    frame20        ping-pong DSP frame A, sent by the timer ISR
 ram      16B9  data      isr_frame_b                    frame20        ping-pong DSP frame B, sent by the timer ISR
+ram      1800  data      cmd_sound_save                 ptr[4]         the playback array pointers $22-$29 saved by cmd_ev_sound_start and restored by cmd_ev_sound_end
 ram      1819  data      bank_ver_major                 byte           copy of bank_hdr_version major ($FFE0), compared by bank_enter before entering another bank
 ram      181B  data      bank_ver_minor                 byte           copy of bank_hdr_version minor ($FFE1), compared by bank_enter
+ram      1A00  data      cmd_text                       char[256]      the clause without its commands, upper-cased (cmd_scan_clause); input of text conversion
+ram      1B00  data      boot_clause                    char[256]      one clause taken from the input ring by boot_get_clause (length in $54)
+ram      2014  data      cmd_formant_ofs                byte[10]       @u signed offsets of the ten parameters (Fn F1 F2 F3 ALF A1 A2 A3 A4 voicing), cleared by cmd_clear_formant and @V
+ram      2020  data      ser_cmd_buf                    char[6]        zero-terminated characters of the immediate command being collected
 ram      2026  data      bank_id_table                  char[98]       14-character ID per bank 1-7 (bank_read_id); the @L reply sends it
+ram      2100  data      ser_rx_ring                    byte[6144]     input ring, pages $21-$38 (ser_rx_put, boot_get_clause)
+ram      3900  data      ser_tx_ring                    byte[256]      reply output ring, one page (ser_tx_put, ser_tx_get)

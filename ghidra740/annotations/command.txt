@@ -1,0 +1,132 @@
+# Command parser: immediate commands (interrupt level), the clause command scan, deferred command handlers, synchronised command events, settings helpers
+rom      9804  data      cmd_version_engine_text        char[32]       length-prefixed phonetic text speaking the engine version (cmd_say_version)
+rom      989C  data      cmd_imm_pat_index_add          string[3]      zero-terminated match pattern of immediate @I+ (index mark)
+rom      989F  jumptable cmd_imm_pat_index_add_fn       ptr[1]         handler of cmd_imm_pat_index_add: cmd_imm_index_add
+rom      98A1  data      cmd_imm_pat_index_query        string[3]      zero-terminated match pattern of immediate @I? (index query)
+rom      98A4  jumptable cmd_imm_pat_index_query_fn     ptr[1]         handler of cmd_imm_pat_index_query: cmd_imm_index_query
+rom      98A6  data      cmd_imm_pat_end                byte           end marker ($FF) of cmd_imm_table
+rom      98A7  data      cmd_imm_table                  ptr[3]         pattern pointers of the immediate commands (matched at interrupt level by cmd_imm_match); each pattern is a zero-terminated string followed by its handler pointer; the last entry points at the end marker
+rom      98AD  data      cmd_pat_version                string[2]      zero-terminated match pattern of @? (speak the version)
+rom      98AF  jumptable cmd_pat_version_fn             ptr[1]         handler of cmd_pat_version: cmd_say_version
+rom      98B1  data      cmd_pat_query                  string[3]      zero-terminated match pattern of @c? (setting query, any letter)
+rom      98B4  jumptable cmd_pat_query_fn               ptr[1]         handler of cmd_pat_query: cmd_query
+rom      98B6  data      cmd_pat_volume                 string[3]      zero-terminated match pattern of @A (volume)
+rom      98B9  jumptable cmd_pat_volume_fn              ptr[1]         handler of cmd_pat_volume: cmd_set_volume
+rom      98BB  data      cmd_pat_phrase_pause           string[3]      zero-terminated match pattern of @D (end-of-phrase pause)
+rom      98BE  jumptable cmd_pat_phrase_pause_fn        ptr[1]         handler of cmd_pat_phrase_pause: cmd_set_phrase_pause
+rom      98C0  data      cmd_pat_echo                   string[3]      zero-terminated match pattern of @E (echo a character)
+rom      98C3  jumptable cmd_pat_echo_fn                ptr[1]         handler of cmd_pat_echo: cmd_echo
+rom      98C5  data      cmd_pat_pitch                  string[3]      zero-terminated match pattern of @F (pitch centre, + or -)
+rom      98C8  jumptable cmd_pat_pitch_fn               ptr[1]         handler of cmd_pat_pitch: cmd_set_pitch
+rom      98CA  data      cmd_pat_hyper                  string[3]      zero-terminated match pattern of @H (hypermode)
+rom      98CD  jumptable cmd_pat_hyper_fn               ptr[1]         handler of cmd_pat_hyper: cmd_set_hyper
+rom      98CF  data      cmd_pat_mark_space             string[4]      zero-terminated match pattern of @M (mark-space ratio, two hex digits)
+rom      98D3  jumptable cmd_pat_mark_space_fn          ptr[1]         handler of cmd_pat_mark_space: cmd_set_mark_space
+rom      98D5  data      cmd_pat_punct                  string[3]      zero-terminated match pattern of @P (punctuation mode)
+rom      98D8  jumptable cmd_pat_punct_fn               ptr[1]         handler of cmd_pat_punct: cmd_set_punct
+rom      98DA  data      cmd_pat_word_pause             string[3]      zero-terminated match pattern of @Q (pause between words)
+rom      98DD  jumptable cmd_pat_word_pause_fn          ptr[1]         handler of cmd_pat_word_pause: cmd_set_word_pause
+rom      98DF  data      cmd_pat_prosody                string[3]      zero-terminated match pattern of @R with a digit (prosody level)
+rom      98E2  jumptable cmd_pat_prosody_fn             ptr[1]         handler of cmd_pat_prosody: cmd_set_prosody
+rom      98E4  data      cmd_pat_prosody_param          string[5]      zero-terminated match pattern of @R with a letter and two hex digits (one prosody parameter)
+rom      98E9  jumptable cmd_pat_prosody_param_fn       ptr[1]         handler of cmd_pat_prosody_param: cmd_set_prosody
+rom      98EB  data      cmd_pat_spell                  string[3]      zero-terminated match pattern of @S (spell mode)
+rom      98EE  jumptable cmd_pat_spell_fn               ptr[1]         handler of cmd_pat_spell: cmd_set_spell
+rom      98F0  data      cmd_pat_voice                  string[3]      zero-terminated match pattern of @V (preset voice)
+rom      98F3  jumptable cmd_pat_voice_fn               ptr[1]         handler of cmd_pat_voice: cmd_set_voice
+rom      98F5  data      cmd_pat_speed                  string[3]      zero-terminated match pattern of @W (speed)
+rom      98F8  jumptable cmd_pat_speed_fn               ptr[1]         handler of cmd_pat_speed: cmd_set_speed
+rom      98FA  data      cmd_pat_phonetic               string[3]      zero-terminated match pattern of @X (phonetic mode)
+rom      98FD  jumptable cmd_pat_phonetic_fn            ptr[1]         handler of cmd_pat_phonetic: cmd_set_phonetic
+rom      98FF  data      cmd_pat_formant_add            string[5]      zero-terminated match pattern of @u with one hex digit and +
+rom      9904  jumptable cmd_pat_formant_add_fn         ptr[1]         handler of cmd_pat_formant_add: cmd_set_formant
+rom      9906  data      cmd_pat_formant_sub            string[5]      zero-terminated match pattern of @u with one hex digit and -
+rom      990B  jumptable cmd_pat_formant_sub_fn         ptr[1]         handler of cmd_pat_formant_sub: cmd_set_formant
+rom      990D  data      cmd_pat_formant_add2           string[6]      zero-terminated match pattern of @u with two hex digits and +
+rom      9913  jumptable cmd_pat_formant_add2_fn        ptr[1]         handler of cmd_pat_formant_add2: cmd_set_formant
+rom      9915  data      cmd_pat_formant_sub2           string[6]      zero-terminated match pattern of @u with two hex digits and -
+rom      991B  jumptable cmd_pat_formant_sub2_fn        ptr[1]         handler of cmd_pat_formant_sub2: cmd_set_formant
+rom      991D  data      cmd_pat_source                 string[3]      zero-terminated match pattern of @$ (voice source and filter)
+rom      9920  jumptable cmd_pat_source_fn              ptr[1]         handler of cmd_pat_source: cmd_set_source
+rom      9922  data      cmd_pat_voicing                string[3]      zero-terminated match pattern of @B (degree of voicing)
+rom      9925  jumptable cmd_pat_voicing_fn             ptr[1]         handler of cmd_pat_voicing: cmd_set_voicing
+rom      9927  data      cmd_pat_index                  string[3]      zero-terminated match pattern of @I+ (index mark, deferred part)
+rom      992A  jumptable cmd_pat_index_fn               ptr[1]         handler of cmd_pat_index: cmd_mark_index
+rom      992C  data      cmd_pat_sound                  string[3]      zero-terminated match pattern of @T (sound effect)
+rom      992F  jumptable cmd_pat_sound_fn               ptr[1]         handler of cmd_pat_sound: cmd_sound
+rom      9931  data      cmd_pat_bank                   string[3]      zero-terminated match pattern of @= (select a ROM bank)
+rom      9934  jumptable cmd_pat_bank_fn                ptr[1]         handler of cmd_pat_bank: bank_cmd_select
+rom      9936  data      cmd_pat_languages              string[2]      zero-terminated match pattern of @L (list the languages)
+rom      9938  jumptable cmd_pat_languages_fn           ptr[1]         handler of cmd_pat_languages: cmd_list_languages
+rom      993A  data      cmd_pat_speaker                string[3]      zero-terminated match pattern of @K (speaker table)
+rom      993D  jumptable cmd_pat_speaker_fn             ptr[1]         handler of cmd_pat_speaker: cmd_set_speaker
+rom      993F  data      cmd_pat_greeting               string[3]      zero-terminated match pattern of @G (greeting; no effect; listed twice in cmd_table)
+rom      9942  jumptable cmd_pat_greeting_fn            ptr[1]         handler of cmd_pat_greeting: cmd_ignore
+rom      9944  data      cmd_pat_index_old              string[3]      zero-terminated match pattern of @I with a caret (no effect)
+rom      9947  jumptable cmd_pat_index_old_fn           ptr[1]         handler of cmd_pat_index_old: cmd_ignore
+rom      9949  data      cmd_pat_cmd_char               string[3]      zero-terminated match pattern of @+ (new command character; no effect)
+rom      994C  jumptable cmd_pat_cmd_char_fn            ptr[1]         handler of cmd_pat_cmd_char: cmd_ignore
+rom      994E  data      cmd_pat_end                    byte           end marker ($FF) of cmd_table
+rom      994F  data      cmd_table                      ptr[32]        pattern pointers of the deferred commands, scanned in order by cmd_scan_clause (first match wins); each pattern is a zero-terminated string (* any character, # a digit, matched on the upper-cased text) followed by its handler pointer; one pattern is listed twice; the last entry points at the end marker
+rom      998F  data      cmd_query_table                cmd_query_entry[18] the settings the @c? query can report: letter and zero-page address, searched by cmd_reply_setting
+rom      99B3  data      cmd_query_table_end            byte           zero terminator of cmd_query_table
+rom      99B4  data      cmd_case_map                   byte[256]      input character map indexed by character code: lower case to upper case, control characters other than CR and ESC to space, some codes above $7F folded; used by cmd_upcase and cmd_scan_clause
+rom      9F74  data      cmd_sound_table                ptr[68]        per @T sound effect 0-16 (8 bytes each, indexed by effect * 8) four pointers into cmd_sound_data: phoneme, duration, pitch-target and flag arrays, loaded into the playback pointers $22-$29 by cmd_ev_sound_start
+rom      9FFC  data      cmd_sound_data                 byte[396]      segment arrays of the @T sound effects, in the format of the playback arrays: one flag array shared by all effects, then per effect a phoneme array ending in $FF, a duration array and a pitch-target array (cmd_sound_table points into it)
+rom      A78C  func      cmd_apply_speaker              -              select the parameter tables of cmd_speaker (0: cmd_select_voice_a, 1: cmd_select_voice_b), then cmd_apply_pitch and cmd_apply_speed
+rom      A7DF  func      cmd_clear_formant              -              zero cmd_formant_ofs and the byte after it ($2014-$201E); A, Y preserved
+rom      A7FE  func      cmd_select_voice_a             -              cmd_speaker = 0; phoneme parameter tables of voice A: count ($D469) to $178D, data pointer ($D46A) to $178E/$178F; $1790/$1791 cleared; A preserved
+rom      A814  func      cmd_select_voice_b             -              cmd_speaker = 1; as cmd_select_voice_a with voice B (count $E5E2, data $E5E3)
+rom      A832  func      cmd_apply_pitch                -              $1815 = cmd_source * 16 + cmd_prosody, $1816 = cmd_pitch * 16, then $B3A4 recomputes the voice set-up; A preserved
+rom      A84A  func      cmd_apply_speed                -              from cmd_speed (1-9): cmd_speed_limit = cmd_speed_limits[speed-1], cmd_speed_map = cmd_speed_maps[speed-1]; A, Y preserved
+rom      A868  func      cmd_put_phonetic               -              append the length-prefixed phonetic text at ($20) to the phonetic buffer ($B154); A, Y preserved
+rom      A876  func      cmd_say_phonetic               -              speak the length-prefixed phonetic text at ($20) at once: cmd_put_phonetic, prosody ($CA92), boot_loop_play
+rom      A880  func      cmd_run_due                    -              X = the clause position being converted: run every queued deferred command whose position cmd_next_pos equals X (cmd_run_next)
+rom      A893  func      cmd_run_next                   -              dispatch the next deferred command (cmd_next): cmd_vector from cmd_handlers, cmd_next += 1, cmd_next_pos from cmd_positions, X = its argument index from cmd_arg_index, A = boot_clause[X]; JMP (cmd_vector); every handler ends at cmd_run_done
+rom      A8BD  label     cmd_run_done                   -              common exit of the deferred command handlers: restore X and return to cmd_run_due
+rom      A8C0  func      cmd_sound                      -              @T handler, A = argument (hex digit, or x = effect 16): queue two command events at the phonetic position $53, cmd_ev_sound_start and cmd_ev_sound_end, both with the effect number
+rom      A902  func      cmd_say_version                -              @? handler: append the spoken engine version cmd_version_engine_text and language version cmd_version_lang_text to the phonetic buffer (cmd_put_phonetic)
+rom      A91F  func      cmd_set_phrase_pause           -              @D handler: cmd_phrase_pause = hex digit 0-F
+rom      A92F  func      cmd_set_formant                -              @u handler: back to the U (cmd_find_back), parameter digit d (0-9), one or two hex digits, then + or -: cmd_formant_ofs[d] = +value or -value
+rom      A98A  func      cmd_set_word_pause             -              @Q handler: cmd_word_pause = digit 0-9
+rom      A99A  func      cmd_set_mark_space             -              @M handler: back to the M (cmd_find_back), two hex digits, the first 0-3: cmd_mark_space = 0-$3F
+rom      A9C9  func      cmd_set_speed                  -              @W handler: cmd_speed = digit 1-9, then cmd_apply_speed
+rom      A9DC  func      cmd_set_prosody                -              @R handler (back to the R, cmd_find_back): a digit 0-7 sets cmd_prosody and cmd_apply_pitch; a letter A-Z and two hex digits (cmd_hex_byte) set that letter's entry of pros_params
+rom      AA24  func      cmd_set_pitch                  -              @F handler: + sets cmd_pitch_step = $10, - sets 0; a hex digit sets cmd_pitch, cmd_pitch_step = 8 and cmd_apply_pitch
+rom      AA4F  func      cmd_set_spell                  -              @S handler: cmd_spell = 0 or 1
+rom      AA61  func      cmd_set_speaker                -              @K handler: cmd_speaker = 0 or 1, then cmd_apply_speaker
+rom      AA74  func      cmd_set_voice                  -              @V handler: cmd_clear_formant; 0 sets cmd_voice = 0 (voice off); presets 1-6 set cmd_voicing, cmd_mark_space and cmd_pitch, 1-3 with cmd_speaker 0 and cmd_source 0, 4-6 with cmd_speaker 1 and cmd_source 7; cmd_voice = digit and cmd_apply_speaker
+rom      AAF5  func      cmd_set_punct                  -              @P handler: cmd_punct = 0 or 1
+rom      AB05  func      cmd_set_volume                 -              @A handler: hex digit 0-F queued as a command event (cmd_ev_set_volume) at the phonetic position $53, so the change is synchronised with the speech
+rom      AB2E  func      cmd_mark_index                 -              deferred part of @I+: with argument + queue a command event cmd_ev_index at the phonetic position $53
+rom      AB4D  func      cmd_set_hyper                  -              @H handler: cmd_hyper = 0 or 1
+rom      AB5D  func      cmd_set_source                 -              @$ handler: cmd_source = digit 0-7, then cmd_apply_pitch
+rom      AB70  func      cmd_set_voicing                -              @B handler: digit 0-9 queued as a command event (cmd_ev_set_voicing) at the phonetic position $53
+rom      AB99  func      cmd_echo                       -              @E handler: queue the argument character as the reply (ser_tx_put)
+rom      AB9F  func      cmd_set_phonetic               -              @X handler: cmd_phonetic = 0 or 1
+rom      ABBE  func      cmd_list_languages             -              @L handler: reply L, 7 records of 14 characters from bank_id_table, CR (ser_tx_records)
+rom      ABD3  func      cmd_query                      -              @c? handler: A = the setting letter read at $1AFF+X (cmd_text at the letter's index in boot_clause), answered by cmd_reply_setting
+rom      ABDC  func      cmd_ignore                     -              handler of the commands without effect (@G, @I with a caret, @+)
+rom      ABDF  func      cmd_find_back                  -              X = 1 + index of the last character before X in boot_clause whose upper-case form equals A (stops at index 1); lets a handler re-read its whole argument
+rom      ACFA  func      cmd_scan_clause                -              copy boot_clause (length $54) to cmd_text, upper-cased by cmd_case_map unless cmd_phonetic; at each cmd_char match cmd_table (cmd_match_table): a matched command is left out of cmd_text and queued (position cmd_positions, handler cmd_handlers, argument index cmd_arg_index, count cmd_count); an unmatched one stays as text; $54 = new length, cmd_next_pos = first position
+rom      AD90  func      cmd_match_pattern              -              compare the text at cmd_text_ptr (upper-cased) with the pattern at cmd_pat_ptr; in a pattern * matches any character and # a digit: Y = index of the first zero (pattern end, or text end for a partial match), 0 on a mismatch; X preserved
+rom      ADBF  func      cmd_match_table                -              from entry offset cmd_table_ofs of the pattern pointer table at cmd_table_ptr: cmd_pat_ptr = the first entry whose pattern matches (cmd_match_pattern), Y as cmd_match_pattern returns; Y = 0 at the end marker ($FF)
+rom      B450  func      cmd_hex_byte                   -              A = value of the two hex digit characters in $34 (high) and $35 (low) (cmd_hex_value); uses $1809
+rom      BB74  func      cmd_run_event                  -              run the next synchronised command event (index cmd_ev_next, called by the frame loop $B877 when playback reaches its position): cmd_ev_vector from cmd_ev_handlers, cmd_ev_pos = the following event's position, A = argument from cmd_ev_args; JMP (cmd_ev_vector)
+rom      BBA0  func      cmd_ev_index                   -              event of @I+: an index mark is being spoken: cmd_index_count -= 1 unless 0
+rom      BBA7  func      cmd_ev_sound_start             -              event of @T, A = effect 0-16: save the playback array pointers $22-$29 (normally phoneme $0200, duration $0600, pitch target $0A00, flags $0E00) and playback state ($1800-$1807, $17F6-$17FF), point $22-$29 at the effect's arrays (cmd_sound_table), fixed pitch and voicing, the end event's position = the effect's length; $5F bit 0 set
+rom      BC80  func      cmd_ev_sound_end               -              event of @T: when a sound effect is active ($5F bit 0) restore the playback pointers and state saved by cmd_ev_sound_start
+rom      BCEA  func      cmd_ev_set_voicing             -              event of @B: cmd_voicing = A
+rom      BCED  func      cmd_ev_set_volume              -              event of @A: cmd_volume = A and isr_set_volume
+rom      C413  func      cmd_imm_match                  -              immediate-command mode, A = received byte (interrupt level): store it in ser_cmd_buf and match the buffer against cmd_imm_table (cmd_match_table, from ser_cmd_table_ofs): no match leaves command mode and passes the buffer on as input (ser_rx_flush_cmd); a partial match waits for more; a full match jumps to the handler through cmd_imm_vector with A = first buffer character; zero page $44-$49 and $4C preserved
+rom      C46A  comment   -                              -              JMP (cmd_imm_vector): handler taken from the matched cmd_imm_table entry (cmd_imm_index_add or cmd_imm_index_query); both return to cmd_imm_done
+rom      C46C  label     cmd_imm_done                   -              common exit of cmd_imm_match and the immediate handlers: restore zero page $44-$49 and $4C, return
+rom      C483  func      cmd_imm_index_add              -              immediate @I+: the first one after a mute (cmd_index_reset) zeroes cmd_index_count; cmd_index_count += 1; command mode off and the command passed on as input (ser_rx_flush_cmd) so cmd_mark_index marks its place in the speech
+rom      C495  func      cmd_imm_index_query            -              immediate @I?: reply I, cmd_index_count in hex (ser_tx_hex), then T (text waiting or speech in progress, boot_speaking) or M; command mode off and ser_rx_idle restored, so the query leaves no text
+rom      C50D  func      cmd_upcase                     -              A = cmd_case_map[A]; X preserved
+rom      C520  func      cmd_hex_value                  -              A = value of the character in A after cmd_upcase: 0-9 for digits, 10-35 for A-Z (the characters between 9 and A count as Z); callers reject values out of their range
+rom      C632  func      cmd_reply_setting              -              A = setting letter: if it is in cmd_query_table, reply the letter and the setting's zero-page value in hex (ser_tx_hex); A preserved
+rom      C87B  data      cmd_speed_maps                 ptr[10]        per speed 1-9 (indexed by speed - 1) the 32-byte duration map in cmd_speed_map_data; the 10th entry repeats the 9th
+rom      C88F  data      cmd_speed_limits               byte[9]        per speed 1-9 (indexed by speed - 1) the value cmd_apply_speed puts in cmd_speed_limit
+rom      C898  data      cmd_speed_map_data             byte[288]      nine 32-byte duration maps, one per speed: a duration 1-31 indexed through cmd_speed_map gives the shortened duration ($C29C at speeds 5-9, $D129)
+rom      F75B  data      cmd_version_lang_text          char[32]       length-prefixed phonetic text speaking the language version (cmd_say_version)
