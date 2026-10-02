@@ -17,10 +17,10 @@ field  frame20                     10  pitch_code               byte       b10 p
 field  frame20                     11  mark_space               byte       b11 mark-space ratio (@M)
 field  frame20                     12  const17                  byte       b12 always $17
 field  frame20                     13  transitions              byte       b13 transition flags
-field  frame20                     14  b14_15                   word       from tables $B573/$B673
+field  frame20                     14  b14_15                   word       b14 low, b15 high byte: from frm_b14_15_lo/hi (frm_finish_frame)
 field  frame20                     16  source                   byte       b16 voicing source (@$)
 field  frame20                     17  filter                   byte       b17 voice filter (@$)
-field  frame20                     18  end_marker               word       always $FFFF
+field  frame20                     18  end_marker               byte[2]    always $FF $FF (bytes, not a word, so that the labels par_formant_ofs_base and par_slot_map_base on the second byte keep their comments)
 struct par_table                 4472  Phoneme parameter table of one voice (par_voice_a, par_voice_b): 52 rows of N = 86 bytes, each indexed by phoneme: rank, a spare row, then five rows per parameter P1..P10 (5N apart)
 field  par_table                    0  rank                     byte[86]   rank: of two neighbouring phonemes the higher rank dominates the boundary (a tie goes to the following one); both 29 or more: no transition
 field  par_table                   86  spare                    byte[86]   second per-phoneme row: par_setup_voice points par_row2_ptr at it, nothing reads it
