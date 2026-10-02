@@ -1,9 +1,13 @@
 // Returns the program to its just-imported state, so BuildProject can run on it again without deleting and
 // re-importing it (the GUI cannot delete a program that ghidra-mcp still holds open; see ghidra740/README.md).
+// It DISCARDS EVERYTHING IN THE PROGRAM, including names, comments and types made in the GUI: run it only after
+// ExportAnnotations.java check reports RESULT PASS. Refuses, before changing anything, a program that is not
+// MELPS740:LE:16:default or does not hold exactly one 64 KB imported file.
 // Removes every memory block (with them the code units, symbols, functions, comments, bookmarks, references and
 // overlay spaces in them), then whatever lives outside memory (symbols in other spaces, external locations,
-// namespaces, classes, libraries, equates, function tags, property maps) and every data type. Keeps the imported file bytes (BuildProject builds its blocks from
-// them) and the program options (analysis stays off). Throws if anything survives.
+// namespaces, classes, libraries, equates, function tags, property maps) and every data type. Keeps the imported
+// file bytes (BuildProject builds its blocks from them) and the program options (analysis stays off). Throws if
+// anything survives, and then rolls the whole reset back.
 //@category ghidra740
 import ghidra.app.script.GhidraScript;
 import ghidra.program.database.mem.FileBytes;
@@ -22,11 +26,32 @@ public class ResetProject extends GhidraScript {
         Memory mem = p.getMemory();
         SymbolTable st = p.getSymbolTable();
         DataTypeManager dtm = p.getDataTypeManager();
+        String lang = p.getLanguageID().getIdAsString();
+        if (!lang.equals("MELPS740:LE:16:default"))
+            throw new IllegalStateException("ResetProject: " + p.getName() + " is " + lang + ", not MELPS740:LE:16:default: not resetting");
         if (!importedFile(mem))
             throw new IllegalStateException("ResetProject: expected one 64 KB imported file (UK_V2.01_4.04_ROM.BIN): not resetting");
         int blocks = mem.getBlocks().length, functions = p.getFunctionManager().getFunctionCount();
         int symbols = st.getNumSymbols(), types = dtm.getDataTypeCount(true);
 
+        // GhidraScript commits its transaction even when run() throws, so the reset gets its own: ending it
+        // uncommitted aborts the enclosing transaction too, and a failed reset leaves the program unchanged.
+        int tx = p.startTransaction("ResetProject");
+        boolean done = false;
+        try {
+            reset(p);
+            done = true;
+        } finally {
+            p.endTransaction(tx, done);
+        }
+        println(String.format("ResetProject: removed %d blocks, %d functions, %d symbols, %d data types; program is as imported",
+            blocks, functions, symbols, types));
+    }
+
+    private void reset(Program p) throws Exception {
+        Memory mem = p.getMemory();
+        SymbolTable st = p.getSymbolTable();
+        DataTypeManager dtm = p.getDataTypeManager();
         for (MemoryBlock b : mem.getBlocks())
             mem.removeBlock(b, monitor);
 
@@ -62,10 +87,9 @@ public class ResetProject extends GhidraScript {
 
         List<String> left = survivors(p);
         if (!left.isEmpty())
-            throw new IllegalStateException("ResetProject: the program is only partly reset (" + String.join(", ", left)
-                + "): do not build on it; undo, or delete the program and import the ROM again");
-        println(String.format("ResetProject: removed %d blocks, %d functions, %d symbols, %d data types; program is as imported",
-            blocks, functions, symbols, types));
+            throw new IllegalStateException("ResetProject: could not reset the program (" + String.join(", ", left)
+                + " left); nothing was changed. Fix the cause and run ResetProject.java again"
+                + " (in the GUI, deleting the program and importing the ROM again needs a Ghidra restart first)");
     }
 
     private static boolean importedFile(Memory mem) {

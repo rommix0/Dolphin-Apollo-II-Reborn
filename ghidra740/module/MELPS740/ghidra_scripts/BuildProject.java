@@ -81,7 +81,7 @@ public class BuildProject extends GhidraScript {
         // A built or partly reset program has these; one just imported (or reset by ResetProject) has none.
         if (mem.getBlock("ROM") != null || currentProgram.getSymbolTable().getNumSymbols() > 0
                 || currentProgram.getDataTypeManager().getCategory(new CategoryPath("/" + Annot.BM_CATEGORY)) != null)
-            throw new IllegalStateException("already built: run ResetProject.java first (or delete the program and import the ROM again)");
+            throw new IllegalStateException("already built: run ResetProject.java, then BuildProject.java again");
         List<FileBytes> fbs = mem.getAllFileBytes();
         if (fbs.size() != 1 || fbs.get(0).getSize() != 0x10000)
             throw new IllegalStateException("expected one 64 KB imported file (UK_V2.01_4.04_ROM.BIN)");

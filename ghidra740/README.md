@@ -52,19 +52,29 @@ until it restarts. `ResetProject.java` returns the program to its just-imported 
 file bytes and the analysis options stay), and `rebuild.bat --reset` proves that reset plus build
 gives the same program as a fresh import plus build.
 
+**Warning:** ResetProject discards everything in the current program, GUI edits included. Run it
+only after step 1 reports `RESULT PASS`. It refuses a program whose language is not
+`MELPS740:LE:16:default`.
+
 1. Run `ExportAnnotations.java` with `check`. Its verdict is in `build\ghidra740\export.txt`
    (`RESULT PASS|FAIL`, then `EXPORT DONE`). If the marker is missing the check did not complete:
    stop. If it says FAIL, stop: there are GUI edits; export them with `ExportAnnotations.java write`,
    review and commit them, and run the check again until it passes.
-2. Run `ResetProject.java`, then `BuildProject.java`, then `CheckProject.java`: one wrapper body with
-   the three `runScript` calls in that order, so an exception stops the rest. ResetProject prints
-   `removed N blocks, ... program is as imported`, or throws if anything survives; then neither
-   build on the program nor save it: undo it in the GUI. BuildProject must print `0 error(s)`; it
-   refuses (an ERROR line) a program that is already built, so a refresh cannot build twice. It
-   also turns every analyzer off in the program's analysis options, so the GUI's auto-analysis
-   never touches the build.
+2. Run `ResetProject.java`, then `BuildProject.java`, then `CheckProject.java`, as one wrapper body
+   with the three `runScript` calls in that order.
+   - ResetProject prints `removed N blocks, ... program is as imported`. If anything survives it
+     throws instead, and it rolls its own changes back first, so the program is unchanged and the
+     wrapper stops there. Fix the cause and run the same wrapper again (ResetProject can run any
+     number of times). Do not press Undo: that would revert the previous real edit.
+   - BuildProject and CheckProject do not throw: they record problems, so the wrapper always runs
+     both. BuildProject must print `0 error(s)`. It refuses, with an ERROR line, a program that is
+     already built, so a refresh cannot build twice. It also turns every analyzer off in the
+     program's analysis options, so the GUI's auto-analysis never touches the build.
 3. Run `ExportAnnotations.java` with `check` again: it must now say `RESULT PASS`.
-4. `save_program`.
+4. `save_program`, but only when BuildProject printed `0 error(s)` and step 3 says `RESULT PASS`.
+   Otherwise do not save. Investigate in `build\ghidra740\build.txt` and `export.txt`, fix the
+   cause, and run steps 2 and 3 again (the program can be reset and rebuilt any number of times).
+   If the program ever has to be deleted and imported again, restart Ghidra first.
 
 First build only (no program yet): `import_file` the ROM with `language=MELPS740:LE:16:default`,
 `compiler_spec=default`, `auto_analyze=false`, then steps 2 to 4.
