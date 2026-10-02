@@ -104,8 +104,8 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 | 3 | b6 A3 | b7 F3 |
 | 4 | b8 AHF (high-frequency amplitude) | b9 V (degree of voicing, 1..63) |
 | 5 | b10 pitch period: 160 − 2·code samples at 10 kHz (the mark-space clamp at $B930); @F0..@FF = codes 2..63 ≈ 64..294 Hz *(rev 5)* | b11 mark-space ratio (@M, clamped by F0) *(rev 4: verified)*. *(rev 6: with c = the b10 code, `$B930` takes b11 = min(@M, 160 − 2c), unsigned; then 47 − 2c if that is not negative (signed) and not below b11; then at least 11 in every case.)* |
-| 6 | b12 constant `$17` | b13 transition flags (bit 7 spectral jump, bit 6 onset, bit 4 multi-channel drop, bit 3 F0 jump). *(rev 5: bit 7 is set at stop closures ($C0), releases ($80/$90), onsets after silence and many vowel/sonorant boundaries.)* *(rev 6, verified in code and emulator, 0 mismatches over 147 frames; the rev-5 names of bits 6 and 4 were swapped. `$BA3F` compares this frame with the previous one: bit 7 = a frequency (FN/F1/F2/F3) moved by ≥ 16 or an amplitude (ALF/A1/A2/A3/AHF) by ≥ 12; bit 6 = an amplitude **fell** by ≥ 28, or by ≥ 19 to the silent value 1 (a closure); bit 4 = two or more amplitudes **rose** by ≥ 12 (an onset or release); bit 3 = b10 moved by ≥ 7. Bit 5 is never computed, but the rest-frame template has it set, so the first set-up frames carry it.)* |
-| 7 | b14 | b15: b14–b15 are a 16-bit value from tables `$B573`/`$B673`, indexed by (ALF−A1−4)·(F1−33). *(rev 6: the value is 82·index. The index is 0 when either factor is ≤ 0 (signed), and saturates at `$FF` when the product exceeds the limit table `$B473` = ⌊255/e⌋ for e = F1−33; e = 1 always saturates.)* |
+| 6 | b12 constant `$17` | b13 transition flags (bit 7 spectral jump, ~~bit 6 onset, bit 4 multi-channel drop~~, bit 3 F0 jump). *(rev 5: bit 7 is set at stop closures ($C0), releases ($80/$90), onsets after silence and many vowel/sonorant boundaries.)* *(rev 6, verified in code and emulator, 0 mismatches over 147 frames; the rev-5 names of bits 6 and 4 were swapped. `$BA3F` compares this frame with the previous one: bit 7 = a frequency (FN/F1/F2/F3) moved by ≥ 16 or an amplitude (ALF/A1/A2/A3/AHF) by ≥ 12; bit 6 = an amplitude **fell** by ≥ 28, or by ≥ 19 to the silent value 1 (a closure); bit 4 = two or more amplitudes **rose** by ≥ 12 (an onset or release); bit 3 = b10 moved by ≥ 7. Bit 5 is never computed, but the rest-frame template has it set, so the first set-up frames carry it.)* |
+| 7 | b14 | b15: b14–b15 are a 16-bit value from tables `$B573`/`$B673`, indexed by (ALF−A1−4)·(F1−33). *(rev 6: the value is 82·index. With d = ALF−A1−4 and e = F1−33, the index is 0 when d or e is ≤ 0 (signed). Otherwise d is compared, signed, with the limit table `$B473`[e] = ⌊255/e⌋: the index saturates at `$FF` when limit − d < 0, i.e. whenever d·e would pass 255. e = 1 (limit 255, negative as a signed byte) always saturates.)* |
 | 8 | b16 voicing source (@$: $82 default, $58 spike, $9B cut-down, $BA reduced-HF) | b17 voice filter (@$: $4A male, $54 female) *(rev 4: verified)* |
 | 9 | `$FF` | `$FF` |
 
@@ -127,13 +127,13 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 
 - **Intonation model** *(rev 5, from the ROM)*. The phrase generator ($D129–$D3DD) writes per-segment arrays: phoneme
   $0200, duration $0600, pitch target $0A00 and flags $0E00, appended by $CA3B. A segment's target is
-  ($1C26>>3) + $1C25 + $1C30 + $1C23 + 105 plus the centre, built from the per-symbol flags at $1D00.
-  *(rev 6, verified: the baseline term is rounded, ⌊($1C26 + 4)/8⌋, because the bit shifted out last
-  goes in through the carry, and each later ADC takes the previous carry, the terms being signed. What
-  $CA3B adds when it stores the target is not the centre but zero-page `$16`, the @F+/@F− offset
-  (8 normally, `$10` after @F+, 0 after @F−). The @F centre `$1816` = @F·16 is applied only at
-  playback, by $BDD3. The flags array $0E00 is never read: patching its stores gives identical
-  frames.)*
+  ~~($1C26>>3) + $1C25 + $1C30 + $1C23 + 105 plus the centre~~ *(rev 6, verified)*
+  ⌊($1C26 + 4)/8⌋ + $1C25 + $1C30 + $1C23 + 105 + `$16`. The baseline term is rounded, because the
+  bit shifted out last goes in through the carry, and each later ADC takes the previous carry, the
+  terms being signed. The last term, which $CA3B adds when it stores the target, is not the centre
+  but zero-page `$16`, the @F+/@F− offset (8 normally, `$10` after @F+, 0 after @F−). The @F centre
+  `$1816` = @F·16 is applied only at playback, by $BDD3. The flags array $0E00 is never read:
+  patching its stores gives identical frames. The target is built from the per-symbol flags at $1D00:
   - accented head syllables `$60` get +15;
   - stressed but unaccented syllables `$40` get +8;
   - the nucleus (the last accent) `$67` gets +15 −10, a lower peak;
@@ -174,11 +174,15 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
   13, 17 and 18, the target and fixed contribution of P1–P4.)*
 - **Symbols to phonemes:** pointer tables at `$9D74` (ASCII) and `$9E74` (≥`$80`).
   Each entry is a list of (phoneme, max duration, min duration) triples ending in
-  `$FF`. The decoder is at `$D31B`. Punctuation produces phoneme `$3B` (pause).
-  *(rev 6: the `$9D74` table is used from symbol `$20` up. The slots of `$00–$1F` overlap the
-  symbol-feature table and are never decoded. The punctuation symbols' own lists are empty. Their
-  pause comes from `$C9B8`, whose length is @D, in full after `. ? !`, halved after `, ; :` and
-  quartered otherwise. For the 17 phonemes that no ASCII symbol reaches, see §10.)*
+  `$FF`. The decoder is at `$D31B`. Punctuation produces phoneme `$3B` (pause)
+  *(rev 6: only when @D ≠ 0, see below)*.
+  *(rev 6, verified in disassembly and emulator: the `$9D74` table is used from symbol `$20` up.
+  The slots of `$00–$1F` overlap the symbol-feature table and are never decoded. The punctuation
+  symbols' own lists are empty. When @D ≠ 0, the generator ($D1D6) calls `$C9B8` twice per
+  punctuation symbol. Each call appends a `$3B` segment whose length is @D after `. ? !`,
+  (@D>>1)&$F after `, ; :` and (@D>>2)&$F otherwise, at least 1 ($C9E8). With @D0 there is no
+  punctuation pause: "a, b." gives 61/65/67/73 frames at @D0/@D1/@D2/@D4. The clause end appends two
+  pauses of length 4 ($D18E). For the 17 phonemes that no ASCII symbol reaches, see §10.)*
 
 ## 2. Requirements
 - **R1 — CLI:** `apollo2 "text" [-o out.wav] [--voice a|b] [--prosody 0-7] [--engine rom|hybrid|native] [--rom PATH] [--hyp b11,b13] [--stream produced|raw] [--text-file FILE] [--audio-check]`. *(rev 4: `--voice b` sends `@K1`; `--stream raw` is for comparison listening only. rev 5: `--prosody` sends `@Rn`, default 4; the output filters are always on.)*
