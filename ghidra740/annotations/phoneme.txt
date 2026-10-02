@@ -1,0 +1,97 @@
+# Symbols to phonemes: the per-symbol class tables, the phoneme lists and their pointer tables, the list decoder inside the phrase generator, the duration scaling, and the pause segments (phoneme $3B)
+rom      9BB4  data      ph_symbol_class                byte[256]      class bits per phonetic symbol code: bit 7 phonetic symbol (decoded through its phoneme list), bit 6 vowel (syllable nucleus), bit 0 punctuation (phrase pause), bits 1-3 the kind of punctuation; control codes and the prosody marker symbols ` { | } ~ have none. Read by the prosody passes ($CABD, $CEF6) and the phrase generator ($D129)
+rom      9CB4  data      ph_symbol_features             byte[256]      feature bits per phonetic symbol code: bit 7 vowel, bit 6 consonant, bit 5 stop, bit 4 fricative, bit 3 nasal, bit 2 liquid or glide, bit 1 long vowel, diphthong or syllabic consonant, bit 0 voiced; read with ph_symbol_class by the prosody passes. Its last 64 bytes (symbols $C0-$FF) are also the slots of symbols $00-$1F in ph_list_ptrs, which the decoder never reads (those symbols have class 0)
+rom      9D74  label     ph_list_ptrs                   -              base of the phoneme-list pointers of the symbols below $80, indexed by symbol * 2 (ph_decode_symbol); the slots of $00-$1F lie inside ph_symbol_features and are never used, so the table is typed from symbol $20 (ph_list_ptrs_20)
+rom      9DB4  data      ph_list_ptrs_20                ptr[96]        phoneme-list pointer per symbol $20-$7F (ph_list_ptrs + symbol * 2), into the phoneme lists from ph_list_20 on, which lie in symbol order
+rom      9E74  data      ph_list_ptrs_hi                ptr[128]       phoneme-list pointer per symbol $80-$FF, indexed by (symbol - $80) * 2 (ph_decode_symbol). Only six of these lists are not empty ($83 $84 $87 $8C $98 $C0); they are the only source of phonemes 6, 7, 22, 23, 40 and 41. $98 and $C0 come from letter-to-sound rule output, the other four only from @X phonetic text. Phonemes 77 and 82-84 come only from the @T sound effects (cmd_sound_data); 25, 58, 78-81 and 85 have parameter rows but no symbol list or sound effect uses them
+rom      A187  data      ph_list_20                     byte[2]        phoneme list of the space: only the word-pause item (ph_decode_symbol appends a pause of @Q length when @Q is not 0) and the end byte
+rom      A189  data      ph_lists_empty_21              byte[15]       empty phoneme lists of the symbols $21-$2F, one end byte each in code order: these symbols make no segment
+rom      A198  data      ph_list_30                     ph_list2       phoneme list of symbol '0' ($30): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A19F  data      ph_list_31                     ph_list1       phoneme list of symbol '1' ($31): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A1A3  data      ph_list_32                     ph_list1       phoneme list of symbol '2' ($32): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A1A7  data      ph_list_33                     ph_list1       phoneme list of symbol '3' ($33): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A1AB  data      ph_list_34                     ph_list2       phoneme list of symbol '4' ($34): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A1B2  data      ph_list_35                     ph_list2       phoneme list of symbol '5' ($35): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A1B9  data      ph_list_36                     ph_list3       phoneme list of symbol '6' ($36): 3 (phoneme, max duration, min duration) triples and the end byte
+rom      A1C3  data      ph_list_37                     ph_list1       phoneme list of symbol '7' ($37): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A1C7  data      ph_list_38                     byte           empty phoneme list of symbol '8' ($38): only the end byte, the symbol makes no segment
+rom      A1C8  data      ph_list_39                     ph_list2       phoneme list of symbol '9' ($39): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A1CF  data      ph_lists_empty_3A              byte[7]        empty phoneme lists of the symbols $3A-$40, one end byte each in code order: these symbols make no segment
+rom      A1D6  data      ph_list_41                     ph_list2       phoneme list of symbol 'A' ($41): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A1DD  data      ph_list_42                     ph_list2       phoneme list of symbol 'B' ($42): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A1E4  data      ph_list_43                     ph_list3       phoneme list of symbol 'C' ($43): 3 (phoneme, max duration, min duration) triples and the end byte
+rom      A1EE  data      ph_list_44                     ph_list2       phoneme list of symbol 'D' ($44): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A1F5  data      ph_list_45                     ph_list1       phoneme list of symbol 'E' ($45): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A1F9  data      ph_list_46                     ph_list1       phoneme list of symbol 'F' ($46): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A1FD  data      ph_list_47                     ph_list2       phoneme list of symbol 'G' ($47): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A204  data      ph_list_48                     ph_list1       phoneme list of symbol 'H' ($48): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A208  data      ph_list_49                     ph_list2       phoneme list of symbol 'I' ($49): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A20F  data      ph_list_4A                     ph_list2       phoneme list of symbol 'J' ($4A): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A216  data      ph_list_4B                     ph_list3       phoneme list of symbol 'K' ($4B): 3 (phoneme, max duration, min duration) triples and the end byte
+rom      A220  data      ph_list_4C                     ph_list1       phoneme list of symbol 'L' ($4C): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A224  data      ph_list_4D                     ph_list1       phoneme list of symbol 'M' ($4D): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A228  data      ph_list_4E                     ph_list1       phoneme list of symbol 'N' ($4E): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A22C  data      ph_list_4F                     ph_list2       phoneme list of symbol 'O' ($4F): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A233  data      ph_list_50                     ph_list3       phoneme list of symbol 'P' ($50): 3 (phoneme, max duration, min duration) triples and the end byte
+rom      A23D  data      ph_list_51                     ph_list1       phoneme list of symbol 'Q' ($51): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A241  data      ph_list_52                     ph_list1       phoneme list of symbol 'R' ($52): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A245  data      ph_list_53                     ph_list1       phoneme list of symbol 'S' ($53): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A249  data      ph_list_54                     ph_list3       phoneme list of symbol 'T' ($54): 3 (phoneme, max duration, min duration) triples and the end byte
+rom      A253  data      ph_list_55                     ph_list1       phoneme list of symbol 'U' ($55): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A257  data      ph_list_56                     ph_list1       phoneme list of symbol 'V' ($56): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A25B  data      ph_list_57                     ph_list1       phoneme list of symbol 'W' ($57): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A25F  data      ph_list_58                     ph_list1       phoneme list of symbol 'X' ($58): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A263  data      ph_list_59                     ph_list1       phoneme list of symbol 'Y' ($59): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A267  data      ph_list_5A                     ph_list1       phoneme list of symbol 'Z' ($5A): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A26B  data      ph_lists_empty_5B              byte[6]        empty phoneme lists of the symbols $5B-$60, one end byte each in code order: these symbols make no segment
+rom      A271  data      ph_list_61                     ph_list1       phoneme list of symbol 'a' ($61): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A275  data      ph_list_62                     ph_list1       phoneme list of symbol 'b' ($62): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A279  data      ph_list_63                     ph_list3       phoneme list of symbol 'c' ($63): 3 (phoneme, max duration, min duration) triples and the end byte
+rom      A283  data      ph_list_64                     ph_list1       phoneme list of symbol 'd' ($64): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A287  data      ph_list_65                     ph_list1       phoneme list of symbol 'e' ($65): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A28B  data      ph_list_66                     ph_list2       phoneme list of symbol 'f' ($66): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A292  data      ph_list_67                     ph_list2       phoneme list of symbol 'g' ($67): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A299  data      ph_list_68                     ph_list1       phoneme list of symbol 'h' ($68): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A29D  data      ph_list_69                     ph_list1       phoneme list of symbol 'i' ($69): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2A1  data      ph_list_6A                     ph_list2       phoneme list of symbol 'j' ($6A): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A2A8  data      ph_list_6B                     ph_list2       phoneme list of symbol 'k' ($6B): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A2AF  data      ph_list_6C                     ph_list2       phoneme list of symbol 'l' ($6C): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A2B6  data      ph_list_6D                     ph_list1       phoneme list of symbol 'm' ($6D): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2BA  data      ph_list_6E                     ph_list1       phoneme list of symbol 'n' ($6E): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2BE  data      ph_list_6F                     ph_list1       phoneme list of symbol 'o' ($6F): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2C2  data      ph_list_70                     ph_list2       phoneme list of symbol 'p' ($70): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A2C9  data      ph_list_71                     ph_list2       phoneme list of symbol 'q' ($71): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A2D0  data      ph_list_72                     ph_list1       phoneme list of symbol 'r' ($72): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2D4  data      ph_list_73                     ph_list1       phoneme list of symbol 's' ($73): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2D8  data      ph_list_74                     ph_list1       phoneme list of symbol 't' ($74): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2DC  data      ph_list_75                     ph_list1       phoneme list of symbol 'u' ($75): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2E0  data      ph_list_76                     ph_list1       phoneme list of symbol 'v' ($76): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2E4  data      ph_list_77                     ph_list2       phoneme list of symbol 'w' ($77): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A2EB  data      ph_list_78                     ph_list1       phoneme list of symbol 'x' ($78): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2EF  data      ph_list_79                     ph_list2       phoneme list of symbol 'y' ($79): 2 (phoneme, max duration, min duration) triples and the end byte
+rom      A2F6  data      ph_list_7A                     ph_list1       phoneme list of symbol 'z' ($7A): 1 (phoneme, max duration, min duration) triple and the end byte
+rom      A2FA  data      ph_lists_empty_7B              byte[8]        empty phoneme lists of the symbols $7B-$82, one end byte each in code order: these symbols make no segment
+rom      A302  data      ph_list_83                     ph_list1       phoneme list of symbol $83: 1 (phoneme, max duration, min duration) triple and the end byte; the only list with phoneme 7; no rule outputs symbol $83, so only @X phonetic text reaches it
+rom      A306  data      ph_list_84                     ph_list1       phoneme list of symbol $84: 1 (phoneme, max duration, min duration) triple and the end byte; the only list with phoneme 6; no rule outputs symbol $84, so only @X phonetic text reaches it (cmd_case_map folds $84 to $8E in a clause scanned without @X)
+rom      A30A  data      ph_lists_empty_85              byte[2]        empty phoneme lists of the symbols $85-$86, one end byte each in code order: these symbols make no segment
+rom      A30C  data      ph_list_87                     ph_list2       phoneme list of symbol $87: 2 (phoneme, max duration, min duration) triples and the end byte; the only list with phoneme 22; no rule outputs symbol $87, so only @X phonetic text reaches it (cmd_case_map folds $87 to $80 in a clause scanned without @X)
+rom      A313  data      ph_lists_empty_88              byte[4]        empty phoneme lists of the symbols $88-$8B, one end byte each in code order: these symbols make no segment
+rom      A317  data      ph_list_8C                     ph_list1       phoneme list of symbol $8C: 1 (phoneme, max duration, min duration) triple and the end byte; the only list with phoneme 40; no rule outputs symbol $8C, so only @X phonetic text reaches it
+rom      A31B  data      ph_lists_empty_8D              byte[11]       empty phoneme lists of the symbols $8D-$97, one end byte each in code order: these symbols make no segment
+rom      A326  data      ph_list_98                     ph_list2       phoneme list of symbol $98: 2 (phoneme, max duration, min duration) triples and the end byte; the only list with phoneme 23; output by letter-to-sound rules (e.g. MEGATON)
+rom      A32D  data      ph_lists_empty_99              byte[39]       empty phoneme lists of the symbols $99-$BF, one end byte each in code order: these symbols make no segment
+rom      A354  data      ph_list_C0                     ph_list1       phoneme list of symbol $C0: 1 (phoneme, max duration, min duration) triple and the end byte; the only list with phoneme 41 (a long syllabic consonant); output by letter-to-sound rules (e.g. LEVEL, NOVEL)
+rom      A358  data      ph_lists_empty_C1              byte[63]       empty phoneme lists of the symbols $C1-$FF, one end byte each in code order: these symbols make no segment
+rom      C67B  data      ph_dur_lengthen                byte[256]      one lengthening step: value x (0-255) to about 1.1 * x, capped at 255; ph_decode_symbol applies it ph_lengthen_count times to a phoneme's duration range
+rom      C77B  data      ph_dur_shorten                 byte[256]      one shortening step: value x (0-255) to about 0.9 * x; ph_decode_symbol applies it (shortening count + 1) / 2 times to a phoneme's duration range
+rom      C9B8  func      ph_append_phrase_pause         -              append a pause segment for the punctuation symbol $1C03 to the playback arrays: phoneme $3B, duration from cmd_phrase_pause (@D) in full after . ? !, halved after , ; : and quartered otherwise (at least 1), the previous pitch target $1C29, flags $80; A and Y preserved (exit shared with $CA3B)
+rom      CA15  func      ph_append_pause                -              append a pause segment to the playback arrays: phoneme $3B, duration A, the previous pitch target $1C29, flags $80 ($22-$29 pointers, index $17F6, which moves the pointers on a page wrap)
+rom      D31B  label     ph_decode_symbol               -              the phoneme-list decoder (inside the phrase generator $D129): symbol $1C03 below $80 indexes ph_list_ptrs, from $80 ph_list_ptrs_hi; the list pointer goes to ph_list_ptr. Each (phoneme, max, min) triple appends one segment through $CA3B; the end byte or a word-pause item goes on to the next symbol
+rom      D348  comment   -                              -              word-pause item (space only): with @Q (cmd_word_pause) not 0 append a pause of that length (ph_append_pause); either way the symbol is done
+rom      D360  comment   -                              -              a triple: ph_phoneme, ph_max_dur, ph_min_dur; ph_dur_range = max - min
+rom      D383  comment   -                              -              shorten the range: (per-symbol shortening count $1E00,X + 1) / 2 steps of ph_dur_shorten
+rom      D39A  comment   -                              -              lengthen the range: ph_lengthen_count((per-symbol lengthening count $1F00,X + 1) / 2) steps of ph_dur_lengthen
+rom      D3B6  comment   -                              -              duration = min + scaled range, capped at 255; / 8 indexes the speed's duration map (cmd_speed_map) for ph_duration in frames; append the segment ($CA3B)
+rom      D3CF  comment   -                              -              flag bit 4 in $1D00 (a stop before another stop, set by $CABD): keep only the first triple (the closure, an unreleased stop); otherwise go on with the next triple
+rom      D43E  func      ph_lengthen_count              -              A = (lengthening count of the symbol + 1) / 2: Y = number of ph_dur_lengthen steps, from ph_lengthen_steps for A below 31, else A / 2
+rom      D44B  data      ph_lengthen_steps              byte[30]       lengthening steps for a half count of 1-30 (ph_lengthen_count; base $D44A, the count indexes it from 1): grows more slowly than the count

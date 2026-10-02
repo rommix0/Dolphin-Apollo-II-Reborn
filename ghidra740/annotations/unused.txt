@@ -1,5 +1,6 @@
 # Padding and unused areas (unused_XXXX)
 rom      8FF4  data      unused_8FF4                    byte[2060]     padding ($FF) after the last ROM two-letter rule list (lts_rules_j)
+rom      A397  data      unused_A397                    byte[617]      padding ($FF) after the phoneme lists (the last is that of symbol $FF), up to bank_load_ramcode
 rom      B0C2  data      unused_B0C2                    byte           an RTS that no path reaches, after the symbol dispatch of lts_match_symbol
 rom      FFD7  data      unused_FFD7                    byte           bank header padding (a NOP byte) between the warm and reset entries
 rom      FFDB  data      unused_FFDB                    byte[5]        bank header padding ($FF)

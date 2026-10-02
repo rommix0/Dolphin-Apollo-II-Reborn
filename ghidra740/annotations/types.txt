@@ -21,3 +21,27 @@ field  frame20                     14  b14_15                   word       from 
 field  frame20                     16  source                   byte       b16 voicing source (@$)
 field  frame20                     17  filter                   byte       b17 voice filter (@$)
 field  frame20                     18  end_marker               word       always $FFFF
+struct ph_list1                     4  A phoneme list with one (phoneme, max duration, min duration) triple, then the list end $FF (ph_decode_symbol)
+field  ph_list1                     0  phoneme                  byte       phoneme index 0-85: row of the phoneme parameter tables
+field  ph_list1                     1  max_dur                  byte       maximum duration, before scaling
+field  ph_list1                     2  min_dur                  byte       minimum duration; the shortening and lengthening steps scale only max - min
+field  ph_list1                     3  end                      byte       list end $FF
+struct ph_list2                     7  A phoneme list with two (phoneme, max duration, min duration) triples, then the list end $FF (ph_decode_symbol)
+field  ph_list2                     0  phoneme1                 byte       first phoneme index 0-85
+field  ph_list2                     1  max_dur1                 byte       maximum duration of the first phoneme
+field  ph_list2                     2  min_dur1                 byte       minimum duration of the first phoneme
+field  ph_list2                     3  phoneme2                 byte       second phoneme index 0-85
+field  ph_list2                     4  max_dur2                 byte       maximum duration of the second phoneme
+field  ph_list2                     5  min_dur2                 byte       minimum duration of the second phoneme
+field  ph_list2                     6  end                      byte       list end $FF
+struct ph_list3                    10  A phoneme list with three (phoneme, max duration, min duration) triples, then the list end $FF (ph_decode_symbol)
+field  ph_list3                     0  phoneme1                 byte       first phoneme index 0-85
+field  ph_list3                     1  max_dur1                 byte       maximum duration of the first phoneme
+field  ph_list3                     2  min_dur1                 byte       minimum duration of the first phoneme
+field  ph_list3                     3  phoneme2                 byte       second phoneme index 0-85
+field  ph_list3                     4  max_dur2                 byte       maximum duration of the second phoneme
+field  ph_list3                     5  min_dur2                 byte       minimum duration of the second phoneme
+field  ph_list3                     6  phoneme3                 byte       third phoneme index 0-85
+field  ph_list3                     7  max_dur3                 byte       maximum duration of the third phoneme
+field  ph_list3                     8  min_dur3                 byte       minimum duration of the third phoneme
+field  ph_list3                     9  end                      byte       list end $FF

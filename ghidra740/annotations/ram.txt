@@ -27,6 +27,7 @@ ram      001E  data      lts_affix_ptr                  ptr            affix lis
 ram      0020  data      tn_rule_ptr                    ptr            current rule in a rule list (tn_say_char, lts_match_list), or the length-prefixed phonetic text of cmd_put_phonetic; tn_append_phonetic copies from it
 ram      002A  data      isr_play_ptr                   ptr            timer ISR: the ping-pong frame being sent ($16A5 or $16B9)
 ram      002C  data      isr_fill_ptr                   ptr            producer pointer: the other ping-pong frame, filled by the frame builder
+ram      0036  data      ph_list_ptr                    ptr            phoneme list being decoded (ph_decode_symbol), indexed by Y
 ram      0038  data      lts_pair_table                 ptr            second-level table of the key letter (lts_pairs_a..z), from lts_pair_index; indexed by the second letter
 ram      003A  data      cmd_speed_map                  ptr            duration map of the current speed in cmd_speed_map_data (cmd_apply_speed)
 ram      003C  data      ser_rx_read                    ptr            input ring read pointer ($2100-$38FF; boot_get_clause)
@@ -98,6 +99,11 @@ ram      181B  data      bank_ver_minor                 byte           copy of b
 ram      1900  data      tn_phonetic                    char[256]      phonetic buffer: the clause converted to phonetic text (rule outputs, copied spaces and punctuation), length tn_phon_len; input of the prosody pass $CA92
 ram      1A00  data      cmd_text                       char[256]      the clause without its commands, upper-cased (cmd_scan_clause); input of text conversion
 ram      1B00  data      boot_clause                    char[256]      one clause taken from the input ring by boot_get_clause (length in $54)
+ram      1C01  data      ph_phoneme                     byte           phoneme of the segment being appended: from the list (ph_decode_symbol) or $3B for a pause (ph_append_pause, ph_append_phrase_pause); stored by $CA3B
+ram      1C17  data      ph_min_dur                     byte           minimum duration of the current triple (ph_decode_symbol)
+ram      1C18  data      ph_max_dur                     byte           maximum duration of the current triple (ph_decode_symbol)
+ram      1C32  data      ph_duration                    byte           duration in frames of the segment being appended, after the speed map (ph_decode_symbol); stored by $CA3B
+ram      1C33  data      ph_dur_range                   byte           max - min duration of the current triple, then scaled by the shortening and lengthening steps (ph_decode_symbol)
 ram      2014  data      cmd_formant_ofs                byte[10]       @u signed offsets of the ten parameters (Fn F1 F2 F3 ALF A1 A2 A3 A4 voicing), cleared by cmd_clear_formant and @V
 ram      2020  data      ser_cmd_buf                    char[6]        zero-terminated characters of the immediate command being collected
 ram      2026  data      bank_id_table                  char[98]       14-character ID per bank 1-7 (bank_read_id); the @L reply sends it
