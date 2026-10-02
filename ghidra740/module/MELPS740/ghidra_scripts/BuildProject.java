@@ -2,7 +2,9 @@
 // Run on a freshly imported UK_V2.01_4.04_ROM.BIN (raw binary, MELPS740:LE:16:default, no analysis).
 // Writes build/ghidra740/build.txt: ERROR lines and a SUMMARY line. CheckProject reports them as criterion 0.
 //@category ghidra740
+import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.app.script.GhidraScript;
+import ghidra.framework.options.Options;
 import ghidra.program.database.mem.FileBytes;
 import ghidra.program.model.address.*;
 import ghidra.program.model.data.*;
@@ -24,6 +26,7 @@ public class BuildProject extends GhidraScript {
         Files.createDirectories(report.getParent());
         String summary = "SUMMARY not built";
         try {
+            disableAutoAnalysis();
             Annot.Annotations an = Annot.load(root.resolve("ghidra740/annotations"));
             Annot.Cov cov = Annot.loadCoverage(root.resolve("ghidra740/coverage/corpus.cov"));
             buildMemory();
@@ -55,6 +58,19 @@ public class BuildProject extends GhidraScript {
         Files.writeString(report, sb.toString(), StandardCharsets.UTF_8);
         println("BuildProject: " + errors.size() + " error(s); " + summary);
         for (String e : errors) printerr("BuildProject: " + e);
+    }
+
+    /** Turns every analyzer of this program off, idempotently. */
+    private void disableAutoAnalysis() {
+        // Else the GUI's auto-analysis reacts to the build (functions at labels, data in RAM) and the program drifts from the headless one.
+        AutoAnalysisManager aam = AutoAnalysisManager.getAnalysisManager(currentProgram);
+        if (aam.isAnalyzing())
+            errors.add("auto-analysis was already running or queued when BuildProject started: import the ROM again with analysis off");
+        Options opts = currentProgram.getOptions(Program.ANALYSIS_PROPERTIES);
+        for (String name : opts.getOptionNames())
+            if (aam.getAnalyzer(name) != null)
+                opts.setBoolean(name, false);
+        aam.initializeOptions();   // the schedulers read their enable flags only here, so apply them before the first change
     }
 
     private static String hex(Address a) { return String.format("%04X", a.getOffset()); }

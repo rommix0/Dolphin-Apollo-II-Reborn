@@ -52,6 +52,8 @@ public class Run740 extends GhidraScript {
    UK_V2.01_4.04_ROM.BIN`.
 2. `import_file` the ROM with `language=MELPS740:LE:16:default`, `compiler_spec=default`, `auto_analyze=false`.
 3. Run `BuildProject.java` (expect `0 error(s)`), then `CheckProject.java`; `save_program`.
+   BuildProject first turns every analyzer off in the program's analysis options, so the GUI's
+   auto-analysis never touches the build and the program matches the headless one.
 
 Names made in the GUI reach git only through `ExportAnnotations.java write`. New records land in
 `annotations/new.txt`: move each one to its subsystem's file. `write` deletes annotation files it
