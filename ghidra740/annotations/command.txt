@@ -38,9 +38,9 @@ rom      98F5  data      cmd_pat_speed                  string[3]      zero-term
 rom      98F8  jumptable cmd_pat_speed_fn               ptr[1]         handler of cmd_pat_speed: cmd_set_speed
 rom      98FA  data      cmd_pat_phonetic               string[3]      zero-terminated match pattern of @X (phonetic mode)
 rom      98FD  jumptable cmd_pat_phonetic_fn            ptr[1]         handler of cmd_pat_phonetic: cmd_set_phonetic
-rom      98FF  data      cmd_pat_formant_add            string[5]      zero-terminated match pattern of @u with one hex digit and +
+rom      98FF  data      cmd_pat_formant_add            string[5]      zero-terminated match pattern of @u with one hex digit and + (matched and removed, but without effect)
 rom      9904  jumptable cmd_pat_formant_add_fn         ptr[1]         handler of cmd_pat_formant_add: cmd_set_formant
-rom      9906  data      cmd_pat_formant_sub            string[5]      zero-terminated match pattern of @u with one hex digit and -
+rom      9906  data      cmd_pat_formant_sub            string[5]      zero-terminated match pattern of @u with one hex digit and - (matched and removed, but without effect)
 rom      990B  jumptable cmd_pat_formant_sub_fn         ptr[1]         handler of cmd_pat_formant_sub: cmd_set_formant
 rom      990D  data      cmd_pat_formant_add2           string[6]      zero-terminated match pattern of @u with two hex digits and +
 rom      9913  jumptable cmd_pat_formant_add2_fn        ptr[1]         handler of cmd_pat_formant_add2: cmd_set_formant
@@ -87,7 +87,7 @@ rom      A8BD  label     cmd_run_done                   -              common ex
 rom      A8C0  func      cmd_sound                      -              @T handler, A = argument (hex digit, or x = effect 16): queue two command events at the phonetic position $53, cmd_ev_sound_start and cmd_ev_sound_end, both with the effect number
 rom      A902  func      cmd_say_version                -              @? handler: append the spoken engine version cmd_version_engine_text and language version cmd_version_lang_text to the phonetic buffer (cmd_put_phonetic)
 rom      A91F  func      cmd_set_phrase_pause           -              @D handler: cmd_phrase_pause = hex digit 0-F
-rom      A92F  func      cmd_set_formant                -              @u handler: back to the U (cmd_find_back), parameter digit d (0-9), one or two hex digits, then + or -: cmd_formant_ofs[d] = +value or -value
+rom      A92F  func      cmd_set_formant                -              @u handler: back to the U (cmd_find_back), parameter digit d (0-9), two hex digits, then + or -: cmd_formant_ofs[d] = +value or -value; the single-digit forms are matched (and removed from the text) but do nothing, because the sign fails cmd_hex_value as the second digit
 rom      A98A  func      cmd_set_word_pause             -              @Q handler: cmd_word_pause = digit 0-9
 rom      A99A  func      cmd_set_mark_space             -              @M handler: back to the M (cmd_find_back), two hex digits, the first 0-3: cmd_mark_space = 0-$3F
 rom      A9C9  func      cmd_set_speed                  -              @W handler: cmd_speed = digit 1-9, then cmd_apply_speed
@@ -118,7 +118,7 @@ rom      BBA7  func      cmd_ev_sound_start             -              event of 
 rom      BC80  func      cmd_ev_sound_end               -              event of @T: when a sound effect is active ($5F bit 0) restore the playback pointers and state saved by cmd_ev_sound_start
 rom      BCEA  func      cmd_ev_set_voicing             -              event of @B: cmd_voicing = A
 rom      BCED  func      cmd_ev_set_volume              -              event of @A: cmd_volume = A and isr_set_volume
-rom      C413  func      cmd_imm_match                  -              immediate-command mode, A = received byte (interrupt level): store it in ser_cmd_buf and match the buffer against cmd_imm_table (cmd_match_table, from ser_cmd_table_ofs): no match leaves command mode and passes the buffer on as input (ser_rx_flush_cmd); a partial match waits for more; a full match jumps to the handler through cmd_imm_vector with A = first buffer character; zero page $44-$49 and $4C preserved
+rom      C413  func      cmd_imm_match                  -              immediate-command mode, A = received byte (interrupt level): store it in ser_cmd_buf and match the buffer against cmd_imm_table (cmd_match_table, from ser_cmd_table_ofs): no match leaves command mode and passes the buffer on as input (ser_rx_flush_cmd); a partial match waits for more; a full match jumps to the handler through cmd_imm_vector with A = the byte just received (the last buffer character; neither handler uses it); zero page $44-$49 and $4C preserved
 rom      C46A  comment   -                              -              JMP (cmd_imm_vector): handler taken from the matched cmd_imm_table entry (cmd_imm_index_add or cmd_imm_index_query); both return to cmd_imm_done
 rom      C46C  label     cmd_imm_done                   -              common exit of cmd_imm_match and the immediate handlers: restore zero page $44-$49 and $4C, return
 rom      C483  func      cmd_imm_index_add              -              immediate @I+: the first one after a mute (cmd_index_reset) zeroes cmd_index_count; cmd_index_count += 1; command mode off and the command passed on as input (ser_rx_flush_cmd) so cmd_mark_index marks its place in the speech
