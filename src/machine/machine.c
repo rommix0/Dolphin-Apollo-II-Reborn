@@ -14,6 +14,7 @@ void machine_default_config(machine_config *cfg)
     static const uint8_t k_default[5] = { 0x00, 0x00, 0x70, 0x00, 0x00 };
     memcpy(cfg->port_in, k_default, sizeof k_default);
     cfg->cycle_num = cfg->cycle_den = 1;
+    cfg->coverage = NULL;
 }
 
 static bool is_sfr(uint16_t a) { return a >= M50734_SFR_FIRST && a <= 0x00FF; }
@@ -26,6 +27,16 @@ static bool main_rom_selected(const machine *m)
 static bool lower_half_selected(const machine *m)
 {
     return (m50734_port_pins(&m->sfr, 2) & P2_LOWER_HALF) != 0;
+}
+
+/* Coverage space of an instruction address under the current banking (M3 spec ง5.1). */
+static cov_space coverage_space(const machine *m, uint16_t pc)
+{
+    if (pc >= 0x8000)
+        return COV_ROM;
+    if (pc >= 0x4000)
+        return lower_half_selected(m) ? COV_LOW : COV_ROM;
+    return pc >= 0x0200 && pc <= 0x03FE ? COV_RAMCODE : COV_RAM;
 }
 
 /* Spec ยง4: executing from SFR space or from a deselected ROM bank is a runaway PC. */
@@ -130,6 +141,7 @@ bool machine_init(machine *m, const uint8_t *rom, size_t len, const machine_conf
     memcpy(m->rom, rom, len);
     m->cycle_num = cfg->cycle_num ? cfg->cycle_num : 1;
     m->cycle_den = cfg->cycle_den ? cfg->cycle_den : 1;
+    m->coverage = cfg->coverage;
     m50734_reset(&m->sfr, cfg->port_in);
     m->dsp_reset_level = (m50734_port_pins(&m->sfr, 2) & P2_DSP_RESET) != 0;
     m->bus.ctx = m;
@@ -219,11 +231,27 @@ machine_status machine_run(machine *m, uint64_t max_cycles)
             capture_frame(m);
         m->op_pc = m->cpu.pc;
         m->history[m->history_pos++ % MACHINE_HISTORY] = m->cpu.pc;
+        cov_space cov_from = COV_ROM;
+        bool cov_indirect = false;
+        if (m->coverage) {
+            /* Mirrors cpu740_step: a waiting CPU wakes on any IRQ line; an unmasked IRQ is taken
+               instead of the instruction at op_pc. Only an executed instruction is recorded. */
+            bool wakes = !m->cpu.waiting || m->cpu.irq_lines;
+            bool irq = m->cpu.irq_lines && !(m->cpu.p & CPU740_I);
+            if (wakes && !irq) {
+                uint8_t op = machine_peek(m, m->op_pc);
+                cov_from = coverage_space(m, m->op_pc);
+                coverage_mark(m->coverage, cov_from, m->op_pc);
+                cov_indirect = op == 0x6C || op == 0xB2 || op == 0x02;   /* JMP (abs), JMP (zp), JSR (zp) */
+            }
+        }
         int cycles = cpu740_step(&m->cpu, &m->bus);
         if (cycles == 0) {
             m->fault = MFAULT_CPU;
             return MACHINE_FAULT;
         }
+        if (cov_indirect)
+            coverage_add_edge(m->coverage, cov_from, m->op_pc, coverage_space(m, m->cpu.pc), m->cpu.pc);
         uint64_t acc = m->cycle_rem + (uint64_t)cycles * m->cycle_num;
         m->cycle_rem = acc % m->cycle_den;
         m50734_tick(&m->sfr, (int)(acc / m->cycle_den));
