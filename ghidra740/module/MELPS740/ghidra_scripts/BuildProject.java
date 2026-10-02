@@ -1,5 +1,6 @@
 // Rebuilds the program from the ROM image and ghidra740/annotations (M3 spec §5.2-§5.4).
-// Run on a freshly imported UK_V2.01_4.04_ROM.BIN (raw binary, MELPS740:LE:16:default, no analysis).
+// Run on a freshly imported UK_V2.01_4.04_ROM.BIN (raw binary, MELPS740:LE:16:default, no analysis), or on one that
+// ResetProject.java has returned to that state; it refuses (ERROR line) a program that is already built.
 // Writes build/ghidra740/build.txt: ERROR lines and a SUMMARY line. CheckProject reports them as criterion 0.
 //@category ghidra740
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
@@ -77,8 +78,10 @@ public class BuildProject extends GhidraScript {
 
     private void buildMemory() throws Exception {
         Memory mem = currentProgram.getMemory();
-        if (mem.getBlock("ROM") != null)
-            throw new IllegalStateException("already built: delete the program and import the ROM again");
+        // A built or partly reset program has these; one just imported (or reset by ResetProject) has none.
+        if (mem.getBlock("ROM") != null || currentProgram.getSymbolTable().getNumSymbols() > 0
+                || currentProgram.getDataTypeManager().getCategory(new CategoryPath("/" + Annot.BM_CATEGORY)) != null)
+            throw new IllegalStateException("already built: run ResetProject.java first (or delete the program and import the ROM again)");
         List<FileBytes> fbs = mem.getAllFileBytes();
         if (fbs.size() != 1 || fbs.get(0).getSize() != 0x10000)
             throw new IllegalStateException("expected one 64 KB imported file (UK_V2.01_4.04_ROM.BIN)");
