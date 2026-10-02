@@ -158,7 +158,8 @@ public class Annot {
         }
     }
 
-    private static void validate(Annotations a, List<String> errors) {
+    /** Appends to errors every way the records and structs break the format (load runs it; ExportAnnotations before a write). */
+    public static void validate(Annotations a, List<String> errors) {
         for (Struct s : a.structs.values()) {
             for (Field f : s.fields) {
                 TypeRef t = parseType(f.type);

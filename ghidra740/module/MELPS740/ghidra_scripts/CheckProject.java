@@ -136,14 +136,16 @@ public class CheckProject extends GhidraScript {
         return ds != null && ds.getSource() != SourceType.DEFAULT;
     }
 
-    /** RAM base address used by (zp,X), (zp),Y, JMP/JSR (zp) or abs,X / abs,Y below $4000; null otherwise. */
+    /** RAM base address used by (zp,X), (zp),Y, JMP/JSR (zp), zp,X / zp,Y, or abs,X / abs,Y / JMP (abs) below $4000;
+     *  null otherwise. Opcodes as in src/cpu740/optable.c. */
     private static Integer ramBase(Instruction in) throws Exception {
         int op = in.getByte(0) & 0xFF;
         boolean zpPtr = (op & 0x1F) == 0x01 || (op & 0x1F) == 0x11 || op == 0x02 || op == 0xB2;
-        boolean absIdx = (op & 0x1F) == 0x1D || (op & 0x1F) == 0x19 || op == 0x1E || op == 0x3E || op == 0x5E
-            || op == 0x7E || op == 0xDE || op == 0xFE || op == 0xBC || op == 0xBE;
-        if (zpPtr) return in.getByte(1) & 0xFF;
-        if (absIdx) {
+        boolean zpIdx = (op & 0x1F) == 0x15 || (op & 0x1F) == 0x16 || op == 0x94 || op == 0xB4 || op == 0x62 || op == 0xE2;
+        boolean absBase = (op & 0x1F) == 0x1D || (op & 0x1F) == 0x19 || op == 0x1E || op == 0x3E || op == 0x5E
+            || op == 0x7E || op == 0xDE || op == 0xFE || op == 0xBC || op == 0xBE || op == 0x6C;
+        if (zpPtr || zpIdx) return in.getByte(1) & 0xFF;
+        if (absBase) {
             int a = (in.getByte(1) & 0xFF) | (in.getByte(2) & 0xFF) << 8;
             return a < 0x4000 ? a : null;
         }

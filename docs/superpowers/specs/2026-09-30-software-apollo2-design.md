@@ -354,7 +354,7 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
    `docs/superpowers/specs/2026-10-01-m3-ghidra740-design.md`. The module matches `cpu740` on all
    256 opcodes (`validate.bat`: 14336 executed vectors, 32 decode-only opcodes, 0 mismatches). The project
    is rebuilt from `ghidra740/annotations` and passes every M3 done criterion: 0 undefined bytes,
-   168 named functions, 280 named data items and 78 named RAM bases, with the three indirect jumps
+   168 named functions, 280 named data items and 80 named RAM bases, with the three indirect jumps
    resolved.
 3. **Replacement:**
    - Each C routine gets a thunk keyed by its ROM entry address. The thunk maps

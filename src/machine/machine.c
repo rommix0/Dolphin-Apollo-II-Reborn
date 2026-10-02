@@ -29,7 +29,7 @@ static bool lower_half_selected(const machine *m)
     return (m50734_port_pins(&m->sfr, 2) & P2_LOWER_HALF) != 0;
 }
 
-/* Coverage space of an instruction address under the current banking (M3 spec ง5.1). */
+/* Coverage space of an instruction address under the current banking (M3 spec ยง5.1). */
 static cov_space coverage_space(const machine *m, uint16_t pc)
 {
     if (pc >= 0x8000)

@@ -5,6 +5,8 @@
 // verdict (DIFF lines and RESULT PASS|FAIL), and roundtrip.txt is deleted first so no stale verdict can survive.
 // Headless write refuses to run unless BuildProject completed without errors (build.txt): an export of a
 // half-built project would silently drop records. write deletes annotation files that no longer hold anything.
+// write (headless or GUI) also refuses, before writing anything, a program that is not MELPS740:LE:16:default or lacks
+// the ROM, LOW or RAMCODE block, and records that fail the annotation format's own validation (Annot), listing them.
 //@category ghidra740
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.*;
@@ -32,6 +34,14 @@ public class ExportAnnotations extends GhidraScript {
         Files.createDirectories(done.getParent());
         Files.deleteIfExists(done);
         Path dir = root.resolve("ghidra740/annotations");
+        if (mode.equals("write")) {
+            String lang = currentProgram.getLanguageID().getIdAsString();
+            if (!lang.equals("MELPS740:LE:16:default"))
+                throw new IllegalStateException(currentProgram.getName() + " is " + lang + ", not MELPS740:LE:16:default: not exporting");
+            for (String b : List.of("ROM", "LOW", "RAMCODE"))
+                if (currentProgram.getMemory().getBlock(b) == null)
+                    throw new IllegalStateException("no " + b + " block: not a BuildProject program, not exporting");
+        }
         if (mode.equals("write") && isRunningHeadless()) {
             // Headless, build.txt is this run's own BuildProject report: no report, no SUMMARY (BuildProject did not
             // complete) or an ERROR line means the program is not the full project. In the GUI there is no such
@@ -53,6 +63,11 @@ public class ExportAnnotations extends GhidraScript {
         collect(now);
         collectStructs(now);
         if (mode.equals("write")) {
+            List<String> errors = new ArrayList<>();
+            Annot.validate(now, errors);
+            if (!errors.isEmpty())
+                throw new IllegalStateException("exported records fail validation (FILE:0 is the record's target file), not writing:\n  "
+                    + String.join("\n  ", errors));
             Annot.write(now, dir);
             println("ExportAnnotations: wrote " + now.recs.size() + " records to " + dir);
             Files.writeString(done, "wrote " + now.recs.size() + " records\nEXPORT DONE\n", StandardCharsets.UTF_8);

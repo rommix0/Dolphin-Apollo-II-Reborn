@@ -86,7 +86,7 @@ ghidra740/module/MELPS740/
   data/languages/m740.slaspec   derived from Ghidra's 6502.slaspec (not 65c02: the opcode maps differ)
   data/languages/m740.ldefs     id MELPS740:LE:16:default
   data/languages/m740.pspec     program counter only; SFR and vector labels come from annotations (sfr.txt, boot.txt)
-  data/languages/m740.cspec     JSR/RTS calling convention, stack in page 1
+  data/languages/m740.cspec     JSR/RTS calling convention, 16-bit SP (the stack page is not fixed, §3)
 ghidra740/install.bat          sleigh.bat → .sla, then mirror the module into %APPDATA%\ghidra\ghidra_12.1.3_PUBLIC\Extensions\MELPS740
                                and into build\ghidra740\settings\...\Extensions\MELPS740 (§1)
 ghidra740/ghidra_env.bat       shared by the headless bats: Ghidra location, 8.3 project path, XDG_CONFIG_HOME
@@ -108,9 +108,10 @@ ghidra740/ghidra_env.bat       shared by the headless bats: Ghidra location, 8.3
   found none.
 - **Decimal mode:** not modelled, as in Ghidra's 6502 and our `cpu740` (which faults on D=1
   arithmetic). Validation vectors use D=0.
-- **Stack:** SP is 16-bit with SH = 1, as in Ghidra's 6502 module, which keeps the decompiler's stack analysis
-  working. Stack-page wrap is not modelled; the firmware never wraps, and validation vectors keep S in
-  `$10–$EF`. *(Plan ruling 2026-10-02.)*
+- **Stack:** SP is 16-bit, as in Ghidra's 6502 module, which keeps the decompiler's stack analysis
+  working. Neither the SLEIGH nor the cspec fixes its high byte SH: SH = 1 (the stack in page 1) is only
+  a validation convention, which `ValidateModule` sets before and checks after each vector. Stack-page
+  wrap is not modelled; the firmware never wraps, and validation vectors keep S in `$10–$EF`. *(Plan ruling 2026-10-02.)*
 - **Special instructions:** WIT and STP become custom pcodeops (`wait()`, `stop()`). WIT does not
   end the flow, because in the firmware it falls through after an interrupt.
 
@@ -317,7 +318,9 @@ project:
 5. **Names:**
    - no function keeps a default name (`FUN_…`), and every function has a plate comment;
    - every data item in the ROM blocks has a non-default name;
-   - every RAM address the code uses as a pointer or buffer base has a name.
+   - every RAM address the code uses as a pointer or buffer base has a name. As checked, that is the
+     base operand below `$4000` of every `(zp,X)`, `(zp),Y`, `JMP`/`JSR (zp)`, `zp,X`, `zp,Y`,
+     `abs,X`, `abs,Y` and `JMP (abs)` instruction.
 6. **Opcode census:** the opcode-usage claim in parent §1.1 is re-checked over the full code, and
    the counts are written to the check report. SET, SED, MUL, DIV, STP or BRK in the final code is
    a finding, which is recorded in the spec rev.
@@ -331,6 +334,8 @@ by `validate.bat` (the report says so). Criteria 6 and 7 are recorded in the par
 Final result (2026-10-02, headless and GUI): `RESULT PASS`; 4022 executed addresses, 0 undefined
 bytes, 3 indirect jumps resolved, 168 functions, 280 data items and 78 RAM bases named, 60
 mnemonics in the census and none of SET/SED/MUL/DIV/STP/BRK; `validate.bat` 0 mismatches.
+Since criterion 5 also counts the `zp,X`, `zp,Y` and `JMP (abs)` bases (final review), the headless
+check finds 80 RAM bases, all named.
 
 ## 7. Workflow and entry points
 
@@ -379,7 +384,8 @@ Refreshing the GUI program resets it, so anything not exported is lost.
 - **Module:** `validate.bat` (§4).
 - **Project:** `CheckProject.java` (§6).
 - **Round trip:** a rebuild followed by an export, with no edits in between, leaves the annotation
-  files byte-identical. `ExportAnnotations.java` takes an output directory. `rebuild.bat --roundtrip`
+  files byte-identical. `ExportAnnotations.java` takes `write` (rewrite `ghidra740/annotations/`) or
+  `check` (export to `build/ghidra740/export/` and compare); both directories are fixed. `rebuild.bat --roundtrip`
   exports the scratch project to `build/ghidra740/export/` and compares the result with
   `ghidra740/annotations/`.
 - **Unchanged goldens:** the goldens and all existing suites stay unchanged. M3 does not touch the
@@ -415,8 +421,8 @@ Refreshing the GUI program resets it, so anything not exported is lost.
 - No Ghidra auto-analysis. Code comes only from the seeds, so the build is deterministic (§5.4).
 - SFR and vector labels come from the annotations (`sfr.txt`, `boot.txt`). The pspec holds only the
   program counter.
-- Stack-page wrap is not modelled, and the validation vectors keep S in `$10–$EF`. SP is 16-bit with
-  SH = 1, as in Ghidra's 6502 module (§3).
+- Stack-page wrap is not modelled, and the validation vectors keep S in `$10–$EF`. SP is 16-bit, as in
+  Ghidra's 6502 module; SH = 1 is a validation convention only (§3).
 - Validation disassembles with `PseudoDisassembler` and steps one `EmulatorHelper` per vector (§4).
 - Annotation fields are whitespace-separated, with the comment taking the rest of the line. Only a
   first-line `#` header survives an export (§5.3).

@@ -29,7 +29,7 @@ typedef void (*machine_frame_fn)(void *user, const uint8_t frame[APOLLO_FRAME_BY
    machine_default_config sets 1/1. cpu.cycles and the max_cycles budget stay in CPU cycles. The
    produced-frame stream must not depend on this scale (spec section 4).
    coverage: when not NULL, every executed instruction and every indirect JMP/JSR target is recorded
-   there (M3 spec ง5.1). machine_default_config sets NULL. */
+   there (M3 spec ยง5.1). machine_default_config sets NULL. */
 typedef struct { uint8_t port_in[5]; uint32_t cycle_num, cycle_den; coverage *coverage; } machine_config;
 
 typedef enum { MACHINE_IDLE, MACHINE_FAULT, MACHINE_CYCLE_LIMIT } machine_status;

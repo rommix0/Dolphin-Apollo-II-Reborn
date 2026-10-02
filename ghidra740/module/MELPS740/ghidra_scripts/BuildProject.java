@@ -1,6 +1,7 @@
 // Rebuilds the program from the ROM image and ghidra740/annotations (M3 spec §5.2-§5.4).
 // Run on a freshly imported UK_V2.01_4.04_ROM.BIN (raw binary, MELPS740:LE:16:default, no analysis), or on one that
-// ResetProject.java has returned to that state; it refuses (ERROR line) a program that is already built.
+// ResetProject.java has returned to that state; it refuses (ERROR line, before changing anything) a program that is
+// already built, is not MELPS740:LE:16:default or does not hold exactly one 64 KB imported file.
 // Writes build/ghidra740/build.txt: ERROR lines and a SUMMARY line. CheckProject reports them as criterion 0.
 //@category ghidra740
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
@@ -27,6 +28,7 @@ public class BuildProject extends GhidraScript {
         Files.createDirectories(report.getParent());
         String summary = "SUMMARY not built";
         try {
+            refuseUnlessImported();
             disableAutoAnalysis();
             Annot.Annotations an = Annot.load(root.resolve("ghidra740/annotations"));
             Annot.Cov cov = Annot.loadCoverage(root.resolve("ghidra740/coverage/corpus.cov"));
@@ -76,7 +78,11 @@ public class BuildProject extends GhidraScript {
 
     private static String hex(Address a) { return String.format("%04X", a.getOffset()); }
 
-    private void buildMemory() throws Exception {
+    /** Refuses, before the first change to the program, anything but the ROM as just imported (or reset). */
+    private void refuseUnlessImported() {
+        String lang = currentProgram.getLanguageID().getIdAsString();
+        if (!lang.equals("MELPS740:LE:16:default"))
+            throw new IllegalStateException(currentProgram.getName() + " is " + lang + ", not MELPS740:LE:16:default: not building");
         Memory mem = currentProgram.getMemory();
         // A built or partly reset program has these; one just imported (or reset by ResetProject) has none.
         if (mem.getBlock("ROM") != null || currentProgram.getSymbolTable().getNumSymbols() > 0
@@ -85,7 +91,11 @@ public class BuildProject extends GhidraScript {
         List<FileBytes> fbs = mem.getAllFileBytes();
         if (fbs.size() != 1 || fbs.get(0).getSize() != 0x10000)
             throw new IllegalStateException("expected one 64 KB imported file (UK_V2.01_4.04_ROM.BIN)");
-        FileBytes fb = fbs.get(0);
+    }
+
+    private void buildMemory() throws Exception {
+        Memory mem = currentProgram.getMemory();
+        FileBytes fb = mem.getAllFileBytes().get(0);   // refuseUnlessImported checked there is exactly one
         for (MemoryBlock b : mem.getBlocks())
             mem.removeBlock(b, monitor);
         AddressSpace ds = currentProgram.getAddressFactory().getDefaultAddressSpace();

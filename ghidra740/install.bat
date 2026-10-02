@@ -8,12 +8,18 @@ rem to build\ghidra740\m740.new.sla, and the installed copy is replaced only whe
 rem (copy to a .tmp beside it, then move over it), so an open Ghidra GUI never sees it vanish or half-written.
 rem The headless runs have their own settings directory (ghidra_env.bat), so the installed module, .sla and
 rem repo.txt included, is then mirrored to its Extensions\MELPS740 (GHIDRA740_EXT) as well.
+rem Error lines go to stderr (after a failed compile with the SLEIGH compiler's log), so a caller that discards
+rem stdout (">nul") still shows why the install failed.
 setlocal
+if not defined APPDATA (
+    echo install: APPDATA is not set, so there is no Ghidra settings directory to install into 1>&2
+    exit /b 1
+)
 call "%~dp0ghidra_env.bat" || exit /b 1
 rem Unset, or stale (a Ghidra that has since moved), means the standard location.
 if not exist "%GHIDRA_INSTALL_DIR%\support\sleigh.bat" set "GHIDRA_INSTALL_DIR=C:\ghidra_12.1.3_PUBLIC"
 if not exist "%GHIDRA_INSTALL_DIR%\support\sleigh.bat" (
-    echo install: no sleigh.bat under %GHIDRA_INSTALL_DIR%\support
+    echo install: no sleigh.bat under %GHIDRA_INSTALL_DIR%\support 1>&2
     exit /b 1
 )
 set "EXT=%APPDATA%\ghidra\ghidra_12.1.3_PUBLIC\Extensions\MELPS740"
@@ -21,33 +27,36 @@ set "SLA=%EXT%\data\languages\m740.sla"
 pushd "%~dp0.." || exit /b 1
 set "OUT=%CD%\build\ghidra740"
 if not exist "%OUT%" mkdir "%OUT%"
-robocopy "ghidra740\module\MELPS740" "%EXT%" /MIR /XF m740.sla m740.sla.tmp repo.txt /NFL /NDL /NJH /NJS /NP >nul
+robocopy "ghidra740\module\MELPS740" "%EXT%" /MIR /XF m740.sla m740.sla.tmp repo.txt /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 (
-    echo install: copying the module to %EXT% failed
+    echo install: copying the module to %EXT% failed 1>&2
     popd & exit /b 1
 )
 rem repo.txt: rewritten only when its content would change.
 > "%OUT%\repo.txt.new" echo %CD%
 fc /b "%OUT%\repo.txt.new" "%EXT%\repo.txt" >nul 2>&1 || copy /y "%OUT%\repo.txt.new" "%EXT%\repo.txt" >nul
-rem Compile beside the installed one, never in place.
+rem Compile beside the installed one, never in place. Input from nul: on an error, sleigh.bat (launch.bat) pauses
+rem when run under cmd /c, and its prompt would be hidden in the log.
 del /q "%OUT%\m740.new.sla" 2>nul
-call "%GHIDRA_INSTALL_DIR%\support\sleigh.bat" "%EXT%\data\languages\m740.slaspec" "%OUT%\m740.new.sla"
+call "%GHIDRA_INSTALL_DIR%\support\sleigh.bat" "%EXT%\data\languages\m740.slaspec" "%OUT%\m740.new.sla" < nul > "%OUT%\sleigh.log" 2>&1
 if errorlevel 1 (
-    echo install: SLEIGH compile failed
+    type "%OUT%\sleigh.log" 1>&2
+    echo install: SLEIGH compile failed, see %OUT%\sleigh.log 1>&2
     popd & exit /b 1
 )
 if not exist "%OUT%\m740.new.sla" (
-    echo install: SLEIGH compile produced no m740.sla
+    type "%OUT%\sleigh.log" 1>&2
+    echo install: SLEIGH compile produced no m740.sla, see %OUT%\sleigh.log 1>&2
     popd & exit /b 1
 )
 fc /b "%OUT%\m740.new.sla" "%SLA%" >nul 2>&1
 if errorlevel 1 (
-    copy /y "%OUT%\m740.new.sla" "%SLA%.tmp" >nul || (echo install: could not stage m740.sla & popd & exit /b 1)
-    move /y "%SLA%.tmp" "%SLA%" >nul || (echo install: could not replace m740.sla & popd & exit /b 1)
+    copy /y "%OUT%\m740.new.sla" "%SLA%.tmp" >nul || (echo install: could not stage m740.sla 1>&2 & popd & exit /b 1)
+    move /y "%SLA%.tmp" "%SLA%" >nul || (echo install: could not replace m740.sla 1>&2 & popd & exit /b 1)
 )
-robocopy "%EXT%" "%GHIDRA740_EXT%" /MIR /NFL /NDL /NJH /NJS /NP >nul
+robocopy "%EXT%" "%GHIDRA740_EXT%" /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 (
-    echo install: copying the module to %GHIDRA740_EXT% failed
+    echo install: copying the module to %GHIDRA740_EXT% failed 1>&2
     popd & exit /b 1
 )
 echo installed MELPS740 into %EXT% and %GHIDRA740_EXT%
