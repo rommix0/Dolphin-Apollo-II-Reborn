@@ -37,6 +37,7 @@ public class BuildProject extends GhidraScript {
                 if (getInstructionAt(a) == null && !disassemble(a) && getInstructionAt(a) == null)
                     errors.add("cannot disassemble seed " + Annot.spaceName(a) + " " + hex(a));
             coverageEdges(cov);
+            ramcodeFlows();
             createFunctions(an);
             summary = String.format("SUMMARY %d records, %d seeds, %d functions, %d instructions",
                 an.recs.size(), seeds.size(), currentProgram.getFunctionManager().getFunctionCount(),
@@ -212,6 +213,36 @@ public class BuildProject extends GhidraScript {
                 errors.add("coverage edge " + String.join(" ", e) + ": " + ex.getMessage());
             }
         }
+    }
+
+    /** A direct JSR/JMP from ROM into $0200-$03FE targets the RAMCODE overlay (boot copies $ADFE there), not uninitialised RAM. */
+    private void ramcodeFlows() throws Exception {
+        MemoryBlock rc = currentProgram.getMemory().getBlock("RAMCODE");
+        ReferenceManager rm = currentProgram.getReferenceManager();
+        BookmarkManager bm = currentProgram.getBookmarkManager();
+        AddressSpace ds = currentProgram.getAddressFactory().getDefaultAddressSpace();
+        Set<Address> targets = new TreeSet<>();
+        InstructionIterator it = currentProgram.getListing().getInstructions(true);
+        while (it.hasNext()) {
+            Instruction in = it.next();
+            if (rc.contains(in.getAddress())) continue;
+            for (Reference r : in.getReferencesFrom()) {
+                Address t = r.getToAddress();
+                if (!r.getReferenceType().isFlow() || t.getAddressSpace() != ds || t.getOffset() < 0x200 || t.getOffset() > 0x3FE) continue;
+                Address to = rc.getStart().getAddressSpace().getAddress(t.getOffset());
+                rm.delete(r);
+                rm.addMemoryReference(in.getAddress(), to, r.getReferenceType(), SourceType.USER_DEFINED, r.getOperandIndex());
+                if (r.getReferenceType().isCall()) functionTargets.add(to);
+                for (Bookmark b : bm.getBookmarks(in.getAddress(), BookmarkType.ERROR))
+                    if (b.getCategory().equals("Bad Instruction")) bm.removeBookmark(b);
+                targets.add(to);
+            }
+        }
+        // The disassembler stopped at the RAM block, so a target that no seed covered is disassembled here, before
+        // createFunctions makes call targets into functions (jump targets stay code inside their function, as elsewhere).
+        for (Address to : targets)
+            if (getInstructionAt(to) == null && !disassemble(to) && getInstructionAt(to) == null)
+                errors.add("cannot disassemble RAMCODE flow target " + Annot.spaceName(to) + " " + hex(to));
     }
 
     private void createFunctions(Annot.Annotations an) throws Exception {
