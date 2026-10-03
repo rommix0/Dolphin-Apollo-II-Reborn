@@ -72,6 +72,7 @@ static void test_against_rom(const fw_image *img, const uint8_t *rom)
             fprintf(stderr, "  LOW $%04X: converted %02X, ROM %02X\n", a, img->low[a - 0x4000], rom[a - 0x4000]);
     }
     printf("  %u converted bytes compared with the ROM, %u differ\n", compared, bad);
+    CHECK_EQ(compared, 35311);   /* M4.0's 35,214 plus the five phonetic texts (97 bytes) */
     CHECK_EQ(bad, 0);
 }
 
