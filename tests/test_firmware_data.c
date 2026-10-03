@@ -6,8 +6,8 @@
 #include "firmware/data/fw_data.h"
 
 typedef struct { uint32_t from, to; } range;   /* [from, to) in CPU addresses */
-static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9804, 0x9BB4 }, { 0xACC7, 0xACE8 }, { 0xC87B, 0xC898 },
-                               { 0xD469, 0xD46A }, { 0xE5E2, 0xE5E3 }, { 0xF75B, 0xF77B } };
+static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9804, 0x9F74 }, { 0xA187, 0xA397 }, { 0xACC7, 0xACE8 },
+                               { 0xC67B, 0xC9B8 }, { 0xD44A, 0xD46A }, { 0xE5E2, 0xE5E3 }, { 0xF75B, 0xF77B } };
 static const range k_low[] = { { 0x4010, 0x7832 } };
 
 static bool bit(const uint8_t *ok, uint32_t i) { return (ok[i >> 3] >> (i & 7)) & 1; }
@@ -58,6 +58,18 @@ static void test_counts(void)
     CHECK_EQ(fw_cmd_table[27], fw_cmd_table[28]);
     CHECK_EQ(fw_cmd_query_count, 18);
     CHECK_EQ(fw_cmd_case_fold_count, 21);
+    unsigned ph_lists = 0, ph_triples = 0, ph_pauses = 0;
+    for (int s = 0; s < 256; s++) {
+        ph_lists += fw_ph_lists[s].count > 0;
+        ph_triples += fw_ph_lists[s].count;
+        ph_pauses += fw_ph_lists[s].word_pause;
+    }
+    CHECK_EQ(ph_lists, 67);
+    CHECK_EQ(ph_triples, 101);
+    CHECK_EQ(ph_pauses, 1);
+    CHECK(fw_ph_lists[' '].word_pause);           /* the space's list is only the word-pause item */
+    CHECK_EQ(fw_ph_lengthen_steps[0], 0x60);      /* $D44A: the RTS of ph_lengthen_count */
+    CHECK_EQ(fw_cmd_speed_map_data[8][31], 1);    /* speed 9: every duration is 1 frame */
 }
 
 static void test_against_rom(const fw_image *img, const uint8_t *rom)
@@ -78,7 +90,8 @@ static void test_against_rom(const fw_image *img, const uint8_t *rom)
             fprintf(stderr, "  LOW $%04X: converted %02X, ROM %02X\n", a, img->low[a - 0x4000], rom[a - 0x4000]);
     }
     printf("  %u converted bytes compared with the ROM, %u differ\n", compared, bad);
-    CHECK_EQ(compared, 35878);   /* M4.0's 35,214, M4.1's phonetic texts (97) and M4.2's command data (567) */
+    CHECK_EQ(compared, 38197);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567) and
+                                    M4.3a's prosody data (2,319) */
     CHECK_EQ(bad, 0);
 }
 

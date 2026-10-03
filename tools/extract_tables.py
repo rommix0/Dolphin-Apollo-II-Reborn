@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """One-time converter (M4.0 spec 4.2): the ROM's character rules, letter-to-sound rules, affix lists and
-character classes, the phonetic texts (M4.1) and the command tables (M4.2) -> readable C in src/firmware/data/.
-The output is a first draft: review it, annotate it by hand if useful, and commit it. Nothing runs this at build
-or test time; tests/test_firmware_data.c checks the committed C against the ROM.
-usage: python tools/extract_tables.py [--phonetic-only | --command-only] [ROM]
+character classes, the phonetic texts (M4.1), the command tables (M4.2) and the prosody tables (M4.3a) -> readable
+C in src/firmware/data/. The output is a first draft: review it, annotate it by hand if useful, and commit it.
+Nothing runs this at build or test time; tests/test_firmware_data.c checks the committed C against the ROM.
+usage: python tools/extract_tables.py [--phonetic-only | --command-only | --prosody-only] [ROM]
        (ROM: default $APOLLO2_ROM, else UK_V2.01_4.04_ROM.BIN)"""
 import os
 import sys
@@ -46,6 +46,24 @@ CMD_HANDLERS = {
     0xA92F: "ROM_CMD_SET_FORMANT", 0xAB5D: "ROM_CMD_SET_SOURCE", 0xAB70: "ROM_CMD_SET_VOICING",
     0xAB2E: "ROM_CMD_MARK_INDEX", 0xA8C0: "ROM_CMD_SOUND", 0xABAF: "ROM_BANK_CMD_SELECT",
     0xABBE: "ROM_CMD_LIST_LANGUAGES", 0xAA61: "ROM_CMD_SET_SPEAKER", 0xABDC: "ROM_CMD_IGNORE",
+}
+# The prosody data (M4.3a spec 3), as annotated in ghidra740/annotations/phoneme.txt and command.txt
+PH_SYMBOL_CLASS, PH_SYMBOL_FEATURES, PH_LIST_PTRS, PH_LISTS = 0x9BB4, 0x9CB4, 0x9D74, 0xA187
+UNUSED_A397, PH_DUR_LENGTHEN, PH_DUR_SHORTEN, PH_LENGTHEN_STEPS = 0xA397, 0xC67B, 0xC77B, 0xD44A
+PH_WORD_PAUSE, PH_APPEND_PHRASE_PAUSE = 0x5F, 0xC9B8
+PH_CLASS_BITS = [(0x80, "PHC_PHONETIC"), (0x40, "PHC_VOWEL"), (0x08, "PHC_KIND_3"), (0x04, "PHC_KIND_2"),
+                 (0x02, "PHC_KIND_1"), (0x01, "PHC_PUNCT")]
+PH_FEATURE_BITS = [(0x80, "PHF_VOWEL"), (0x40, "PHF_CONSONANT"), (0x20, "PHF_STOP"), (0x10, "PHF_FRICATIVE"),
+                   (0x08, "PHF_NASAL"), (0x04, "PHF_LIQUID"), (0x02, "PHF_LONG"), (0x01, "PHF_VOICED")]
+# What phoneme.txt says about single lists (it numbers the phonemes, it names none)
+PH_LIST_NOTES = {
+    0x20: "the space: only the word-pause item, a pause of @Q length when @Q is not 0",
+    0x83: "the only list with phoneme 7; only @X phonetic text reaches it",
+    0x84: "the only list with phoneme 6; only @X phonetic text reaches it",
+    0x87: "the only list with phoneme 22; only @X phonetic text reaches it",
+    0x8C: "the only list with phoneme 40; only @X phonetic text reaches it",
+    0x98: "the only list with phoneme 23; from letter-to-sound rules (MEGATON)",
+    0xC0: "the only list with phoneme 41, a long syllabic consonant; from letter-to-sound rules (LEVEL)",
 }
 CLASS_BITS = [(0x80, "CC_LETTER"), (0x40, "CC_VOWEL"), (0x20, "CC_FRONT_VOWEL"), (0x10, "CC_NASAL"),
               (0x08, "CC_VOICED"), (0x04, "CC_CONSONANT"), (0x02, "CC_HIGH"), (0x01, "CC_PUNCT")]
@@ -237,18 +255,156 @@ def write_command_data(rom):
     print("wrote cmd_data.c in", OUT)
 
 
+def write_prosody_data(rom):
+    """src/firmware/data/pros_data.c: the tables of the phoneme expansion and the phrase generator (M4.3a spec 3).
+    The list pointers and the lists' $FF ends are left to the encoder."""
+    def word(a):
+        return rom[a] | rom[a + 1] << 8
+
+    def bits(v, names):
+        assert v & ~sum(b for b, _ in names) == 0, "value $%02X has an unnamed bit" % v
+        return " | ".join(n for b, n in names if v & b)
+
+    def numbers(vals, per, what, first=0):
+        """Rows of per decimal numbers, each with the index range it holds (the first value's index is first)."""
+        out = []
+        for i in range(0, len(vals), per):
+            row = vals[i:i + per]
+            out.append("    " + ", ".join("%3d" % v for v in row) + ",   /* %s %d-%d */"
+                       % (what, first + i, first + i + len(row) - 1))
+        return out
+
+    lines = [HEADER.replace("M4.0 spec section 4", "M4.3a spec section 3").rstrip("\n") + "\n",
+             "/* ph_symbol_class ($%04X): the class bits of each symbol code of tn_phonetic. Codes not listed have"
+             % PH_SYMBOL_CLASS,
+             "   none, among them the control codes, the space and the prosody markers ` { | } ~. */",
+             "const uint8_t fw_ph_symbol_class[256] = {"]
+    for s in range(256):
+        v = rom[PH_SYMBOL_CLASS + s]
+        assert s >= 0x20 or v == 0, "symbol $%02X below $20 has a class: the decoder would read its pointer" % s
+        if v:
+            lines.append("    [0x%02X] = %s,   /* %s */" % (s, bits(v, PH_CLASS_BITS), char_name(s)))
+    lines += ["};", ""]
+
+    assert PH_SYMBOL_FEATURES + 0xC0 == PH_LIST_PTRS, "ph_list_ptrs no longer starts inside ph_symbol_features"
+    lines += ["/* ph_symbol_features ($%04X): the feature bits of each symbol code (codes not listed: none). Its last"
+              % PH_SYMBOL_FEATURES,
+              "   64 bytes, the features of $C0-$FF ($%04X-$%04X), are also the list-pointer slots of the symbols"
+              % (PH_LIST_PTRS, PH_LIST_PTRS + 0x3F),
+              "   $00-$1F, which have no class and are never decoded: the encoder writes them once, as features. */",
+              "const uint8_t fw_ph_symbol_features[256] = {"]
+    for s in range(256):
+        v = rom[PH_SYMBOL_FEATURES + s]
+        if v:
+            alias = "; also in the pointer slot of symbol $%02X" % ((s - 0xC0) // 2) if s >= 0xC0 else ""
+            lines.append("    [0x%02X] = %s,   /* %s%s */" % (s, bits(v, PH_FEATURE_BITS), char_name(s), alias))
+    lines += ["};", ""]
+
+    lists, at = {}, PH_LISTS
+    for s in range(0x20, 0x100):
+        assert word(PH_LIST_PTRS + 2 * s) == at, "the list pointer of symbol $%02X is not the next list" % s
+        pause = rom[at] == PH_WORD_PAUSE
+        at += pause
+        items = []
+        while rom[at] != 0xFF:
+            assert not pause and rom[at] != PH_WORD_PAUSE, "a word-pause item with more at $%04X" % at
+            phoneme, top, bottom = rom[at:at + 3]
+            assert top >= bottom, "a triple at $%04X with max below min" % at
+            items.append((phoneme, top, bottom))
+            at += 3
+        assert len(items) <= 3, "symbol $%02X has more than 3 triples" % s
+        lists[s] = (pause, items)
+        at += 1
+    assert at == UNUSED_A397 and set(rom[UNUSED_A397:0xA600]) == {0xFF}, "the lists end at $%04X" % at
+    lines += ["/* The phoneme lists ($%04X-$%04X), by symbol: the (phoneme, max, min) triples ph_decode_symbol turns"
+              % (PH_LISTS, UNUSED_A397 - 1),
+              "   into segments (the phoneme numbers a row of the voice tables; the duration is min plus the scaled",
+              "   max - min). The encoder lays out the lists of $20-$FF end to end in code order, each with its $FF",
+              "   end, and writes the list pointers (PH_LIST_PTRS + 2 * symbol, $%04X-$%04X) from where they land."
+              % (PH_LIST_PTRS + 0x40, PH_LIST_PTRS + 0x1FF),
+              "   Symbols not listed have an empty list (only the end) and make no segment. */",
+              "const fw_ph_list fw_ph_lists[256] = {"]
+    for s in range(0x20, 0x100):
+        pause, items = lists[s]
+        if not pause and not items:
+            continue
+        if s in PH_LIST_NOTES:
+            lines.append("    /* %s */" % PH_LIST_NOTES[s])
+        if pause:
+            lines.append("    [0x%02X] = { .word_pause = true },   /* %s */" % (s, char_name(s)))
+        else:
+            body = ", ".join("{ %d, %d, %d }" % t for t in items)
+            lines.append("    [0x%02X] = { %d, { %s } },   /* %s */" % (s, len(items), body, char_name(s)))
+    lines += ["};", ""]
+
+    lengthen = list(rom[PH_DUR_LENGTHEN:PH_DUR_LENGTHEN + 256])
+    shorten = list(rom[PH_DUR_SHORTEN:PH_DUR_SHORTEN + 256])
+    cap = lengthen.index(255)
+    assert all(abs(lengthen[x] - 1.1 * x) < 1.5 for x in range(cap)) and set(lengthen[cap:]) == {255}
+    assert all(abs(shorten[x] - 0.9 * x) < 1 for x in range(256))
+    lines += ["/* ph_dur_lengthen ($%04X): one lengthening step, x to about 1.1 * x (less than 1.5 off), 255 from"
+              % PH_DUR_LENGTHEN,
+              "   x = %d on. ph_decode_symbol applies it ph_lengthen_count times to a duration range. */" % cap,
+              "const uint8_t fw_ph_dur_lengthen[256] = {"]
+    lines += numbers(lengthen, 16, "x =")
+    lines += ["};",
+              "/* ph_dur_shorten ($%04X): one shortening step, x to about 0.9 * x (less than 1 off)."
+              % PH_DUR_SHORTEN,
+              "   ph_decode_symbol applies it (shortening count + 1) / 2 times to a duration range. */",
+              "const uint8_t fw_ph_dur_shorten[256] = {"]
+    lines += numbers(shorten, 16, "x =")
+    lines += ["};", ""]
+
+    assert PH_DUR_LENGTHEN + 256 == PH_DUR_SHORTEN and PH_DUR_SHORTEN + 256 == CMD_SPEED_MAPS
+    assert CMD_SPEED_MAP_DATA + 9 * 32 == PH_APPEND_PHRASE_PAUSE, "cmd_speed_map_data does not end at code"
+    lines += ["/* cmd_speed_map_data ($%04X): per speed 1-9 (cmd_speed_maps) a map of 32 durations in frames:"
+              % CMD_SPEED_MAP_DATA,
+              "   ph_decode_symbol reads entry duration / 8 into ph_duration. It ends where ph_append_phrase_pause",
+              "   begins. */",
+              "const uint8_t fw_cmd_speed_map_data[9][32] = {"]
+    for k in range(9):
+        m = list(rom[CMD_SPEED_MAP_DATA + 32 * k:CMD_SPEED_MAP_DATA + 32 * k + 32])
+        assert min(m) >= 1, "a speed map with a duration of 0"
+        lines.append("    {   /* speed %d ($%04X) */" % (k + 1, CMD_SPEED_MAP_DATA + 32 * k))
+        lines += ["    " + r for r in numbers(m, 16, "duration / 8 =")]
+        lines.append("    },")
+    lines += ["};", ""]
+
+    assert rom[PH_LENGTHEN_STEPS - 4:PH_LENGTHEN_STEPS + 1] == b"\xb9\x4a\xd4\xa8\x60", \
+        "ph_lengthen_count no longer ends with LDA $D44A,Y / TAY / RTS"
+    assert PH_LENGTHEN_STEPS + 31 == PAR_VOICE_A_COUNT
+    lines += ["/* ph_lengthen_steps ($%04X, the base ph_lengthen_count indexes with A = 0-30; annotated from $%04X):"
+              % (PH_LENGTHEN_STEPS, PH_LENGTHEN_STEPS + 1),
+              "   the number of ph_dur_lengthen steps for a half count A. Entry 0 is the RTS that ends",
+              "   ph_lengthen_count (LDA $%04X,Y / TAY / RTS): A = 0, from a lengthening count of $FF, reads the"
+              % PH_LENGTHEN_STEPS,
+              "   opcode as %d steps. */" % rom[PH_LENGTHEN_STEPS],
+              "const uint8_t fw_ph_lengthen_steps[31] = {",
+              "    0x%02X,   /* A = 0: the RTS opcode at $%04X, read as data */" % (rom[PH_LENGTHEN_STEPS],
+                                                                              PH_LENGTHEN_STEPS)]
+    lines += numbers(list(rom[PH_LENGTHEN_STEPS + 1:PH_LENGTHEN_STEPS + 31]), 15, "A =", 1)
+    lines.append("};")
+    with open(os.path.join(OUT, "pros_data.c"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    print("wrote pros_data.c in", OUT)
+
+
 def main():
-    args = [a for a in sys.argv[1:] if a not in ("--phonetic-only", "--command-only")]
+    args = [a for a in sys.argv[1:] if a not in ("--phonetic-only", "--command-only", "--prosody-only")]
     path = args[0] if args else os.environ.get("APOLLO2_ROM", "UK_V2.01_4.04_ROM.BIN")
     rom = open(path, "rb").read()
     assert len(rom) == 0x10000, "need the 64 KB ROM"
     if "--command-only" in sys.argv:   # M4.2: leave the reviewed M4.0 and M4.1 files alone
         write_command_data(rom)
         return
+    if "--prosody-only" in sys.argv:   # M4.3a: leave the reviewed M4.0, M4.1 and M4.2 files alone
+        write_prosody_data(rom)
+        return
     write_phonetic_texts(rom)
     if "--phonetic-only" in sys.argv:   # M4.1: leave the reviewed M4.0 tables alone
         return
     write_command_data(rom)
+    write_prosody_data(rom)
 
     def rd(a, low):
         return rom[a - 0x4000] if low else rom[a]

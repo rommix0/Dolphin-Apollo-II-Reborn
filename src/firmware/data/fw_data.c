@@ -256,6 +256,56 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
         put(&e, false, PAR_VOICE_A_COUNT, fw_par_voice_a_count);
         put(&e, false, PAR_VOICE_B_COUNT, fw_par_voice_b_count);
     }
+    /* 8. The prosody data (M4.3a spec 3): the symbol classes and features, the phoneme lists end to end with the
+       list pointers computed from where they land, the duration steps, the speed maps and ph_lengthen_steps. */
+    {
+        for (int s = 0; s < 256; s++) {
+            put(&e, false, PH_SYMBOL_CLASS + (uint32_t)s, fw_ph_symbol_class[s]);
+            put(&e, false, PH_SYMBOL_FEATURES + (uint32_t)s, fw_ph_symbol_features[s]);
+        }
+        /* The pointer slots of the symbols $00-$1F are the features of $C0-$FF, written just above: those symbols
+           must have no class and no list, so that the decoder never reads them as pointers. */
+        check_end(&e, "ph_symbol_features", PH_SYMBOL_FEATURES + 256, PH_LIST_PTRS + 2 * 0x20);
+        for (int s = 0; s < 0x20; s++)
+            if (fw_ph_symbol_class[s] || fw_ph_lists[s].count || fw_ph_lists[s].word_pause)
+                fail(&e, "symbol $%02X has a class or a list, but its pointer slot is a feature byte", (unsigned)s);
+        uint32_t at = PH_LISTS;
+        for (int s = 0x20; s < 256; s++) {
+            const fw_ph_list *l = &fw_ph_lists[s];
+            put_word(&e, PH_LIST_PTRS + 2u * (uint32_t)s, (uint16_t)at);
+            if (l->count > 3 || (l->word_pause && l->count))
+                fail(&e, "phoneme list of $%02X: %u triples%s", (unsigned)s, (unsigned)l->count,
+                     l->word_pause ? " after the word-pause item" : "");
+            if (l->word_pause)
+                put(&e, false, at++, PH_WORD_PAUSE);
+            for (unsigned i = 0; i < l->count && i < 3; i++) {
+                const fw_ph_triple *t = &l->item[i];
+                if (t->phoneme == 0xFF || t->phoneme == PH_WORD_PAUSE || t->max < t->min)
+                    fail(&e, "phoneme list of $%02X, triple %u: phoneme $%02X, max %u, min %u", (unsigned)s, i,
+                         (unsigned)t->phoneme, (unsigned)t->max, (unsigned)t->min);
+                put(&e, false, at++, t->phoneme);
+                put(&e, false, at++, t->max);
+                put(&e, false, at++, t->min);
+            }
+            put(&e, false, at++, 0xFF);
+        }
+        check_end(&e, "the phoneme lists", at, UNUSED_A397);
+        for (int x = 0; x < 256; x++) {
+            put(&e, false, PH_DUR_LENGTHEN + (uint32_t)x, fw_ph_dur_lengthen[x]);
+            put(&e, false, PH_DUR_SHORTEN + (uint32_t)x, fw_ph_dur_shorten[x]);
+        }
+        for (int k = 0; k < 9; k++)
+            for (int d = 0; d < 32; d++)
+                put(&e, false, CMD_SPEED_MAP_DATA + 32u * (uint32_t)k + (uint32_t)d, fw_cmd_speed_map_data[k][d]);
+        for (int i = 0; i < 10; i++) {   /* M4.2's cmd_speed_maps must point at the start of a map */
+            uint32_t p = fw_cmd_speed_maps[i];
+            if (p < CMD_SPEED_MAP_DATA || (p - CMD_SPEED_MAP_DATA) % 32 || p - CMD_SPEED_MAP_DATA >= 9 * 32)
+                fail(&e, "cmd_speed_maps entry %d ($%04X) is not the start of a speed map", i, (unsigned)p);
+        }
+        for (int i = 0; i < 31; i++)
+            put(&e, false, PH_LENGTHEN_STEPS + (uint32_t)i, fw_ph_lengthen_steps[i]);
+        check_end(&e, "ph_lengthen_steps", PH_LENGTHEN_STEPS + 31, PAR_VOICE_A_COUNT);
+    }
     return e.ok;
 }
 
