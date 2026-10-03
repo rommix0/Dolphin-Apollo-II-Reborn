@@ -10,6 +10,7 @@
 #include "rom_fixture.h"
 #include "engine/rom_engine.h"
 #include "engine/thunks.h"
+#include "firmware/tn_convert.h"
 
 #define DIFF_FULL_CALLS 1000      /* every call up to this many per routine and corpus file ... */
 #define DIFF_STRIDE     64        /* ... then every 64th */
@@ -28,6 +29,18 @@ static machine g_m, g_ref, g_c;
 static observer g_obs[DIFF_MAX];
 static unsigned g_checked[DIFF_MAX], g_mismatches;
 static const char *g_source;
+static unsigned g_flush_skips;   /* calls abandoned at a mid-clause flush (M4.1 spec 5.1) */
+static bool g_flushed;
+
+/* boot_loop_play reached in scratch A: tn_convert_clause flushing mid-clause, which cannot finish with
+   interrupts held. Returning true without moving the PC stops the scratch machine (MFAULT_FIRMWARE). */
+static bool stop_at_play(machine *m, void *user)
+{
+    (void)m;
+    (void)user;
+    g_flushed = true;
+    return true;
+}
 
 static bool compare(const machine *a, const machine *b, uint8_t outputs, char *why, size_t n)
 {
@@ -74,24 +87,33 @@ static bool observe(machine *m, void *user)
     unsigned call = o->calls++;
     if (call >= DIFF_FULL_CALLS && call % DIFF_STRIDE != 0)
         return false;
-    g_checked[o - g_obs]++;
     machine_clone(&g_ref, m);
     machine_hold_irqs(&g_ref, true);
-    machine_clone(&g_c, m);
-    machine_hold_irqs(&g_c, true);
+    g_flushed = false;
+    CHECK(machine_hook(&g_ref, ROM_BOOT_LOOP_PLAY, stop_at_play, NULL));
     char why[160] = "states differ";
     bool same = false;
     fw_bridge b;
     if (!machine_finish_routine(&g_ref, DIFF_BUDGET)) {
+        if (g_flushed) {
+            g_flush_skips++;   /* golden_hybrid covers this call end to end */
+            return false;
+        }
+        g_checked[o - g_obs]++;
         snprintf(why, sizeof why, "the ROM routine did not return (fault %d)", (int)g_ref.fault);
-    } else if (!fw_bridge_init(&b, &g_c)) {
-        snprintf(why, sizeof why, "no firmware data image");
     } else {
-        o->r->thunk(&g_c, &b);
-        if (g_c.fault != MFAULT_NONE)
-            snprintf(why, sizeof why, "the C faulted (fault %d at $%04X)", (int)g_c.fault, g_c.fault_addr);
-        else
-            same = compare(&g_ref, &g_c, o->r->outputs, why, sizeof why);
+        g_checked[o - g_obs]++;
+        machine_clone(&g_c, m);
+        machine_hold_irqs(&g_c, true);
+        if (!fw_bridge_init(&b, &g_c)) {
+            snprintf(why, sizeof why, "no firmware data image");
+        } else {
+            o->r->thunk(&g_c, &b);
+            if (g_c.fault != MFAULT_NONE)
+                snprintf(why, sizeof why, "the C faulted (fault %d at $%04X)", (int)g_c.fault, g_c.fault_addr);
+            else
+                same = compare(&g_ref, &g_c, o->r->outputs, why, sizeof why);
+        }
     }
     if (!same && g_mismatches++ < 10)
         fprintf(stderr, "  %s: %s call %u (A=%02X X=%02X Y=%02X): %s\n", g_source, o->r->name, call, m->cpu.a,
@@ -139,6 +161,7 @@ void suite_diff_lts(void)
         return;   /* install would overflow g_obs */
     memset(g_checked, 0, sizeof g_checked);
     g_mismatches = 0;
+    g_flush_skips = 0;
     for (size_t c = 0; c < sizeof k_corpus / sizeof k_corpus[0]; c++) {
         char path[128];
         snprintf(path, sizeof path, "tests/corpus/%s.txt", k_corpus[c]);
@@ -157,5 +180,7 @@ void suite_diff_lts(void)
         printf("  %-20s %u calls checked\n", fw_replacements[i].name, g_checked[i]);
         CHECK(g_checked[i] > 0);   /* every ported routine is exercised */
     }
+    printf("  %u mid-clause flush calls skipped (golden_hybrid covers them)\n", g_flush_skips);
+    CHECK(g_flush_skips > 0);   /* long_clause reaches the flush */
     CHECK_EQ(g_mismatches, 0);
 }

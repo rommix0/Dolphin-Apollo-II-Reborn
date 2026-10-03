@@ -9,7 +9,7 @@
 #include "rom_fixture.h"
 #include "engine/hybrid_engine.h"
 #include "engine/thunks.h"
-#include "firmware/tn_rules.h"
+#include "firmware/tn_convert.h"
 #include "render/render.h"
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
@@ -23,19 +23,21 @@ static void strip_newline(char *s)
         s[--n] = '\0';
 }
 
-/* Compares the hybrid frames of one corpus file with its golden. */
-static void check(const uint8_t *rom, size_t len, const char *only, const char *name, const char *text, bool boot)
+/* Compares the hybrid frames of one corpus file with its golden; returns the mid-clause flushes the C
+   tn_convert_clause made. */
+static unsigned check(const uint8_t *rom, size_t len, const char *only, const char *name, const char *text,
+                      bool boot)
 {
     char path[128];
     snprintf(path, sizeof path, "tests/golden/%s.frm", name);
     char *want = test_read_file(path);
     CHECK(want != NULL);
     if (!want)
-        return;
+        return 0;
     frame_list fl = { 0 };
-    uint64_t calls = 0;
-    machine_status st = hybrid_engine_speak(&g_m, rom, len, NULL, only, text, boot, &fl, NULL, &calls);
-    g_thunk_calls += calls;
+    hybrid_stats stats = { 0, 0 };
+    machine_status st = hybrid_engine_speak(&g_m, rom, len, NULL, only, text, boot, &fl, NULL, &stats);
+    g_thunk_calls += stats.thunk_calls;
     if (st != MACHINE_IDLE)
         machine_dump(&g_m, stderr);
     CHECK_EQ(st, MACHINE_IDLE);
@@ -52,10 +54,12 @@ static void check(const uint8_t *rom, size_t len, const char *only, const char *
     free(got);
     free(want);
     frame_list_free(&fl);
+    return stats.tn_flushes;
 }
 
 /* The whole corpus in one mode. Matching the goldens proves nothing if no C ever ran, so the mode must have run
-   its thunks at least once over the corpus. */
+   its thunks at least once over the corpus; and where the C tn_convert_clause runs, long_clause must have taken
+   its mid-clause flush (M4.1 spec 5.2). */
 static void check_corpus(const uint8_t *rom, size_t len, const char *only)
 {
     g_thunk_calls = 0;
@@ -67,7 +71,12 @@ static void check_corpus(const uint8_t *rom, size_t len, const char *only)
         if (!text)
             continue;
         strip_newline(text);
-        check(rom, len, only, k_corpus[c], text, false);
+        unsigned flushes = check(rom, len, only, k_corpus[c], text, false);
+        if (!strcmp(k_corpus[c], "long_clause") && (!only || !strcmp(only, "tn_convert_clause")) && flushes == 0) {
+            fprintf(stderr, "  hybrid (%s) long_clause: the C tn_convert_clause never flushed\n",
+                    only ? only : "all");
+            g_test_failures++;
+        }
         free(text);
     }
     check(rom, len, only, "boot", "", true);
@@ -130,19 +139,18 @@ static void test_thunk_faults(const uint8_t *rom, size_t len)
     CHECK(r->thunk(&g_m, &b));
     check_stopped(&g_m, &b, r->addr, 0x00E1, sp);
 
-    /* (2) a ROM call from the C that does not return */
+    /* (2) a ROM call from the C that does not return: isr_par_ready, tn_convert_clause's first call */
     CHECK(machine_init(&g_m, rom, len, NULL));
     CHECK(fw_bridge_init(&b, &g_m));
-    CHECK(machine_hook(&g_m, TN_APPEND_PHONETIC, stuck_hook, NULL));
-    r = fw_replacement_find("tn_say_char");
+    CHECK(machine_hook(&g_m, ROM_ISR_PAR_READY, stuck_hook, NULL));
+    r = fw_replacement_find("tn_convert_clause");
     CHECK(r != NULL);
     if (!r)
         return;
-    g_m.cpu.a = 'a';
     g_m.cpu.pc = r->addr;
     sp = g_m.cpu.s;
     CHECK(r->thunk(&g_m, &b));
-    check_stopped(&g_m, &b, r->addr, TN_APPEND_PHONETIC, sp);
+    check_stopped(&g_m, &b, r->addr, ROM_ISR_PAR_READY, sp);
 
     /* (3) a thunk run on another machine than its bridge's: refused */
     CHECK(machine_init(&g_m, rom, len, NULL));

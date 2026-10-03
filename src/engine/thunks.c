@@ -2,6 +2,7 @@
 #include "engine/thunks.h"
 #include "firmware/lts.h"
 #include "firmware/tn_rules.h"
+#include "firmware/tn_convert.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -146,6 +147,13 @@ static void lts_convert_char_regs(fw *f, cpu740 *c)
     lts_convert_char(f, ch);
 }
 
+/* tn_convert_clause $B1E6: no register input or output (boot_loop_text returns straight after it) */
+static void tn_convert_clause_regs(fw *f, cpu740 *c)
+{
+    (void)c;
+    tn_convert_clause(f);
+}
+
 /* The hook of each routine: its register mapping run in the shared thunk frame, user = the bound fw_bridge. */
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
@@ -158,6 +166,7 @@ THUNK(lts_match_list)
 THUNK(tn_rule_skip_text)
 THUNK(tn_rule_skip_field)
 THUNK(lts_convert_char)
+THUNK(tn_convert_clause)
 #undef THUNK
 
 const fw_replacement fw_replacements[] = {
@@ -170,6 +179,7 @@ const fw_replacement fw_replacements[] = {
     { "tn_rule_skip_text",  0xB138, FW_OUT_A | FW_OUT_Y, t_tn_rule_skip_text },
     { "tn_rule_skip_field", 0xB142, FW_OUT_Y,            t_tn_rule_skip_field },
     { "lts_convert_char",   0xB172, 0,                   t_lts_convert_char },
+    { "tn_convert_clause",  0xB1E6, 0,                   t_tn_convert_clause },
 };
 const size_t fw_replacement_count = sizeof fw_replacements / sizeof fw_replacements[0];
 
