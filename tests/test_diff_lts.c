@@ -5,7 +5,7 @@
    ROM copy reaches boot_loop_play ($A7D4, tn_convert_clause's mid-clause flush) cannot finish with interrupts
    held: it is skipped and counted (golden_hybrid covers it, M4.1 spec 5.1), in tn_convert_clause only. A call
    whose ROM copy resets the stack (@= entering a bank) stops right after the reset in both copies and is
-   compared like any other (M4.2 spec 3). */
+   compared like any other (M4.2 spec 3) and counted: bank_select must produce some (M4.2 spec 5.5). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +35,7 @@ static unsigned g_checked[DIFF_MAX], g_mismatches;
 static const char *g_source;
 static unsigned g_flush_skips;   /* calls abandoned at a mid-clause flush (M4.1 spec 5.1) */
 static bool g_flushed;
+static unsigned g_unwound;       /* compared calls whose ROM copy reset the stack (M4.2 spec 5.5) */
 
 /* boot_loop_play reached in scratch A: tn_convert_clause flushing mid-clause, which cannot finish with
    interrupts held. Returning true without moving the PC stops the scratch machine (MFAULT_FIRMWARE). */
@@ -110,6 +111,8 @@ static bool observe(machine *m, void *user)
             snprintf(why, sizeof why, "the ROM routine did not return (fault %d)", (int)g_ref.fault);
     } else {
         g_checked[o - g_obs]++;
+        if (g_ref.cpu.s > m->cpu.s + 2)
+            g_unwound++;   /* SP above the return address: the routine reset the stack (bank_enter) */
         machine_clone(&g_c, m);
         machine_hold_irqs(&g_c, true);
         if (!fw_bridge_init(&b, &g_c)) {
@@ -169,6 +172,8 @@ void suite_diff_lts(void)
     memset(g_checked, 0, sizeof g_checked);
     g_mismatches = 0;
     g_flush_skips = 0;
+    g_unwound = 0;
+    bool has_bank_select = false;
     for (size_t c = 0; c < sizeof k_corpus / sizeof k_corpus[0]; c++) {
         char path[128];
         snprintf(path, sizeof path, "tests/corpus/%s.txt", k_corpus[c]);
@@ -177,6 +182,7 @@ void suite_diff_lts(void)
         if (!text)
             continue;
         strip_newline(text);
+        has_bank_select |= !strcmp(k_corpus[c], "bank_select");
         run(rom, len, k_corpus[c], text, false);
         free(text);
     }
@@ -189,5 +195,7 @@ void suite_diff_lts(void)
     }
     printf("  %u mid-clause flush calls skipped (golden_hybrid covers them)\n", g_flush_skips);
     CHECK(g_flush_skips > 0);   /* long_clause reaches the flush */
+    printf("  %u unwound calls compared\n", g_unwound);
+    CHECK(!has_bank_select || g_unwound > 0);   /* bank_select's @=1 resets the stack under a ported routine */
     CHECK_EQ(g_mismatches, 0);
 }

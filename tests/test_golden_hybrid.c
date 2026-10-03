@@ -1,6 +1,7 @@
 /* The hybrid engine reproduces every golden (M4.0 spec section 5.2): with all ported routines active, and with
    each alone. The rendered audio of hybrid equals the rom engine's (criterion 8). The C tn_convert_clause must
    take its mid-clause flush on long_clause (all-routines mode and tn_convert_clause alone; M4.1 spec 5.2).
+   On bank_select, @=1 enters a bank: where the C runs the dispatch, its call chain must unwind (M4.2 spec 5.3).
    Also the fault path of a thunk: a firmware fault stops the run instead of continuing on wrong data. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,19 +25,18 @@ static void strip_newline(char *s)
         s[--n] = '\0';
 }
 
-/* Compares the hybrid frames of one corpus file with its golden; returns the mid-clause flushes the C
-   tn_convert_clause made. */
-static unsigned check(const uint8_t *rom, size_t len, const char *only, const char *name, const char *text,
-                      bool boot)
+/* Compares the hybrid frames of one corpus file with its golden; returns what the C did. */
+static hybrid_stats check(const uint8_t *rom, size_t len, const char *only, const char *name, const char *text,
+                          bool boot)
 {
+    hybrid_stats stats = { 0, 0, 0 };
     char path[128];
     snprintf(path, sizeof path, "tests/golden/%s.frm", name);
     char *want = test_read_file(path);
     CHECK(want != NULL);
     if (!want)
-        return 0;
+        return stats;
     frame_list fl = { 0 };
-    hybrid_stats stats = { 0, 0, 0 };
     machine_status st = hybrid_engine_speak(&g_m, rom, len, NULL, only, text, boot, &fl, NULL, &stats);
     g_thunk_calls += stats.thunk_calls;
     if (st != MACHINE_IDLE)
@@ -55,7 +55,14 @@ static unsigned check(const uint8_t *rom, size_t len, const char *only, const ch
     free(got);
     free(want);
     frame_list_free(&fl);
-    return stats.tn_flushes;
+    return stats;
+}
+
+/* The modes in which the C reaches cmd_run_due's dispatch, so @= entering a bank resets the stack under C and the
+   C call chain unwinds (M4.2 spec 5.3). */
+static bool runs_c_dispatch(const char *only)
+{
+    return !only || !strcmp(only, "tn_convert_clause");
 }
 
 /* The whole corpus in one mode. Matching the goldens proves nothing if no C ever ran, so the mode must have run
@@ -72,8 +79,13 @@ static void check_corpus(const uint8_t *rom, size_t len, const char *only)
         if (!text)
             continue;
         strip_newline(text);
-        unsigned flushes = check(rom, len, only, k_corpus[c], text, false);
-        if (!strcmp(k_corpus[c], "long_clause") && (!only || !strcmp(only, "tn_convert_clause")) && flushes == 0) {
+        hybrid_stats st = check(rom, len, only, k_corpus[c], text, false);
+        if (!strcmp(k_corpus[c], "bank_select") && runs_c_dispatch(only) && st.unwinds == 0) {
+            fprintf(stderr, "  hybrid (%s) bank_select: the C never unwound at the bank entry\n", only ? only : "all");
+            g_test_failures++;
+        }
+        if (!strcmp(k_corpus[c], "long_clause") && (!only || !strcmp(only, "tn_convert_clause")) &&
+            st.tn_flushes == 0) {
             fprintf(stderr, "  hybrid (%s) long_clause: the C tn_convert_clause never flushed\n",
                     only ? only : "all");
             g_test_failures++;
