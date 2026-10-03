@@ -1,6 +1,6 @@
 # M4.0 — Replacement foundation and letter-to-sound pilot — Design
 
-**Status:** design, awaiting user review (2026-10-03)
+**Status:** implemented 2026-10-03 (plan docs/superpowers/plans/2026-10-03-m4-0-replacement-foundation.md)
 **Parent spec:** `docs/superpowers/specs/2026-09-30-software-apollo2-design.md` (rev 6): §3 architecture, §6 steps 3–6, §7.1, §8 milestone 4.
 **User decisions (2026-10-03):**
 - M4 is split into plans. M4.0 hardens the oracle, builds the replacement infrastructure and ports one pilot subsystem end to end. Each later subsystem gets its own short plan (M4.1, M4.2, …).
@@ -168,7 +168,7 @@ The exact byte ranges come from the annotations. A range that holds bytes no poi
 3. `diff_lts`: 0 mismatches, and every routine in §3.4 was checked.
 4. `golden_hybrid`: all 26 goldens are reproduced with all routines active, and with each routine alone.
 5. `firmware_data` passes.
-6. `src/firmware/` builds with no `machine/` or `cpu740/` headers, and no `fw_rom8` fault occurs in any test.
+6. `src/firmware/` builds with no `machine/` or `cpu740/` headers, and no `fw_rom8` fault occurs in any test (no unexpected fault; tests of the fault path trigger it on purpose).
 7. `build.bat test` is green. The goldens are unchanged, unless a reviewed CPU fix under criterion 1 changed them.
 8. `apollo2 --engine hybrid "text" -o out.wav` works.
 9. The parent spec gets rev 7. It records M4.0 as done, and the M4.x sequence below.
@@ -189,3 +189,17 @@ The order follows the call graph from the pilot outwards. Each plan may revise i
 - The native engine (M5).
 - Changes to the synthesizer or the CLI beyond `--engine hybrid`.
 - Re-annotating Ghidra. Names are taken from the M3 annotations as they are. If the port shows an annotation is wrong, the fix goes into `ghidra740/annotations` with a rebuild, following the M3 refresh procedure.
+
+## 8. As built
+Where the implementation differs from the text above:
+- The Harte vectors are committed as `tests/data/cpu6502_vectors.dat` (not `.bin`; `*.bin` is git-ignored), with a variable-length record (not a fixed record with at most 8 RAM pairs).
+- The Harte harness loads P as `(in.p & ~T) | B`, and the compare masks P bits 4 (B) and 5 (T) and bit 5 of the byte PHP pushes. These are 740-vs-6502 architectural definitions (bit 5 is the 740's T flag; cpu740 holds B set), not bug filters.
+- The encoder lives at `src/firmware/data/fw_data.c` (not `src/firmware/fw_data.c`).
+- `fw_rom8` takes `(f, addr)`; the lower-ROM window state lives in the fw context (set by `fw_set_low_window`), not a third argument.
+- The shared mapper (`machine_map_read`, public in `machine.h` for its unit test) reports four regions: RAM, SFR, ROM (the lower-ROM window is a ROM read at a different offset) and empty socket. The write-only DSP port at `$8000` reads as main ROM.
+- `machine_clone` copies the ROM image rather than sharing it, and clears hooks, sinks and the IRQ hold.
+- A hook that returns true without moving the PC and without a fault stops the run as `MFAULT_FIRMWARE` (guard against a zero-cycle spin). On a firmware fault inside a thunk, the PC is restored to the hooked entry. `rom_engine_run` returns `MACHINE_FAULT` before booting if its setup callback set a fault (e.g. an unknown `--only` routine name).
+- Each hybrid run uses a fresh fw bridge (its fault flag is sticky); the bridge counts thunk executions and `golden_hybrid` asserts that every mode ran C.
+- Thunks take zero emulated cycles, so the produced frames equal the rom engine's but the raw DSP stream's timing under `--engine hybrid` can differ.
+- `diff_lts` also speaks a few extra non-corpus texts, a superset of "over the corpus".
+- Criterion 6's "no `fw_rom8` fault occurs in any test" means no unexpected fault in the differential and golden runs; `test_fw` and the thunk fault-path tests trigger faults on purpose.

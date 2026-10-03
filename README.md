@@ -40,6 +40,19 @@ listening tests (see `docs/calibration/report.md`).
 The voice is shaped by a low-end peak on the voiced source and a 3.8 kHz low-pass that models the
 device's DAC filter; both are always on.
 
+## Hybrid engine (milestone 4)
+
+`apollo2 --engine hybrid "text" -o out.wav` runs the original firmware with the ported routines replaced by C
+(src/firmware). Today these are the letter-to-sound routines; the rest still runs on the emulated CPU. The
+hybrid engine must reproduce every golden frame stream byte for byte (`build.bat test golden_hybrid`), and
+`build.bat test diff_lts` compares each ported routine with the ROM at real call sites.
+
+The converted tables in src/firmware/data come from `python tools/extract_tables.py` (run once, then
+reviewed); `build.bat test firmware_data` checks them against the ROM. RAM names in src/firmware/fw_ram.h come
+from `python tools/gen_fw_ram.py` (rerun after the Ghidra annotations change).
+
+A ROM whose MD5 is not the UK V2.01 4.04 image is refused by the CLIs unless `--rom-any` is given.
+
 ## Ghidra project (milestone 3)
 
 `ghidra740/` holds a Ghidra 12.1.3 processor module for the MELPS 740 and the scripts that rebuild

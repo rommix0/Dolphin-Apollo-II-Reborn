@@ -1,7 +1,7 @@
 # Software Apollo 2 — Design
 
 **Date:** 2026-09-30
-**Status:** Approved. *(rev 6)* Revision 6 records milestone 3: the MELPS740 Ghidra module and the annotation-built project, plus the firmware facts the labelling verified (marked *(rev 6)*). Revision 5 records the firmware intonation model and the synthesizer revision chosen in the user's listening test. Revision 4 records what milestone 2 verified (command-driven frame bytes, the raw DSP stream, the calibration). Revision 3 makes the finished project ROM-free (R5). Revision 2 adds facts found while planning milestone 1
+**Status:** Approved. *(rev 7)* Revision 7 records milestone 4.0: the oracle checked against the Harte 6502 vectors, the hybrid replacement infrastructure and the letter-to-sound pilot (design: docs/superpowers/specs/2026-10-03-m4-0-replacement-foundation-design.md). *(rev 6)* Revision 6 records milestone 3: the MELPS740 Ghidra module and the annotation-built project, plus the firmware facts the labelling verified (marked *(rev 6)*). Revision 5 records the firmware intonation model and the synthesizer revision chosen in the user's listening test. Revision 4 records what milestone 2 verified (command-driven frame bytes, the raw DSP stream, the calibration). Revision 3 makes the finished project ROM-free (R5). Revision 2 adds facts found while planning milestone 1
 (MAME's M50734 register map and the lower-ROM banking); the changes are marked *(rev 2)*.
 **Goal:** A software Dolphin Apollo 2. Text typed on a PC goes through the real
 firmware logic (first emulated, then decompiled to C) and produces DSP frames.
@@ -185,7 +185,7 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
   pauses of length 4 ($D18E). For the 17 phonemes that no ASCII symbol reaches, see §10.)*
 
 ## 2. Requirements
-- **R1 — CLI:** `apollo2 "text" [-o out.wav] [--voice a|b] [--prosody 0-7] [--engine rom|hybrid|native] [--rom PATH] [--hyp b11,b13] [--stream produced|raw] [--text-file FILE] [--audio-check]`. *(rev 4: `--voice b` sends `@K1`; `--stream raw` is for comparison listening only. rev 5: `--prosody` sends `@Rn`, default 4; the output filters are always on.)*
+- **R1 — CLI:** `apollo2 "text" [-o out.wav] [--voice a|b] [--prosody 0-7] [--engine rom|hybrid|native] [--rom PATH] [--hyp b11,b13] [--stream produced|raw] [--text-file FILE] [--audio-check]`. *(rev 4: `--voice b` sends `@K1`; `--stream raw` is for comparison listening only. rev 5: `--prosody` sends `@Rn`, default 4; the output filters are always on.)* *(rev 7: --engine hybrid runs the ported routines as C; --rom-any accepts a ROM whose MD5 differs.)*
   It writes a WAV file, or plays live audio when `-o` is omitted. Text enters
   through the firmware's real serial input path, so device control codes work.
 - **R2 — Audio:** mono, 16-bit, **10,000 Hz native**. No resampling anywhere in our
@@ -224,7 +224,8 @@ Registers that are not modelled (`$DA–$DB`, `$E2–$E3`, `$E8`, `$EC`, `$F8–
 |---|---|---|---|
 | `cpu740/` | Instruction-exact 740 core with approximate cycle counts. *(rev 2)* SET (T mode), SED (decimal), STP, MUL, DIV and BRK are never used by the ROM, so they **fault** instead of being emulated. A T flag restored by PLP/RTI faults; a D flag faults when ADC/SBC executes with it set (rev 4: matches the code). | `cpu740_reset`, `cpu740_step(cpu*, const bus*) -> cycles`, `cpu740_irq(cpu*, vector)` | — |
 | `machine/` | Apollo 2 board: memory map, banking, SFRs, serial RX, timer, DSP port, hooks | `machine_init(rom, len)`, `machine_feed_serial(bytes, n)`, `machine_run(max_cycles) -> status`, `machine_set_frame_sink(cb)`, `machine_hook(addr, thunk)` | cpu740 |
-| `firmware/` | Decompiled firmware in C on a shared memory image | per-routine C functions + thunks; `fw_native_speak(bytes, n, frame_sink)` | machine (hybrid only) |
+| `firmware/` | Decompiled firmware in C on a shared memory image *(rev 7)* src/firmware: the fw context on the RAM image, the converted tables in src/firmware/data, and the ported routines; it builds without machine/ or cpu740/ (build.bat checks). | per-routine C functions + thunks; `fw_native_speak(bytes, n, frame_sink)` | machine (hybrid only) |
+| engine/ (hybrid) *(rev 7)* | rom_engine_run with a setup hook; thunks.c, the replacement table and register mapping; hybrid_engine.c | hybrid_engine_speak | machine, firmware |
 | `synth/` | Holmes parallel-formant synthesizer | `synth_init(cfg)`, `synth_frame(const uint8_t f[20], int16_t out[100])` | — |
 | `audio/` *(rev 4)* | WAV writer, live playback (waveOut) | `wav_write`, `playback_pcm16` | — |
 | `render/` *(rev 4)* | Frame stream → synthesizer → 16-bit samples, through the `engine/` rom engine | `render_text` | engine, synth |
@@ -361,6 +362,8 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
      A/X/Y/flags to and from C arguments and return values, then emulates the RTS.
    - C can call routines that are still in ROM via `rom_call(addr)`.
    - The default porting order is leaf-first. Top-down is allowed where it is clearer.
+
+   *(rev 7)* Built in M4.0: machine_hook (fires only on main-ROM addresses, zero emulated time, no interrupt inside), machine_rom_call (C calling ROM; a routine that does not return within 10 M cycles is a fault), and per-routine thunks that set only the outputs the callers use. A C fault (a read outside the converted data) stops the run as MFAULT_FIRMWARE.
 4. **Special cases:**
    - The RAM-resident bank code becomes plain C.
    - In native mode, the ISR double buffer becomes a direct frame sink: the
@@ -386,7 +389,7 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
 ## 7. Testing
 ### 7.1 Firmware (objective, automated)
 - **CPU unit tests:** per-instruction vectors for all addressing modes, flags,
-  740 extensions, interrupts, and faults on the unsupported instructions *(rev 2)*.
+  740 extensions, interrupts, and faults on the unsupported instructions *(rev 2)*. *(rev 7)* Plus 44,700 Harte 6502 vectors (149 opcodes; BRK, SED and decimal-mode ADC/SBC excluded, P bits 4 and 5 masked (the 740's B as held and T flags)).
 - **Golden corpus:** `tests/corpus/*.txt` covers prose, numbers, dates, abbreviations,
   punctuation, spelling mode and every documented control code. M1 covers plain text. M2 adds every frame-affecting control code, spelling mode, phonetic input, mute (Ctrl-X), a boot golden, and a check that @c? queries leave the speech unchanged *(rev 4)*. The golden files are produced-frame streams (§4) stored
   as hex, one frame per line. They are firmware output, not ROM bytes.
@@ -396,7 +399,7 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
     after review.
 - **Per-function differential tests:** during corpus runs, record entry states
   (registers + RAM) at real call sites. Replay them through the ROM routine and its
-  C replacement and compare the exit states byte for byte.
+  C replacement and compare the exit states byte for byte. *(rev 7)* Implemented live (tests/test_diff_lts.c): the machine is cloned at each sampled routine entry, so no states are stored.
 
 ### 7.2 Synthesizer
 - Each resonator's impulse response peaks at the target frequency within 2%, with
@@ -420,6 +423,7 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
 3. **Ghidra module and project:** full code coverage and labelled routines.
    *(rev 6)* **Done 2026-10-02** (M3 spec; §6 steps 1–2).
 4. **Progressive replacement:** routines move to C under differential and golden tests.
+   *(rev 7)* **M4.0 done 2026-10-03**: the Harte vectors pass; the nine letter-to-sound routines run as C; the hybrid engine reproduces every golden, with all routines and with each alone. The next plans follow the M4.0 spec section 6: M4.1 text normalisation, M4.2 command parser, M4.3 phoneme expansion and prosody, M4.4 parameter tracks, M4.5 frame builder, M4.6 boot, serial, bank and ISR code.
 5. **Native:** every routine and every table is in committed C. The `native`
    engine builds without `cpu740`/`machine`.
    - **Done when** *(rev 3)*: with no ROM file anywhere, `build.bat test` passes
