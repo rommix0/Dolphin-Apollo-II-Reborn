@@ -11,7 +11,7 @@
 enum { FW_OUT_A = 0x01, FW_OUT_X = 0x02, FW_OUT_Y = 0x04, FW_OUT_Z = 0x08 };
 
 /* The firmware context of one machine: its RAM, the converted data image, the emulator as host. */
-typedef struct fw_bridge { machine *m; fw f; fw_host host; } fw_bridge;
+typedef struct fw_bridge { machine *m; fw f; fw_host host; uint64_t thunk_calls; } fw_bridge;   /* thunk_calls: thunks run so far */
 
 typedef struct {
     const char *name;

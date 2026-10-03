@@ -18,7 +18,7 @@ static void setup(machine *m, void *user)
 
 machine_status hybrid_engine_speak(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
                                    const char *only, const char *text, bool include_boot,
-                                   frame_list *produced, frame_list *raw)
+                                   frame_list *produced, frame_list *raw, uint64_t *thunk_calls)
 {
     hybrid_setup h;
     frame_list scratch = { 0 };
@@ -28,5 +28,7 @@ machine_status hybrid_engine_speak(machine *m, const uint8_t *rom, size_t len, c
                                        produced ? produced : &scratch, raw);
     machine_clear_hooks(m);   /* the bridge lives on this stack frame */
     frame_list_free(&scratch);
+    if (thunk_calls)
+        *thunk_calls = h.bridge.thunk_calls;
     return h.ok ? st : MACHINE_FAULT;
 }

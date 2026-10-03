@@ -35,7 +35,7 @@ machine_status render_text(machine *m, const uint8_t *rom, size_t len, const cha
     memset(out, 0, sizeof *out);
     frame_list *raw_out = opt->stream == RENDER_STREAM_RAW ? &raw : NULL;
     machine_status st = opt->engine == RENDER_ENGINE_HYBRID
-        ? hybrid_engine_speak(m, rom, len, NULL, NULL, input, false, &produced, raw_out)
+        ? hybrid_engine_speak(m, rom, len, NULL, NULL, input, false, &produced, raw_out, NULL)
         : rom_engine_speak_streams(m, rom, len, NULL, input, &produced, raw_out);
     const frame_list *chosen = opt->stream == RENDER_STREAM_RAW ? &raw : &produced;
     if (st == MACHINE_IDLE && chosen->count > 0) {

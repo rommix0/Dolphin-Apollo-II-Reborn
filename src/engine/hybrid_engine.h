@@ -6,9 +6,10 @@
 
 /* rom_engine_run with every replacement active, or only the one named only. MACHINE_FAULT (MFAULT_FIRMWARE)
    when the data image does not build or only names no replacement. produced may be NULL (frames dropped).
-   Every call binds a fresh firmware bridge: a bridge that faulted is dead, and no state carries over. */
+   Every call binds a fresh firmware bridge: a bridge that faulted is dead, and no state carries over.
+   thunk_calls (may be NULL) receives how many times a C routine ran instead of the ROM's. */
 machine_status hybrid_engine_speak(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
                                    const char *only, const char *text, bool include_boot,
-                                   frame_list *produced, frame_list *raw);
+                                   frame_list *produced, frame_list *raw, uint64_t *thunk_calls);
 
 #endif

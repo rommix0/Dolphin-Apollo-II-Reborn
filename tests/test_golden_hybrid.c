@@ -14,6 +14,7 @@
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
 static machine g_m, g_other;
+static uint64_t g_thunk_calls;   /* thunks run, summed over the hybrid_engine_speak calls of check() */
 
 static void strip_newline(char *s)
 {
@@ -32,7 +33,9 @@ static void check(const uint8_t *rom, size_t len, const char *only, const char *
     if (!want)
         return;
     frame_list fl = { 0 };
-    machine_status st = hybrid_engine_speak(&g_m, rom, len, NULL, only, text, boot, &fl, NULL);
+    uint64_t calls = 0;
+    machine_status st = hybrid_engine_speak(&g_m, rom, len, NULL, only, text, boot, &fl, NULL, &calls);
+    g_thunk_calls += calls;
     if (st != MACHINE_IDLE)
         machine_dump(&g_m, stderr);
     CHECK_EQ(st, MACHINE_IDLE);
@@ -51,8 +54,11 @@ static void check(const uint8_t *rom, size_t len, const char *only, const char *
     frame_list_free(&fl);
 }
 
+/* The whole corpus in one mode. Matching the goldens proves nothing if no C ever ran, so the mode must have run
+   its thunks at least once over the corpus. */
 static void check_corpus(const uint8_t *rom, size_t len, const char *only)
 {
+    g_thunk_calls = 0;
     for (size_t c = 0; c < sizeof k_corpus / sizeof k_corpus[0]; c++) {
         char path[128];
         snprintf(path, sizeof path, "tests/corpus/%s.txt", k_corpus[c]);
@@ -65,6 +71,10 @@ static void check_corpus(const uint8_t *rom, size_t len, const char *only)
         free(text);
     }
     check(rom, len, only, "boot", "", true);
+    if (g_thunk_calls == 0) {
+        fprintf(stderr, "  hybrid (%s): no thunk ran over the whole corpus\n", only ? only : "all");
+        g_test_failures++;
+    }
 }
 
 static void test_render_matches_rom(const uint8_t *rom, size_t len)
@@ -157,7 +167,8 @@ void suite_golden_hybrid(void)
         check_corpus(rom, len, fw_replacements[i].name);
     printf("  %zu corpus files x %zu modes (all, then each routine alone)\n",
            sizeof k_corpus / sizeof k_corpus[0] + 1, fw_replacement_count + 1);
-    CHECK_EQ(hybrid_engine_speak(&g_m, rom, len, NULL, "no_such_routine", "hello", false, NULL, NULL),
+    CHECK_EQ(hybrid_engine_speak(&g_m, rom, len, NULL, "no_such_routine", "hello", false, NULL, NULL, NULL),
              MACHINE_FAULT);
+    CHECK_EQ(g_m.fault, MFAULT_FIRMWARE);
     test_render_matches_rom(rom, len);
 }

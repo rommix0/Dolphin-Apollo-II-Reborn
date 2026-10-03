@@ -37,6 +37,7 @@ bool fw_bridge_init(fw_bridge *b, machine *m)
 {
     const fw_image *img = fw_image_get();
     b->m = m;
+    b->thunk_calls = 0;
     b->host.ctx = b;
     b->host.rom_call = host_rom_call;
     b->host.set_low_window = host_set_low_window;
@@ -58,6 +59,7 @@ static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
         m->fault_addr = m->cpu.pc;
         return true;
     }
+    b->thunk_calls++;
     uint16_t entry = m->cpu.pc;
     jmp_buf trap, *saved = b->f.trap;
     b->f.trap = &trap;
