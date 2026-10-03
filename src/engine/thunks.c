@@ -3,6 +3,7 @@
 #include "firmware/lts.h"
 #include "firmware/tn_rules.h"
 #include "firmware/tn_convert.h"
+#include "firmware/cmd_match.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -90,6 +91,17 @@ static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
     return true;
 }
 
+/* cmd_match_table $ADBF: no register input (X is passed through); Y out, A = $FF at the end marker (Y = 0), else
+   the entry X (cmd_match_pattern's PLA/TAX), X preserved. cmd_imm_match reads Y and the RAM it leaves; the ROM
+   cmd_scan_clause reads Y and X; A only reaches the dead stack (ser_rx_flush_cmd's PHA). All three are declared. */
+static void cmd_match_table_regs(fw *f, cpu740 *c)
+{
+    uint8_t x = c->x;
+    uint8_t y = cmd_match_table(f);
+    c->y = y;
+    c->a = y ? x : 0xFF;
+}
+
 /* lts_affix_next $AF11: Y in; A, Y out */
 static void lts_affix_next_regs(fw *f, cpu740 *c)
 {
@@ -172,9 +184,20 @@ static void tn_convert_clause_regs(fw *f, cpu740 *c)
     tn_convert_clause(f);
 }
 
+/* cmd_hex_value $C520: A in; A and Z out, X and Y preserved (cmd_upcase keeps X). bank_cmd_select passes A on to
+   bank_enter, and bank_load_ramcode saves X and Y in $76 and $78; the ROM handlers read A; cmd_set_voice
+   branches on Z ($AA7A BNE). No caller reads N or C. */
+static void cmd_hex_value_regs(fw *f, cpu740 *c)
+{
+    uint8_t v = cmd_hex_value(f, c->a);
+    c->a = v;
+    c->p = (uint8_t)(v == 0 ? c->p | CPU740_Z : c->p & ~CPU740_Z);
+}
+
 /* The hook of each routine: its register mapping run in the shared thunk frame, user = the bound fw_bridge. */
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
+THUNK(cmd_match_table)
 THUNK(lts_affix_next)
 THUNK(lts_affix_prev)
 THUNK(lts_sym_vowel)
@@ -186,9 +209,11 @@ THUNK(tn_rule_skip_field)
 THUNK(tn_append_phonetic)
 THUNK(lts_convert_char)
 THUNK(tn_convert_clause)
+THUNK(cmd_hex_value)
 #undef THUNK
 
 const fw_replacement fw_replacements[] = {
+    { "cmd_match_table",    0xADBF, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_match_table },
     { "lts_affix_next",     0xAF11, FW_OUT_A | FW_OUT_Y, t_lts_affix_next },
     { "lts_affix_prev",     0xAF1C, FW_OUT_A | FW_OUT_Y, t_lts_affix_prev },
     { "lts_sym_vowel",      0xB007, FW_OUT_A,            t_lts_sym_vowel },
@@ -200,6 +225,7 @@ const fw_replacement fw_replacements[] = {
     { "tn_append_phonetic", 0xB154, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_tn_append_phonetic },
     { "lts_convert_char",   0xB172, 0,                   t_lts_convert_char },
     { "tn_convert_clause",  0xB1E6, 0,                   t_tn_convert_clause },
+    { "cmd_hex_value",      0xC520, FW_OUT_A | FW_OUT_X | FW_OUT_Y | FW_OUT_Z, t_cmd_hex_value },
 };
 const size_t fw_replacement_count = sizeof fw_replacements / sizeof fw_replacements[0];
 
