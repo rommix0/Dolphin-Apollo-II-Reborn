@@ -3,6 +3,8 @@
 #include <string.h>
 #include "test.h"
 #include "firmware/cmd_match.h"
+#include "firmware/cmd_scan.h"
+#include "firmware/cmd_addr.h"
 #include "firmware/tn_convert.h"
 #include "firmware/data/fw_data.h"
 
@@ -81,7 +83,36 @@ static void table_setup(uint16_t table, uint8_t ofs, const char *text)
     g_ram[CMD_TABLE_OFS] = ofs;
 }
 
-static void test_table_layout(void)   /* the entries the tests below rely on */
+static unsigned count(uint16_t addr)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; i < g_ncalls && i < MAX_CALLS; i++)
+        n += g_calls[i].addr == addr;
+    return n;
+}
+
+/* Every ROM call is isr_par_ready with the strict budget. */
+static void check_par_ready_calls(void)
+{
+    for (unsigned i = 0; i < g_ncalls && i < MAX_CALLS; i++) {
+        CHECK_EQ(g_calls[i].addr, ROM_ISR_PAR_READY);
+        CHECK_EQ(g_calls[i].budget, FW_ROM_CALL_BUDGET);
+    }
+}
+
+/* boot_clause = s (the bytes after it unchanged). */
+static void put_clause(const char *s) { memcpy(g_ram + BOOT_CLAUSE, s, strlen(s)); }
+
+/* setup(), then boot_clause = clause (then zeros), boot_clause_len = its length, cmd_char = '@'. */
+static void scan_setup(const char *clause)
+{
+    setup();
+    put_clause(clause);
+    g_ram[BOOT_CLAUSE_LEN] = (uint8_t)strlen(clause);
+    g_ram[CMD_CHAR] = '@';
+}
+
+static void test_table_layout(void)  /* the entries the tests below rely on */
 {
     setup();
     CHECK_EQ(fw_rom8(&g_f, entry(CMD_TABLE, P_VERSION)), '?');
@@ -240,6 +271,144 @@ static void test_match_table(void)
     CHECK(!g_f.fault);
 }
 
+static void test_scan_command(void)
+{
+    scan_setup(" @W5Hi");
+    g_ram[CMD_COUNT] = 7;                       /* both reset by the scan */
+    g_ram[CMD_NEXT] = 7;
+    cmd_scan_clause(&g_f);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 3);        /* the cmd_text length */
+    CHECK(memcmp(g_ram + CMD_TEXT, " HI", 3) == 0);
+    CHECK_EQ(g_ram[CMD_COUNT], 1);
+    CHECK_EQ(g_ram[CMD_NEXT], 0);
+    CHECK_EQ(g_ram[CMD_POSITIONS], 1);          /* cut out at cmd_text position 1 */
+    CHECK_EQ(g_ram[CMD_NEXT_POS], 1);
+    CHECK_EQ(g_ram[CMD_ARG_INDEX], 3);          /* the boot_clause index of '5' */
+    CHECK_EQ(fw_rd16(&g_f, CMD_HANDLERS), ROM_CMD_SET_SPEED);
+    CHECK_EQ(g_ram[FW_TMP_76], 4);              /* the resume index */
+    CHECK_EQ(g_ram[FW_TMP_78], 2);              /* last written by the case map of 'i' (Y = 2) */
+    CHECK_EQ(fw_rd16(&g_f, CMD_TEXT_PTR), BOOT_CLAUSE + 2);
+    CHECK_EQ(fw_rd16(&g_f, CMD_TABLE_PTR), CMD_TABLE);
+    CHECK_EQ(g_ram[CMD_TABLE_OFS], 2 * P_SPEED);
+    CHECK_EQ(fw_rd16(&g_f, CMD_PAT_PTR), entry(CMD_TABLE, P_SPEED));
+    /* isr_par_ready once per character read (X = 0, 1, 4, 5), with the registers the ROM has at $AD09: A = $FF,
+       then the last byte stored (' ', the handler's high byte, 'H') */
+    static const uint8_t want_a[] = { 0xFF, ' ', ROM_CMD_SET_SPEED >> 8, 'H' };
+    static const uint8_t want_x[] = { 0, 1, 4, 5 };
+    static const uint8_t want_y[] = { 0, 1, 1, 2 };
+    CHECK_EQ(g_ncalls, 4);
+    for (unsigned i = 0; i < 4 && i < g_ncalls; i++) {
+        CHECK_EQ(g_calls[i].a, want_a[i]);
+        CHECK_EQ(g_calls[i].x, want_x[i]);
+        CHECK_EQ(g_calls[i].y, want_y[i]);
+    }
+    check_par_ready_calls();
+    CHECK(!g_f.fault);
+}
+
+static void test_scan_two_commands(void)
+{
+    scan_setup(" @W5@A3Go");
+    g_ram[CMD_POSITIONS + 2] = 0x77;            /* cmd_positions[cmd_count] is not reset */
+    cmd_scan_clause(&g_f);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 3);
+    CHECK(memcmp(g_ram + CMD_TEXT, " GO", 3) == 0);
+    CHECK_EQ(g_ram[CMD_COUNT], 2);
+    CHECK_EQ(g_ram[CMD_POSITIONS], 1);          /* both due at position 1, in queue order */
+    CHECK_EQ(g_ram[CMD_POSITIONS + 1], 1);
+    CHECK_EQ(g_ram[CMD_POSITIONS + 2], 0x77);
+    CHECK_EQ(g_ram[CMD_ARG_INDEX], 3);
+    CHECK_EQ(g_ram[CMD_ARG_INDEX + 1], 6);
+    CHECK_EQ(fw_rd16(&g_f, CMD_HANDLERS), ROM_CMD_SET_SPEED);
+    CHECK_EQ(fw_rd16(&g_f, CMD_HANDLERS + 2), ROM_CMD_SET_VOLUME);
+    CHECK_EQ(g_ram[CMD_NEXT_POS], 1);
+    CHECK_EQ(count(ROM_ISR_PAR_READY), 5);      /* X = 0, 1, 4, 7, 8 */
+    check_par_ready_calls();
+    CHECK(!g_f.fault);
+}
+
+static void test_scan_unmatched(void)
+{
+    scan_setup(" @Zq");                         /* no pattern matches "Zq" */
+    g_ram[FW_TMP_76] = 0x99;
+    cmd_scan_clause(&g_f);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 4);
+    CHECK(memcmp(g_ram + CMD_TEXT, " @ZQ", 4) == 0);
+    CHECK_EQ(g_ram[CMD_COUNT], 0);
+    CHECK_EQ(g_ram[CMD_POSITIONS], 0xFF);
+    CHECK_EQ(g_ram[CMD_NEXT_POS], 0xFF);
+    CHECK_EQ(g_ram[CMD_TABLE_OFS], 2 * P_END);
+    CHECK_EQ(g_ram[FW_TMP_76], 0x99);           /* not written on this path */
+    CHECK_EQ(g_ram[FW_TMP_78], 3);
+    CHECK_EQ(count(ROM_ISR_PAR_READY), 4);
+
+    scan_setup(" zZq");                         /* the cmd_char is stored raw, not case-mapped */
+    g_ram[CMD_CHAR] = 'z';
+    cmd_scan_clause(&g_f);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 4);
+    CHECK(memcmp(g_ram + CMD_TEXT, " zZQ", 4) == 0);
+    CHECK_EQ(g_ram[CMD_COUNT], 0);
+    check_par_ready_calls();
+    CHECK(!g_f.fault);
+}
+
+static void test_scan_case_map(void)
+{
+    scan_setup(" a[b]\x05\x7F");
+    cmd_scan_clause(&g_f);
+    static const uint8_t want[] = { ' ', 'A', '(', 'B', ')', 0x05, ' ' };   /* codes below $21 stay raw */
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], sizeof want);
+    CHECK(memcmp(g_ram + CMD_TEXT, want, sizeof want) == 0);
+    CHECK_EQ(g_ram[FW_TMP_78], 6);              /* the Y of the last mapped character (DEL) */
+    CHECK(!g_f.fault);
+}
+
+static void test_scan_phonetic(void)
+{
+    scan_setup(" ab[@W5c");
+    g_ram[CMD_PHONETIC] = 1;                    /* @X1: copied raw, commands still cut out */
+    cmd_scan_clause(&g_f);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 5);
+    CHECK(memcmp(g_ram + CMD_TEXT, " ab[c", 5) == 0);
+    CHECK_EQ(g_ram[CMD_COUNT], 1);
+    CHECK_EQ(g_ram[CMD_POSITIONS], 4);
+
+    scan_setup(" ab[");
+    g_ram[CMD_PHONETIC] = 2;                    /* BBS0: only bit 0 counts */
+    cmd_scan_clause(&g_f);
+    CHECK(memcmp(g_ram + CMD_TEXT, " AB(", 4) == 0);
+    check_par_ready_calls();
+    CHECK(!g_f.fault);
+}
+
+static void test_scan_nul_partial(void)
+{
+    scan_setup(" @R");                          /* a zero after the letter: *? matches partially (Y = 1) */
+    cmd_scan_clause(&g_f);
+    CHECK_EQ(g_ram[CMD_COUNT], 1);              /* queued as if it had matched (the latent ROM bug) */
+    CHECK_EQ(g_ram[CMD_POSITIONS], 1);
+    CHECK_EQ(g_ram[CMD_ARG_INDEX], 2);
+    CHECK_EQ(g_ram[FW_TMP_76], 3);
+    uint16_t pat = entry(CMD_TABLE, P_QUERY);   /* the handler bytes come from inside "*?" */
+    CHECK_EQ(fw_rd16(&g_f, CMD_PAT_PTR), pat);
+    CHECK_EQ(g_ram[CMD_HANDLERS], fw_rom8(&g_f, (uint16_t)(pat + 2)));
+    CHECK_EQ(g_ram[CMD_HANDLERS + 1], fw_rom8(&g_f, (uint16_t)(pat + 3)));
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 1);
+    CHECK(!g_f.fault);
+}
+
+static void test_scan_empty(void)
+{
+    scan_setup(" ");
+    g_ram[BOOT_CLAUSE_LEN] = 0;                 /* do-while: one character is still read */
+    cmd_scan_clause(&g_f);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 1);
+    CHECK_EQ(g_ram[CMD_TEXT], ' ');
+    CHECK_EQ(count(ROM_ISR_PAR_READY), 1);
+    check_par_ready_calls();
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_cmd(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -250,4 +419,11 @@ void suite_fw_cmd(void)
     test_find_back();
     test_match_pattern();
     test_match_table();
+    test_scan_command();
+    test_scan_two_commands();
+    test_scan_unmatched();
+    test_scan_case_map();
+    test_scan_phonetic();
+    test_scan_nul_partial();
+    test_scan_empty();
 }
