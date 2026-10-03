@@ -1,6 +1,6 @@
 # M4.1 — Text normalisation in C — Design
 
-**Status:** design, awaiting user review
+**Status:** implemented (plan docs/superpowers/plans/2026-10-03-m4-1-text-normalisation.md)
 **Parent specs:**
 - `docs/superpowers/specs/2026-09-30-software-apollo2-design.md` (rev 7): §6 step 3, §8 milestone 4.
 - `docs/superpowers/specs/2026-10-03-m4-0-replacement-foundation-design.md`: the hooks, thunks, `rom_call`, the data image and the tests that M4.1 builds on (§3–§5, §8 "As built").
@@ -117,3 +117,12 @@ The five length-prefixed phonetic strings are converted into a readable table in
 - `cmd_run_due` and the deferred-command machinery (M4.2).
 - Prosody and playback (M4.3 and later).
 - `isr_par_ready`, which stays in ROM: the firmware context has no SFR access by design.
+
+## 7. As built
+
+- `tn_convert_clause` itself writes only the `$75` scratch; the `$78` writes listed in §2.2's quirks belong to `tn_append_phonetic` (§2.1), and are kept there.
+- The `tn_append_phonetic` thunk declares A, X and Y as outputs. No ROM caller reads them (cmd_put_phonetic restores A and Y; its callers and ROM tn_say_char reload X), so this is stricter than "exactly what they read"; it lets diff_lts compare all three.
+- Flags: a thunk leaves P as it was on entry. ROM `$B154` exits with N=1, Z=0, C=1. On every ROM path into it (lts_match_list's BCC at `$B119` after `CMP #$1E`, tn_say_char's JSR at `$B0DB`, cmd_put_phonetic at `$A86F`) N and Z agree; C differs but every successor redefines it before reading it.
+- Checked in the dumps (Task 4): `pros_make_segments` (`$CA92`) and `boot_loop_play` (`$A7D4`, including `boot_play_body` at `$B2B3`) write X and Y before reading them, so passing A = `tn_phon_len`, X = `tn_pos` and Y = 0 at the flush is exact.
+- diff_lts installs the `boot_loop_play` stop hook for every observed routine; today only `tn_convert_clause` reaches it. The corpus run skips 1 flush call (long_clause); `tn_convert_clause` has 133 calls checked and `tn_append_phonetic` 460, with 0 mismatches. golden_hybrid runs 27 files × 12 modes.
+- The fault test for a ROM call from C that does not return now uses `tn_convert_clause` → `isr_par_ready`, since `tn_append_phonetic` no longer calls ROM.
