@@ -43,6 +43,7 @@ static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
 static uint8_t g_before[FW_RAM_SIZE];   /* RAM as a test left it: the C must not touch it before a ROM cmd_run_next */
 static unsigned g_touched;              /* ROM cmd_run_next calls that found RAM changed since g_before */
+static bool g_clobber;                  /* ser_tx_put returns X ^ $40 and Y = 2 */
 
 /* Records every ROM call and answers the routines the C calls as the ROM would; any other call fails. */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
@@ -77,6 +78,15 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         r->y = 0x0B;
         return FW_CALL_RETURNED;
     }
+    if (addr == ROM_SER_TX_PUT || addr == ROM_SER_TX_HEX || addr == ROM_SER_TX_RECORDS) {
+        /* the ser_tx_* routines push and pull A, X and Y: the registers come back as they went, unless g_clobber
+           proves that cmd_reply_setting carries on with the X and Y that ser_tx_put returns */
+        if (g_clobber && addr == ROM_SER_TX_PUT) {
+            r->x ^= 0x40;
+            r->y = 2;                              /* the 'B' entry of cmd_query_table */
+        }
+        return FW_CALL_RETURNED;
+    }
     /* isr_par_ready leaves A, X and Y as they were: the registers come back unchanged */
     return addr == ROM_ISR_PAR_READY ? FW_CALL_RETURNED : FW_CALL_FAILED;
 }
@@ -90,6 +100,7 @@ static void setup(void)
     g_host.set_low_window = NULL;   /* no command routine in C drives P2 (bank_cmd_select stays in ROM) */
     g_ncalls = 0;
     g_touched = 0;
+    g_clobber = false;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
 }
 
@@ -919,6 +930,246 @@ static void test_set_prosody(void)
     CHECK(!g_f.fault);
 }
 
+static void test_sound(void)
+{
+    setup();
+    put_clause(" @T5 ");
+    g_ram[TN_PHON_LEN] = 0x2A;
+    g_ram[CMD_EV_COUNT] = 1;
+    g_ram[CMD_EV_POSITIONS + 3] = 0x77;            /* high bytes of positions 1 and 2: never written */
+    g_ram[CMD_EV_POSITIONS + 5] = 0x77;
+    cmd_sound(&g_f, 3, g_ram[BOOT_CLAUSE + 3]);
+    CHECK_EQ(g_ram[CMD_EV_COUNT], 3);              /* two events */
+    CHECK_EQ(g_ram[CMD_EV_ARGS + 1], 5);
+    CHECK_EQ(g_ram[CMD_EV_ARGS + 2], 5);
+    CHECK_EQ(g_ram[CMD_EV_POSITIONS + 2], 0x2A);   /* low byte = tn_phon_len */
+    CHECK_EQ(g_ram[CMD_EV_POSITIONS + 3], 0x77);
+    CHECK_EQ(g_ram[CMD_EV_POSITIONS + 4], 0x2A);
+    CHECK_EQ(g_ram[CMD_EV_POSITIONS + 5], 0x77);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_HANDLERS + 2), ROM_CMD_EV_SOUND_START);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_HANDLERS + 4), ROM_CMD_EV_SOUND_END);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+/* Accepted arguments queue with the value; rejected ones leave the queue untouched (-1). */
+typedef struct { char c; int want; } event_arg;
+
+static void check_event_args(cmd_handler *h, const event_arg *k, size_t n, uint8_t events, uint16_t handler)
+{
+    for (size_t i = 0; i < n; i++) {
+        setup();
+        g_ram[TN_PHON_LEN] = 0x10;
+        h(&g_f, 3, (uint8_t)k[i].c);
+        if (k[i].want < 0) {
+            CHECK_EQ(g_ram[CMD_EV_COUNT], 0);
+            CHECK_EQ(g_ram[CMD_EV_ARGS], 0);
+            CHECK_EQ(g_ram[CMD_EV_POSITIONS], 0);
+            CHECK_EQ(fw_rd16(&g_f, CMD_EV_HANDLERS), 0);
+        } else {
+            CHECK_EQ(g_ram[CMD_EV_COUNT], events);
+            CHECK_EQ(g_ram[CMD_EV_ARGS], k[i].want);
+            CHECK_EQ(g_ram[CMD_EV_POSITIONS], 0x10);
+            CHECK_EQ(fw_rd16(&g_f, CMD_EV_HANDLERS), handler);
+        }
+        CHECK(!g_f.fault);
+    }
+}
+
+static void test_event_args(void)
+{
+    /* @T: 0-$10 and 'X' ($21 -> $10); 'G' is 16 too; 'H' (17), ':' (35) and '+' ($FB) are rejected */
+    static const event_arg k_sound[] = { { '0', 0 }, { 'f', 15 }, { 'x', 16 }, { 'X', 16 }, { 'G', 16 },
+                                         { 'H', -1 }, { ':', -1 }, { '+', -1 } };
+    /* @A: 0-F */
+    static const event_arg k_volume[] = { { '0', 0 }, { '6', 6 }, { 'f', 15 }, { 'G', -1 }, { ':', -1 } };
+    /* @B: 0-9 */
+    static const event_arg k_voicing[] = { { '0', 0 }, { '9', 9 }, { 'A', -1 }, { 'x', -1 } };
+    check_event_args(cmd_sound, k_sound, sizeof k_sound / sizeof k_sound[0], 2, ROM_CMD_EV_SOUND_START);
+    check_event_args(cmd_set_volume, k_volume, sizeof k_volume / sizeof k_volume[0], 1, ROM_CMD_EV_SET_VOLUME);
+    check_event_args(cmd_set_voicing, k_voicing, sizeof k_voicing / sizeof k_voicing[0], 1, ROM_CMD_EV_SET_VOICING);
+}
+
+static void test_mark_index(void)
+{
+    setup();
+    put_clause(" @I+ ");
+    g_ram[TN_PHON_LEN] = 0x12;
+    g_ram[CMD_EV_COUNT] = 2;
+    g_ram[CMD_EV_ARGS + 2] = 0x99;                 /* stale: @I+ writes no argument */
+    cmd_mark_index(&g_f, 3, g_ram[BOOT_CLAUSE + 3]);
+    CHECK_EQ(g_ram[CMD_EV_COUNT], 3);
+    CHECK_EQ(g_ram[CMD_EV_POSITIONS + 4], 0x12);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_HANDLERS + 4), ROM_CMD_EV_INDEX);
+    CHECK_EQ(g_ram[CMD_EV_ARGS + 2], 0x99);
+    CHECK_EQ(g_ncalls, 0);
+    setup();
+    cmd_mark_index(&g_f, 3, '^');                  /* only a raw '+' queues */
+    CHECK_EQ(g_ram[CMD_EV_COUNT], 0);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_HANDLERS), 0);
+    CHECK(!g_f.fault);
+}
+
+static void test_event_index_wrap(void)
+{
+    /* @A at n = 128: the argument goes to $1406 + 128 = $1486 = cmd_count; position and handler wrap to entry 0 */
+    setup();
+    g_ram[TN_PHON_LEN] = 0x31;
+    g_ram[CMD_EV_COUNT] = 128;
+    g_ram[CMD_COUNT] = 5;
+    cmd_set_volume(&g_f, 3, '7');
+    CHECK_EQ(g_ram[CMD_COUNT], 7);
+    CHECK_EQ(g_ram[CMD_EV_POSITIONS], 0x31);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_HANDLERS), ROM_CMD_EV_SET_VOLUME);
+    CHECK_EQ(g_ram[CMD_EV_COUNT], 129);
+
+    /* @T at n = 127: X = $FE. The end event's offset is in the instruction ($1208,X / $1308,X), so it does not
+       wrap: its position lands on cmd_ev_handlers[0]'s low byte ($1306), its handler on cmd_ev_args[0..1] */
+    setup();
+    g_ram[TN_PHON_LEN] = 0x31;
+    g_ram[CMD_EV_COUNT] = 127;
+    cmd_sound(&g_f, 3, '3');
+    CHECK_EQ(g_ram[CMD_EV_ARGS + 127], 3);         /* $1485 */
+    CHECK_EQ(g_ram[CMD_COUNT], 3);                 /* $1486 */
+    CHECK_EQ(g_ram[CMD_EV_POSITIONS + 0xFE], 0x31);                             /* $1304 */
+    CHECK_EQ(g_ram[CMD_EV_HANDLERS], 0x31);                                     /* $1306 = $1208 + $FE */
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_HANDLERS + 0xFE), ROM_CMD_EV_SOUND_START);    /* $1404 */
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_ARGS), ROM_CMD_EV_SOUND_END);                 /* $1406 = $1308 + $FE */
+    CHECK_EQ(g_ram[CMD_EV_POSITIONS], 0);          /* entry 0's position untouched */
+    CHECK_EQ(g_ram[CMD_EV_COUNT], 129);
+
+    /* @B at n = 255: the argument at $1406 + 255 = $1505 (inside cmd_positions); X = $FE; the count wraps to 0 */
+    setup();
+    g_ram[TN_PHON_LEN] = 0x31;
+    g_ram[CMD_EV_COUNT] = 255;
+    cmd_set_voicing(&g_f, 3, '4');
+    CHECK_EQ(g_ram[CMD_EV_ARGS + 255], 4);
+    CHECK_EQ(g_ram[CMD_EV_POSITIONS + 0xFE], 0x31);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_HANDLERS + 0xFE), ROM_CMD_EV_SET_VOICING);
+    CHECK_EQ(g_ram[CMD_EV_COUNT], 0);
+
+    /* @I+ at n = 128: entry 0, and no argument (cmd_count stays) */
+    setup();
+    g_ram[TN_PHON_LEN] = 0x31;
+    g_ram[CMD_EV_COUNT] = 128;
+    g_ram[CMD_COUNT] = 5;
+    cmd_mark_index(&g_f, 3, '+');
+    CHECK_EQ(g_ram[CMD_COUNT], 5);
+    CHECK_EQ(g_ram[CMD_EV_POSITIONS], 0x31);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_HANDLERS), ROM_CMD_EV_INDEX);
+    CHECK_EQ(g_ram[CMD_EV_COUNT], 129);
+    CHECK(!g_f.fault);
+}
+
+static void test_echo(void)
+{
+    setup();
+    put_clause(" @E! ");
+    g_ram[CMD_NEXT] = 1;                           /* the dispatcher advanced it: Y = cmd_next - 1 = 0 */
+    cmd_echo(&g_f, 3, g_ram[BOOT_CLAUSE + 3]);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, ROM_SER_TX_PUT, '!', 3, 0);
+    CHECK(!g_f.fault);
+}
+
+static void test_query_known(void)
+{
+    setup();
+    put_clause(" @A? ");
+    g_ram[CMD_NEXT] = 1;
+    g_ram[CMD_VOLUME] = 6;
+    g_ram[TN_RESUME_POS] = 0x99;
+    cmd_query(&g_f, 3, g_ram[BOOT_CLAUSE + 3]);    /* X = the '?'; the letter is boot_clause[X - 1] */
+    CHECK_EQ(g_ram[FW_TMP_75], 'A');
+    CHECK_EQ(g_ram[TN_RESUME_POS], 3);             /* X parked in $77 */
+    CHECK_EQ(g_ncalls, 2);
+    check_call(0, ROM_SER_TX_PUT, 'A', 3, 0);      /* Y = the table offset */
+    check_call(1, ROM_SER_TX_HEX, 6, 3, 0);        /* cmd_volume ($14) */
+
+    setup();
+    put_clause(" @$? ");                           /* the last entry: offset 34, cmd_source ($1C) */
+    g_ram[CMD_SOURCE] = 0x42;
+    cmd_query(&g_f, 3, '?');
+    CHECK_EQ(g_ncalls, 2);
+    check_call(0, ROM_SER_TX_PUT, '$', 3, 34);
+    check_call(1, ROM_SER_TX_HEX, 0x42, 3, 34);
+
+    setup();                                       /* X = 0 reads $1AFF = cmd_text[255] */
+    g_ram[CMD_TEXT + 255] = 'W';
+    g_ram[CMD_SPEED] = 3;
+    cmd_query(&g_f, 0, 0);
+    CHECK_EQ(g_ncalls, 2);
+    check_call(0, ROM_SER_TX_PUT, 'W', 0, 26);
+    check_call(1, ROM_SER_TX_HEX, 3, 0, 26);
+    CHECK(!g_f.fault);
+}
+
+static void test_query_unknown(void)
+{
+    static const char *const k_texts[] = { " @N? ", " @a? ", " @?? " };   /* not listed; lower case is raw */
+    for (size_t i = 0; i < sizeof k_texts / sizeof k_texts[0]; i++) {
+        setup();
+        put_clause(k_texts[i]);
+        g_ram[TN_RESUME_POS] = 0x99;
+        cmd_query(&g_f, 3, '?');
+        CHECK_EQ(g_ram[FW_TMP_75], (uint8_t)k_texts[i][2]);
+        CHECK_EQ(g_ram[TN_RESUME_POS], 0x99);
+        CHECK_EQ(g_ncalls, 0);
+        CHECK(!g_f.fault);
+    }
+}
+
+/* cmd_reply_setting carries on with the X and Y that ser_tx_put returns (the ROM relies on it preserving them) */
+static void test_query_returned_regs(void)
+{
+    setup();
+    put_clause(" @A? ");
+    g_clobber = true;
+    g_ram[CMD_VOLUME] = 6;
+    g_ram[CMD_VOICING] = 9;
+    cmd_query(&g_f, 3, '?');
+    CHECK_EQ(g_ram[TN_RESUME_POS], 0x43);          /* STX $77 after the call */
+    CHECK_EQ(g_ncalls, 2);
+    check_call(0, ROM_SER_TX_PUT, 'A', 3, 0);
+    check_call(1, ROM_SER_TX_HEX, 9, 0x43, 2);     /* LDA $9990,Y with the returned Y = 2: cmd_voicing ($13) */
+    CHECK(!g_f.fault);
+}
+
+static void test_list_languages(void)
+{
+    setup();
+    put_clause(" @L ");
+    g_ram[CMD_NEXT] = 1;
+    cmd_list_languages(&g_f, 2, g_ram[BOOT_CLAUSE + 2]);
+    CHECK_EQ(g_ram[SER_REPLY_ID], 'L');
+    CHECK_EQ(g_ram[SER_REPLY_COUNT], 7);
+    CHECK_EQ(g_ram[SER_REPLY_SIZE], 14);
+    CHECK_EQ(fw_rd16(&g_f, SER_REPLY_PTR), BANK_ID_TABLE);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, ROM_SER_TX_RECORDS, 'L', 2, 0);
+    CHECK(!g_f.fault);
+}
+
+/* Every handler of this task runs as C through the dispatcher; bank_cmd_select still falls back to ROM. */
+static void test_run_due_all_rows(void)
+{
+    static const uint16_t k_addrs[] = { ROM_CMD_SOUND, ROM_CMD_SET_VOLUME, ROM_CMD_SET_VOICING, ROM_CMD_MARK_INDEX,
+                                        ROM_CMD_ECHO, ROM_CMD_QUERY, ROM_CMD_LIST_LANGUAGES, ROM_BANK_CMD_SELECT };
+    for (size_t i = 0; i < sizeof k_addrs / sizeof k_addrs[0]; i++) {
+        setup();
+        put_clause(" @A5 ");
+        g_ram[CMD_COUNT] = 1;                      /* one queued command at position 0, argument index 3 */
+        g_ram[CMD_NEXT_POS] = 0;
+        g_ram[CMD_POSITIONS + 1] = 0xFF;
+        fw_wr16(&g_f, CMD_HANDLERS, k_addrs[i]);
+        g_ram[CMD_ARG_INDEX] = 3;
+        cmd_run_due(&g_f, 0);
+        CHECK_EQ(g_ram[CMD_NEXT], 1);
+        CHECK_EQ(g_ram[CMD_NEXT_POS], 0xFF);
+        CHECK_EQ(count(ROM_CMD_RUN_NEXT), k_addrs[i] == ROM_BANK_CMD_SELECT ? 1u : 0u);
+        CHECK(!g_f.fault);
+    }
+}
 void suite_fw_cmd(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -955,4 +1206,14 @@ void suite_fw_cmd(void)
     test_set_speaker();
     test_set_voice();
     test_set_prosody();
+    test_sound();
+    test_event_args();
+    test_mark_index();
+    test_event_index_wrap();
+    test_echo();
+    test_query_known();
+    test_query_unknown();
+    test_query_returned_regs();
+    test_list_languages();
+    test_run_due_all_rows();
 }

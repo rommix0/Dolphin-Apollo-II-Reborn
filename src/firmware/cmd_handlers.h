@@ -28,6 +28,17 @@ void cmd_set_source(fw *f, uint8_t x, uint8_t a);         /* $AB5D @$: 0-7 */
 void cmd_set_speaker(fw *f, uint8_t x, uint8_t a);        /* $AA61 @K: 0-1 */
 void cmd_set_voice(fw *f, uint8_t x, uint8_t a);          /* $AA74 @V: 0 (off) or presets 1-6 */
 
+/* Event producers (cmd_event.c): queue a command event at the phonetic position tn_phon_len */
+void cmd_sound(fw *f, uint8_t x, uint8_t a);              /* $A8C0 @T */
+void cmd_set_volume(fw *f, uint8_t x, uint8_t a);         /* $AB05 @A */
+void cmd_set_voicing(fw *f, uint8_t x, uint8_t a);        /* $AB70 @B */
+void cmd_mark_index(fw *f, uint8_t x, uint8_t a);         /* $AB2E @I+ (deferred part) */
+
+/* Replies (cmd_reply.c): queued in the serial transmit ring by the ROM ser_tx_* routines */
+void cmd_echo(fw *f, uint8_t x, uint8_t a);               /* $AB99 @E */
+void cmd_query(fw *f, uint8_t x, uint8_t a);              /* $ABD3 @c? */
+void cmd_list_languages(fw *f, uint8_t x, uint8_t a);     /* $ABBE @L */
+
 /* The Y a ROM handler is entered with: cmd_next - 1 (cmd_run_due's LDY, before cmd_run_next's INC). */
 static inline uint8_t cmd_handler_y(const fw *f) { return (uint8_t)(fw_rd8(f, CMD_NEXT) - 1); }
 

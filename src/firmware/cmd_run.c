@@ -3,8 +3,9 @@
 #include "cmd_addr.h"
 #include "cmd_handlers.h"
 
-/* The C handlers by ROM address: the bytes cmd_scan_clause copies into cmd_handlers. A command whose address is
-   not here runs through the ROM cmd_run_next (spec 2.4). The NULL row ends the table. */
+/* The C handlers by ROM address: the bytes cmd_scan_clause copies into cmd_handlers. Every deferred handler is
+   here except bank_cmd_select ($ABAF, P2 bank switching): it, and any unknown address (the latent NUL bug of the
+   scan, spec 2.6), runs through the ROM cmd_run_next (spec 2.4). The NULL row ends the table. */
 static const struct { uint16_t addr; cmd_handler *fn; } k_handlers[] = {
     { ROM_CMD_SAY_VERSION,      cmd_say_version },
     { ROM_CMD_SET_PHRASE_PAUSE, cmd_set_phrase_pause },
@@ -22,6 +23,13 @@ static const struct { uint16_t addr; cmd_handler *fn; } k_handlers[] = {
     { ROM_CMD_SET_SPEAKER,      cmd_set_speaker },
     { ROM_CMD_SET_VOICE,        cmd_set_voice },
     { ROM_CMD_SET_SOURCE,       cmd_set_source },
+    { ROM_CMD_SOUND,            cmd_sound },
+    { ROM_CMD_SET_VOLUME,       cmd_set_volume },
+    { ROM_CMD_SET_VOICING,      cmd_set_voicing },
+    { ROM_CMD_MARK_INDEX,       cmd_mark_index },
+    { ROM_CMD_ECHO,             cmd_echo },
+    { ROM_CMD_QUERY,            cmd_query },
+    { ROM_CMD_LIST_LANGUAGES,   cmd_list_languages },
     { 0, NULL },
 };
 
