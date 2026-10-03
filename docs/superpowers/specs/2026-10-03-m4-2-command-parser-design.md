@@ -1,6 +1,6 @@
 # M4.2 — The command parser in C — Design
 
-**Status:** design, awaiting user review
+**Status:** implemented (plan docs/superpowers/plans/2026-10-03-m4-2-command-parser.md)
 **Parent specs:**
 - `docs/superpowers/specs/2026-09-30-software-apollo2-design.md` (rev 8): §6 step 3, §8 milestone 4.
 - `docs/superpowers/specs/2026-10-03-m4-0-replacement-foundation-design.md`: hooks, thunks, `rom_call`, the data image and the tests (§3–§5, §8 "As built").
@@ -190,3 +190,31 @@ Replies (`@E`, `@L`, queries) never appear in the frames. `diff_lts` checks them
 - `par_setup_voice` and the voice tables (M4.4/M4.5).
 - The interrupt-level immediate path (`ser_rx_byte`, `cmd_imm_match`, `cmd_imm_index_add`/`_query`, `ser_rx_flush_cmd`), `boot_get_clause`, `boot_set_defaults` and the `ser_tx_*` routines (M4.6).
 - `bank_cmd_select` (P2 bank switching) and `cmd_say_phonetic` (an unreachable caller; it plays speech).
+
+## 7. As built
+
+Where the ROM is more precise than, or differs from, the sections above. The ROM wins; `ghidra740/` is not edited.
+
+- Thunk outputs as finally declared (`src/engine/thunks.c`). They are wider than §2.3 says, because each is compared by `diff_lts` and the ROM leaves them defined:
+  - `cmd_scan_clause`: none;
+  - `cmd_match_table`: A, X and Y (A = $FF at the end marker, else the entry X; X preserved). §2.3 said Y. The ROM `cmd_scan_clause` reads Y and X; A reaches only the dead stack;
+  - `cmd_hex_value`: A, X, Y and Z (X and Y preserved). §2.3 said A and the flags. `bank_cmd_select` passes A on to `bank_enter`, and its `bank_load_ramcode` saves X and Y in `$76`/`$78`; `cmd_set_voice` branches on Z. N and C are read by no caller;
+  - `cmd_run_due`: X and Y (Y = `cmd_next`, as its last `LDY` leaves it). §2.3 said X. Only `tn_convert_clause` calls it, and it reads X;
+  - `cmd_apply_speaker`: A, X and Y. §2.3 said none beyond what `boot_reset` reads, and `boot_reset` reads all three (next bullet).
+- `par_setup_voice` reads none of A, X and Y and returns X = 9 and Y = $0B. `cmd_apply_pitch` restores only A, so `boot_reset` sees X and Y changed after `cmd_apply_speaker`: its `bank_load_ramcode` saves them in `$76`/`$78`. The `cmd_apply_speaker` hook therefore hands all three back.
+- The dispatcher finds a C handler by address in a table (`k_handlers` in `cmd_run.c`, 23 rows), not with the `switch` of §2.4. The behaviour is identical.
+- The dispatcher's ROM fallback calls `cmd_run_next` with X = the position and Y = `cmd_next`, because `bank_cmd_select` → `bank_load_ramcode` saves Y in `$78` (`$A601 STY $78`).
+- `diff_lts` also counts the compared calls whose ROM copy unwound and fails if `bank_select` is in the corpus and the count is 0. It prints `N unwound calls compared`; on the current corpus N = 2: the `bank_select` `@=1` under `tn_convert_clause` and under `cmd_run_due`. The unwound call is detected by SP in the reference copy: its SP ends above the return address.
+- `cmd_handler_y` (the Y every handler enters with, `cmd_next` − 1) is one inline helper in `cmd_handlers.h`, shared by the setters, the apply helpers and the replies.
+- The version-text data addresses are named `CMD_VERSION_ENGINE_TEXT` ($9804) and `CMD_VERSION_LANG_TEXT` ($F75B) in `data/fw_data.h`, next to the other `CMD_*` data names.
+- The speed-map base is named `CMD_SPEED_MAP_DATA` ($C898, not converted) instead of `ROM_PROS_SPEED_MAPS`. The voice-table addresses `PAR_VOICE_A` ($D46A) and `PAR_VOICE_B` ($E5E3) are immediates in `cmd_select_voice_a`/`_b`; the tables stay unconverted.
+- The scan skips the case map on bit 0 of `cmd_phonetic` (`BBS0`), not on any non-zero value, and only for codes ≥ $21.
+- The scan writes `$78` a second time for every case-mapped character (`$AD1B`), so it ends as the Y of the last mapped character or of the last `cmd_char`, whichever came later.
+- The scan is a do-while: with `boot_clause_len` = 0 it still reads one character and sets the length to 1 (unreachable: `boot_get_clause` always puts a space at index 0).
+- `cmd_hex_value` splits on bit 7 of c − 'A' (`BMI`), so case-mapped codes above 'Z' wrap as well ($80 gives $49, $E0 gives $B0).
+- `cmd_sound` writes its second event at instruction offsets (`$1208,X`, `$1308,X`) that do not wrap with X: at `cmd_ev_count` = 127 it lands on `cmd_ev_handlers[0]`'s low byte and on `cmd_ev_args[0..1]`.
+- The event producers' arguments (`STA $1406,X` with X = `cmd_ev_count`) do not wrap: a count of 128 or more writes into `cmd_count` and the deferred queue.
+- `@T` accepts every value up to $10 plus 'X', so `@TG` is effect 16, like `@TX`.
+- `cmd_mark_index` tests the raw '+' (no `cmd_hex_value`) and writes no argument, so `cmd_ev_args[n]` stays stale.
+- A query compares the raw letter with the upper-case letters of `cmd_query_table`, so a lower-case query (`@a?`) gets no reply.
+- `cmd_reply_setting` goes on with the X and Y that `ser_tx_put` returns; `cmd_query` reads the letter at `$1AFF,X`, so X = 0 reads `cmd_text[255]`.
