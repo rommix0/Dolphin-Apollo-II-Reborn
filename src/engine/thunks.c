@@ -140,6 +140,16 @@ static void tn_rule_skip_field_regs(fw *f, cpu740 *c)
     c->y = y;
 }
 
+/* tn_append_phonetic $B154: A (length), X, Y in; A = $FF, X, Y out (set exactly, though cmd_put_phonetic
+   restores A and Y) */
+static void tn_append_phonetic_regs(fw *f, cpu740 *c)
+{
+    uint8_t len = c->a, x = c->x, y = c->y;
+    c->a = tn_append_phonetic(f, len, &x, &y);
+    c->x = x;
+    c->y = y;
+}
+
 /* lts_convert_char $B172: A in; no register output (tn_convert_clause clears P2.7 and reloads X) */
 static void lts_convert_char_regs(fw *f, cpu740 *c)
 {
@@ -165,6 +175,7 @@ THUNK(tn_say_char)
 THUNK(lts_match_list)
 THUNK(tn_rule_skip_text)
 THUNK(tn_rule_skip_field)
+THUNK(tn_append_phonetic)
 THUNK(lts_convert_char)
 THUNK(tn_convert_clause)
 #undef THUNK
@@ -178,6 +189,7 @@ const fw_replacement fw_replacements[] = {
     { "lts_match_list",     0xB0E3, FW_OUT_A | FW_OUT_Z, t_lts_match_list },
     { "tn_rule_skip_text",  0xB138, FW_OUT_A | FW_OUT_Y, t_tn_rule_skip_text },
     { "tn_rule_skip_field", 0xB142, FW_OUT_Y,            t_tn_rule_skip_field },
+    { "tn_append_phonetic", 0xB154, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_tn_append_phonetic },
     { "lts_convert_char",   0xB172, 0,                   t_lts_convert_char },
     { "tn_convert_clause",  0xB1E6, 0,                   t_tn_convert_clause },
 };

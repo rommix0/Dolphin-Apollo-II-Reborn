@@ -3,10 +3,22 @@
 
 static uint8_t rule_byte(fw *f, uint8_t y) { return fw_ind_y(f, (uint8_t)TN_RULE_PTR, y); }
 
-void tn_append_phonetic_rom(fw *f, uint8_t len, uint8_t y)
+uint8_t tn_append_phonetic(fw *f, uint8_t len, uint8_t *x, uint8_t *y)
 {
-    fw_regs r = { len, 0, y, 0 };
-    fw_rom_call(f, TN_APPEND_PHONETIC, &r, FW_ROM_CALL_BUDGET);   /* returns A = $FF */
+    if (len == 0)
+        return 0xFF;
+    fw_wr8(f, FW_TMP_78, len);
+    *x = fw_rd8(f, TN_PHON_LEN);
+    if (fw_rd8(f, CMD_VOICE)) {
+        do {
+            (*y)++;
+            fw_wr8(f, (uint16_t)(TN_PHONETIC + *x), rule_byte(f, *y));
+            (*x)++;
+            fw_wr8(f, FW_TMP_78, (uint8_t)(fw_rd8(f, FW_TMP_78) - 1));
+        } while (fw_rd8(f, FW_TMP_78) != 0);
+    }
+    fw_wr8(f, TN_PHON_LEN, *x);
+    return 0xFF;
 }
 
 uint8_t tn_rule_skip_text(fw *f, uint8_t *y)
@@ -34,7 +46,8 @@ uint8_t tn_say_char(fw *f, uint8_t c)
     uint8_t n = tn_rule_skip_text(f, &y);   /* past the left context to the count n */
     tn_rule_skip_field(f, n, &y);           /* past n and the n consumed characters */
     tn_rule_skip_text(f, &y);               /* past the rest of the right context to the length */
-    tn_append_phonetic_rom(f, rule_byte(f, y), y);
+    uint8_t x0 = 0;                         /* X: reloaded from tn_pos below, as in the ROM */
+    tn_append_phonetic(f, rule_byte(f, y), &x0, &y);
     uint8_t x = fw_rd8(f, TN_POS);
     fw_wr8(f, TN_POS, (uint8_t)(x + 1));
     return x;

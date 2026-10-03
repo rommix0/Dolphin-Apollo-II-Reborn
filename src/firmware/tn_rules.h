@@ -3,10 +3,11 @@
 /* The rule-format helpers of text normalisation (ROM $B0C3-$B171), decompiled (M4.0 spec section 3.4). */
 #include "fw.h"
 
-#define TN_APPEND_PHONETIC 0xB154   /* still in ROM (spec 3.3): it also serves cmd_put_phonetic */
-
-/* tn_append_phonetic: A = len at (tn_rule_ptr),Y: the len bytes after it go to tn_phonetic (ROM call). */
-void tn_append_phonetic_rom(fw *f, uint8_t len, uint8_t y);
+/* tn_append_phonetic: len = the length byte at (tn_rule_ptr),*y. Unless len is 0: $78 = len, *x = tn_phon_len,
+   and with the voice on (cmd_voice) the len bytes after the length byte are appended to tn_phonetic (*y ends on
+   the last one, $78 counts down to 0, *x and tn_phon_len advance by len). len = 0 leaves *x, *y and $78 alone.
+   Returns A = $FF. */
+uint8_t tn_append_phonetic(fw *f, uint8_t len, uint8_t *x, uint8_t *y);
 /* $B0C3: append the spoken name of c (the output of the first rule of its list); returns X = the old tn_pos,
    and tn_pos += 1. */
 uint8_t tn_say_char(fw *f, uint8_t c);

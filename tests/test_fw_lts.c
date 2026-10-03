@@ -1,5 +1,5 @@
-/* Unit checks of the ported letter-to-sound routines on the converted data, with a mock host whose
-   tn_append_phonetic follows the ROM routine ($B154). The full proof is the live differential test (diff_lts). */
+/* Unit checks of the ported letter-to-sound routines on the converted data (no ROM calls: tn_append_phonetic is
+   C since M4.1). The full proof is the live differential test (diff_lts). */
 #include <string.h>
 #include "test.h"
 #include "firmware/lts.h"
@@ -10,25 +10,6 @@ static uint8_t g_ram[FW_RAM_SIZE];
 static fw g_f;
 static fw_host g_host;
 static bool g_window_was_on;
-
-static bool mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
-{
-    (void)budget;
-    fw *f = ctx;
-    if (addr != TN_APPEND_PHONETIC)
-        return false;
-    if (r->a && fw_rd8(f, CMD_VOICE)) {   /* copy the r->a bytes after (tn_rule_ptr),Y to tn_phonetic */
-        uint8_t x = fw_rd8(f, TN_PHON_LEN), y = r->y;
-        for (uint8_t n = r->a; n; n--) {
-            y++;
-            fw_wr8(f, (uint16_t)(TN_PHONETIC + x), fw_ind_y(f, (uint8_t)TN_RULE_PTR, y));
-            x++;
-        }
-        fw_wr8(f, TN_PHON_LEN, x);
-    }
-    r->a = 0xFF;
-    return true;
-}
 
 static void mock_window(void *ctx, bool on)
 {
@@ -41,7 +22,7 @@ static void setup(const char *text)
 {
     memset(g_ram, 0, sizeof g_ram);
     g_host.ctx = &g_f;
-    g_host.rom_call = mock_rom_call;
+    g_host.rom_call = NULL;   /* nothing in letter-to-sound calls ROM any more */
     g_host.set_low_window = mock_window;
     g_window_was_on = false;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);

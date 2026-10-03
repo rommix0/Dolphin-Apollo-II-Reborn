@@ -1,6 +1,5 @@
-/* Unit checks of tn_convert_clause on the converted data, with a mock host that records every ROM call. The
-   mock's tn_append_phonetic ($B154) follows the ROM routine. The full proof is the live differential test
-   (diff_lts) and the hybrid goldens (golden_hybrid). */
+/* Unit checks of tn_convert_clause on the converted data, with a mock host that records every ROM call. The full proof
+   is the live differential test (diff_lts) and the hybrid goldens (golden_hybrid). */
 #include <string.h>
 #include "test.h"
 #include "firmware/tn_convert.h"
@@ -20,7 +19,7 @@ static unsigned g_ncalls;
 
 static bool mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
-    fw *f = ctx;
+    (void)ctx;
     if (g_ncalls < MAX_CALLS) {
         g_calls[g_ncalls].addr = addr;
         g_calls[g_ncalls].a = r->a;
@@ -28,19 +27,6 @@ static bool mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
         g_calls[g_ncalls].budget = budget;
     }
     g_ncalls++;
-    if (addr == 0xB154) {   /* tn_append_phonetic, still in ROM until Task 6 */
-        if (r->a && fw_rd8(f, CMD_VOICE)) {
-            uint8_t x = fw_rd8(f, TN_PHON_LEN), y = r->y;
-            for (uint8_t n = r->a; n; n--) {
-                y++;
-                fw_wr8(f, (uint16_t)(TN_PHONETIC + x), fw_ind_y(f, (uint8_t)TN_RULE_PTR, y));
-                x++;
-            }
-            fw_wr8(f, TN_PHON_LEN, x);
-        }
-        r->a = 0xFF;
-        return true;
-    }
     return addr == ROM_ISR_PAR_READY || addr == ROM_CMD_RUN_DUE || addr == ROM_PROS_MAKE_SEGMENTS ||
            addr == ROM_BOOT_LOOP_PLAY;   /* registers come back unchanged, as these leave X alone */
 }
@@ -191,9 +177,65 @@ static void test_flush(void)
     CHECK(!g_f.fault);
 }
 
+static void put_rule_text(void)   /* a length byte 3, then "abc", at $0300 = tn_rule_ptr */
+{
+    static const uint8_t text[] = { 3, 'a', 'b', 'c' };
+    memcpy(g_ram + 0x0300, text, sizeof text);
+    fw_wr16(&g_f, TN_RULE_PTR, 0x0300);
+}
+
+static void test_append_voice_on(void)
+{
+    setup("");
+    put_rule_text();
+    g_ram[TN_PHON_LEN] = 2;
+    uint8_t x = 0x55, y = 0;
+    CHECK_EQ(tn_append_phonetic(&g_f, 3, &x, &y), 0xFF);
+    CHECK_EQ(x, 5);
+    CHECK_EQ(y, 3);                             /* on the last byte copied */
+    CHECK_EQ(g_ram[TN_PHON_LEN], 5);
+    CHECK(memcmp(g_ram + TN_PHONETIC + 2, "abc", 3) == 0);
+    CHECK_EQ(g_ram[FW_TMP_78], 0);              /* counted down */
+    CHECK_EQ(g_ncalls, 0);                      /* no ROM call */
+    CHECK(!g_f.fault);
+}
+
+static void test_append_voice_off(void)
+{
+    setup("");
+    put_rule_text();
+    g_ram[CMD_VOICE] = 0;
+    g_ram[TN_PHON_LEN] = 2;
+    uint8_t x = 0x55, y = 0;
+    CHECK_EQ(tn_append_phonetic(&g_f, 3, &x, &y), 0xFF);
+    CHECK_EQ(x, 2);                             /* X = tn_phon_len */
+    CHECK_EQ(y, 0);
+    CHECK_EQ(g_ram[TN_PHON_LEN], 2);
+    CHECK_EQ(g_ram[TN_PHONETIC + 2], 0);
+    CHECK_EQ(g_ram[FW_TMP_78], 3);              /* the length stays */
+    CHECK(!g_f.fault);
+}
+
+static void test_append_empty(void)
+{
+    setup("");
+    put_rule_text();
+    g_ram[FW_TMP_78] = 0x99;
+    uint8_t x = 0x55, y = 7;
+    CHECK_EQ(tn_append_phonetic(&g_f, 0, &x, &y), 0xFF);
+    CHECK_EQ(x, 0x55);
+    CHECK_EQ(y, 7);
+    CHECK_EQ(g_ram[FW_TMP_78], 0x99);
+    CHECK_EQ(g_ram[TN_PHON_LEN], 0);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_tn(void)
 {
     CHECK(fw_image_get() != NULL);
+    test_append_voice_on();
+    test_append_voice_off();
+    test_append_empty();
     test_phonetic_mode();
     test_copy_and_final_run_due();
     test_punct_spoken();

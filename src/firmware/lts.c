@@ -218,7 +218,8 @@ bool lts_match_list(fw *f)
                 y++;
             }
             if (ok) {
-                tn_append_phonetic_rom(f, a, y);  /* a = the output length (the ROM jumps there) */
+                uint8_t x = 0;                    /* not an output of lts_match_list */
+                tn_append_phonetic(f, a, &x, &y); /* a = the output length (the ROM jumps there) */
                 return true;
             }
         }
