@@ -33,9 +33,24 @@ typedef void (*machine_frame_fn)(void *user, const uint8_t frame[APOLLO_FRAME_BY
 typedef struct { uint8_t port_in[5]; uint32_t cycle_num, cycle_den; coverage *coverage; } machine_config;
 
 typedef enum { MACHINE_IDLE, MACHINE_FAULT, MACHINE_CYCLE_LIMIT } machine_status;
-typedef enum { MFAULT_NONE, MFAULT_CPU, MFAULT_DME, MFAULT_ESCAPED_PC, MFAULT_INPUT_OVERFLOW } machine_fault;
+typedef enum { MFAULT_NONE, MFAULT_CPU, MFAULT_DME, MFAULT_ESCAPED_PC, MFAULT_INPUT_OVERFLOW,
+               MFAULT_FIRMWARE } machine_fault;
 
 typedef struct { uint16_t addr, pc; bool write; } machine_access;
+
+#define MACHINE_MAX_HOOKS          32
+#define MACHINE_ROM_CALL_SENTINEL  0x0000   /* machine_rom_call's return address: the ROM never runs code at $0000 */
+
+struct machine;
+/* A C replacement or observer for the ROM routine at a hooked address (M4.0 spec section 3.2). It returns
+   true when it performed the routine (leaving the machine as the routine's RTS would, e.g. through
+   machine_return), false to let the ROM routine run. Setting m->fault stops the run. */
+typedef bool (*machine_hook_fn)(struct machine *m, void *user);
+typedef struct { uint16_t addr; machine_hook_fn fn; void *user; } machine_hook_entry;
+typedef struct { uint8_t a, x, y, p; } machine_regs;
+
+/* Where a CPU read lands under the current P2 (machine_map_read). */
+typedef enum { MACHINE_MAP_RAM, MACHINE_MAP_SFR, MACHINE_MAP_ROM, MACHINE_MAP_EMPTY } machine_map_region;
 
 typedef struct machine {
     cpu740 cpu;
@@ -71,6 +86,11 @@ typedef struct machine {
     unsigned unmodelled_count;
     unsigned unmodelled_dropped;           /* accesses not logged because the log was full; repeats of a logged access are
                                               not counted, repeats of an unlogged one are counted each time */
+    machine_hook_entry hooks[MACHINE_MAX_HOOKS];
+    unsigned hook_count;
+    uint8_t hook_map[0x10000 / 8];         /* bit set = hooked address (fast test before the table) */
+    bool irq_hold;                         /* no IRQ line reaches the CPU (machine_hold_irqs) */
+    uint16_t fault_addr;                   /* MFAULT_FIRMWARE: the address the C code could not read or call */
 } machine;
 
 void machine_default_config(machine_config *cfg);
@@ -82,6 +102,34 @@ void machine_set_outputs(machine *m, machine_frame_fn on_frame, void *user);
 void machine_set_raw_output(machine *m, machine_frame_fn on_raw, void *user);
 bool machine_feed_serial(machine *m, const uint8_t *bytes, size_t n);
 machine_status machine_run(machine *m, uint64_t max_cycles);
+/* One instruction, interrupt entry or hooked routine, with serial delivery, IRQ sync and frame capture as in
+   machine_run. Returns false on a fault (m->fault says which). */
+bool machine_step(machine *m);
+/* Registers fn for the routine at addr. Before each instruction, when the PC is a hooked address that maps to
+   the main ROM file under the current P2, the CPU is not waiting and no interrupt is about to be taken, fn
+   runs. False when the table is full or addr is already hooked. */
+bool machine_hook(machine *m, uint16_t addr, machine_hook_fn fn, void *user);
+void machine_clear_hooks(machine *m);
+/* Pops a return address and continues after it, like RTS. */
+void machine_return(machine *m);
+/* While hold is set, no IRQ line reaches the CPU; requests stay pending in the SFRs. */
+void machine_hold_irqs(machine *m, bool hold);
+/* Calls the routine at addr with A/X/Y/P from regs, as if by JSR from MACHINE_ROM_CALL_SENTINEL, and steps
+   until it returns there. Hooks, interrupts (unless held) and frame capture work normally. On success regs
+   holds the exit registers, the PC is restored and the other registers keep their exit values. False on a
+   fault or when max_cycles pass first. */
+bool machine_rom_call(machine *m, uint16_t addr, machine_regs *regs, uint64_t max_cycles);
+/* Runs the routine the PC has just entered (by JSR) until the stack pointer rises above its value now, i.e.
+   the routine returned, also two levels up. False on a fault or when max_cycles pass first. */
+bool machine_finish_routine(machine *m, uint64_t max_cycles);
+/* Copies src's whole state into dst for a differential run, without hooks, outputs, coverage or the hold. */
+void machine_clone(machine *dst, const machine *src);
+/* The shared address mapper (M4.0 spec section 2.2) behind bus reads, machine_peek and the hook check: where a
+   read of addr lands under the current P2 (spec section 1.2). *offset indexes ram for MACHINE_MAP_RAM and the
+   ROM file for MACHINE_MAP_ROM (the lower-ROM window maps $4000-$7FFF to file 0x0000-0x3FFF, so main ROM is
+   MACHINE_MAP_ROM with *offset == addr); it is left unchanged otherwise. The DSP port at $8000 is write-only
+   and reads as main ROM. Side-effect free. */
+machine_map_region machine_map_read(const machine *m, uint16_t addr, uint32_t *offset);
 uint8_t machine_peek(const machine *m, uint16_t addr);
 void machine_dump(const machine *m, FILE *out);
 /* Lists every logged unmodelled access and the count of dropped ones (nothing if there are none). */
