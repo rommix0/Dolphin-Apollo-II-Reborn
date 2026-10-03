@@ -33,8 +33,10 @@ machine_status render_text(machine *m, const uint8_t *rom, size_t len, const cha
     memcpy(input, prefix, (size_t)plen);
     memcpy(input + plen, text, n + 1);
     memset(out, 0, sizeof *out);
-    machine_status st = rom_engine_speak_streams(m, rom, len, NULL, input, &produced,
-                                                 opt->stream == RENDER_STREAM_RAW ? &raw : NULL);
+    frame_list *raw_out = opt->stream == RENDER_STREAM_RAW ? &raw : NULL;
+    machine_status st = opt->engine == RENDER_ENGINE_HYBRID
+        ? hybrid_engine_speak(m, rom, len, NULL, NULL, input, false, &produced, raw_out)
+        : rom_engine_speak_streams(m, rom, len, NULL, input, &produced, raw_out);
     const frame_list *chosen = opt->stream == RENDER_STREAM_RAW ? &raw : &produced;
     if (st == MACHINE_IDLE && chosen->count > 0) {
         synth s;

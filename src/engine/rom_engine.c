@@ -69,6 +69,8 @@ machine_status rom_engine_run(machine *m, const uint8_t *rom, size_t len, const 
         return MACHINE_FAULT;
     if (setup)
         setup(m, user);
+    if (m->fault != MFAULT_NONE)   /* the setup could not install its hooks */
+        return MACHINE_FAULT;
     machine_set_outputs(m, on_frame, &sink);
     if (raw)
         machine_set_raw_output(m, on_frame, &raw_sink);

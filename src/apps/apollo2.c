@@ -19,7 +19,7 @@ static int usage(void)
             "       apollo2 [options] --text-file FILE\n"
             "  -o FILE            write a WAV file (10 kHz, mono, 16-bit) instead of playing live\n"
             "  --voice a|b        speaker table: a = male (default), b = non-male (@K1)\n"
-            "  --engine rom       firmware engine (hybrid and native arrive in milestones 4 and 5)\n"
+            "  --engine E         firmware engine: rom (default) or hybrid (ported routines in C)\n"
             "  --rom PATH         ROM image (default: $APOLLO2_ROM or UK_V2.01_4.04_ROM.BIN)\n"
             "  --rom-any          accept a ROM whose MD5 is not the UK V2.01 4.04 image (with a warning)\n"
             "  --hyp LIST         synthesizer hypothesis switches, comma-separated: b11,b13\n"
@@ -100,8 +100,12 @@ int main(int argc, char **argv)
             opt.voice = val[0];
             i++;
         } else if (!strcmp(a, "--engine") && val) {
-            if (strcmp(val, "rom") != 0) {
-                fprintf(stderr, "engine '%s' is not available yet: only 'rom' exists before milestones 4 and 5\n", val);
+            if (!strcmp(val, "rom"))
+                opt.engine = RENDER_ENGINE_ROM;
+            else if (!strcmp(val, "hybrid"))
+                opt.engine = RENDER_ENGINE_HYBRID;
+            else {
+                fprintf(stderr, "engine '%s' is not available: use rom or hybrid (native arrives in milestone 5)\n", val);
                 return 1;
             }
             i++;

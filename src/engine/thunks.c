@@ -53,6 +53,12 @@ typedef void (*thunk_regs)(fw *f, cpu740 *c);
    the fault or emulate the RTS. */
 static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
 {
+    if (m != b->m) {   /* registers come from m, RAM and host calls from b->m: they must be one machine */
+        m->fault = MFAULT_FIRMWARE;
+        m->fault_addr = m->cpu.pc;
+        return true;
+    }
+    uint16_t entry = m->cpu.pc;
     jmp_buf trap, *saved = b->f.trap;
     b->f.trap = &trap;
     b->f.low_window = window_on(m);
@@ -64,6 +70,7 @@ static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
             m->fault = MFAULT_FIRMWARE;
             m->fault_addr = b->f.fault_addr;
         }
+        m->cpu.pc = entry;   /* a failed ROM call leaves the PC inside the called routine */
         return true;
     }
     machine_return(m);
