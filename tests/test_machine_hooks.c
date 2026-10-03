@@ -74,6 +74,29 @@ static void test_observer_lets_rom_run(void)
     CHECK_EQ(g_m.hook_count, 0);
 }
 
+static bool hook_stuck(machine *m, void *user)
+{
+    (void)m;
+    (void)user;
+    g_calls++;
+    return true;   /* claims the routine but neither returns nor faults */
+}
+
+/* A hook that claims the routine without moving the PC would run again forever: the machine faults instead. */
+static void test_stuck_hook_faults(void)
+{
+    load_main(0xC100);
+    CHECK(machine_hook(&g_m, 0xC100, hook_stuck, NULL));
+    run_to(&g_m, 0xC100);
+    CHECK(!machine_step(&g_m));
+    CHECK_EQ(g_m.fault, MFAULT_FIRMWARE);
+    CHECK_EQ(g_m.fault_addr, 0xC100);
+    CHECK_EQ(g_calls, 1);
+    load_main(0xC100);
+    CHECK(machine_hook(&g_m, 0xC100, hook_stuck, NULL));
+    CHECK_EQ(machine_run(&g_m, 1000), MACHINE_FAULT);
+}
+
 /* A hook fires only where the address maps to the main ROM file: not in the lower-ROM window. */
 static void test_hook_only_in_main_rom(uint8_t p2_latch, uint8_t want, int want_calls)
 {
@@ -279,6 +302,7 @@ void suite_machine_hooks(void)
     test_mapper();
     test_hook_replaces_routine();
     test_observer_lets_rom_run();
+    test_stuck_hook_faults();
     test_hook_only_in_main_rom(0x70, 0x77, 1);   /* window off: $4100 is main ROM, the hook fires */
     test_hook_only_in_main_rom(0xF0, 0x14, 0);   /* window on: $4100 is file 0x0100, no hook */
     test_rom_call();

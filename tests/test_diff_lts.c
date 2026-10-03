@@ -1,0 +1,159 @@
+/* Live differential test of the ported routines (M4.0 spec section 5.1). Every corpus file runs on the ROM
+   engine; at each entry of a ported routine (sampled) the machine is cloned twice: scratch A runs the ROM
+   routine and scratch B its C thunk, both with interrupts held. They must agree on the exit PC and SP, the
+   routine's declared outputs, the P2 latch and all RAM except the SFRs and the dead stack below the exit SP. */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "test.h"
+#include "corpus_list.h"
+#include "rom_fixture.h"
+#include "engine/rom_engine.h"
+#include "engine/thunks.h"
+
+#define DIFF_FULL_CALLS 1000      /* every call up to this many per routine and corpus file ... */
+#define DIFF_STRIDE     64        /* ... then every 64th */
+#define DIFF_BUDGET     10000000ULL
+#define DIFF_MAX        16
+
+static const char *const k_corpus[] = { CORPUS_NAMES };
+/* Extra text, for this test only (not goldens): words whose rules use the % & @ context symbols. */
+static const char *const k_extra[] = {
+    "Judges ruled the churches; loose rules, sugar, the nation's fixes, washing, rejoicing and lunches.",
+};
+
+typedef struct { const fw_replacement *r; unsigned calls; } observer;
+
+static machine g_m, g_ref, g_c;
+static observer g_obs[DIFF_MAX];
+static unsigned g_checked[DIFF_MAX], g_mismatches;
+static const char *g_source;
+
+static bool compare(const machine *a, const machine *b, uint8_t outputs, char *why, size_t n)
+{
+    if (a->cpu.pc != b->cpu.pc || a->cpu.s != b->cpu.s) {
+        snprintf(why, n, "exit PC/S: ROM %04X/%02X, C %04X/%02X", a->cpu.pc, a->cpu.s, b->cpu.pc, b->cpu.s);
+        return false;
+    }
+    if ((outputs & FW_OUT_A) && a->cpu.a != b->cpu.a) {
+        snprintf(why, n, "A: ROM %02X, C %02X", a->cpu.a, b->cpu.a);
+        return false;
+    }
+    if ((outputs & FW_OUT_X) && a->cpu.x != b->cpu.x) {
+        snprintf(why, n, "X: ROM %02X, C %02X", a->cpu.x, b->cpu.x);
+        return false;
+    }
+    if ((outputs & FW_OUT_Y) && a->cpu.y != b->cpu.y) {
+        snprintf(why, n, "Y: ROM %02X, C %02X", a->cpu.y, b->cpu.y);
+        return false;
+    }
+    if ((outputs & FW_OUT_Z) && ((a->cpu.p ^ b->cpu.p) & CPU740_Z)) {
+        snprintf(why, n, "Z: ROM %d, C %d", (a->cpu.p & CPU740_Z) != 0, (b->cpu.p & CPU740_Z) != 0);
+        return false;
+    }
+    if (a->sfr.port_latch[2] != b->sfr.port_latch[2]) {
+        snprintf(why, n, "P2 latch: ROM %02X, C %02X", a->sfr.port_latch[2], b->sfr.port_latch[2]);
+        return false;
+    }
+    for (uint32_t addr = 0; addr < MACHINE_RAM_SIZE; addr++) {
+        if (addr >= M50734_SFR_FIRST && addr <= 0xFF)
+            continue;
+        if (addr >= 0x100 && addr <= 0x100u + a->cpu.s)
+            continue;   /* the dead stack below the exit SP */
+        if (a->ram[addr] != b->ram[addr]) {
+            snprintf(why, n, "RAM $%04X: ROM %02X, C %02X", (unsigned)addr, a->ram[addr], b->ram[addr]);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool observe(machine *m, void *user)
+{
+    observer *o = user;
+    unsigned call = o->calls++;
+    if (call >= DIFF_FULL_CALLS && call % DIFF_STRIDE != 0)
+        return false;
+    g_checked[o - g_obs]++;
+    machine_clone(&g_ref, m);
+    machine_hold_irqs(&g_ref, true);
+    machine_clone(&g_c, m);
+    machine_hold_irqs(&g_c, true);
+    char why[160] = "states differ";
+    bool same = false;
+    fw_bridge b;
+    if (!machine_finish_routine(&g_ref, DIFF_BUDGET)) {
+        snprintf(why, sizeof why, "the ROM routine did not return (fault %d)", (int)g_ref.fault);
+    } else if (!fw_bridge_init(&b, &g_c)) {
+        snprintf(why, sizeof why, "no firmware data image");
+    } else {
+        o->r->thunk(&g_c, &b);
+        if (g_c.fault != MFAULT_NONE)
+            snprintf(why, sizeof why, "the C faulted (fault %d at $%04X)", (int)g_c.fault, g_c.fault_addr);
+        else
+            same = compare(&g_ref, &g_c, o->r->outputs, why, sizeof why);
+    }
+    if (!same && g_mismatches++ < 10)
+        fprintf(stderr, "  %s: %s call %u (A=%02X X=%02X Y=%02X): %s\n", g_source, o->r->name, call, m->cpu.a,
+                m->cpu.x, m->cpu.y, why);
+    return false;   /* the ROM routine runs on in m */
+}
+
+static void install(machine *m, void *user)
+{
+    (void)user;
+    for (size_t i = 0; i < fw_replacement_count; i++) {
+        g_obs[i].r = &fw_replacements[i];
+        g_obs[i].calls = 0;   /* the full-call budget is per corpus file */
+        CHECK(machine_hook(m, fw_replacements[i].addr, observe, &g_obs[i]));
+    }
+}
+
+static void run(const uint8_t *rom, size_t len, const char *source, const char *text, bool boot)
+{
+    frame_list fl = { 0 };
+    g_source = source;
+    machine_status st = rom_engine_run(&g_m, rom, len, NULL, install, NULL, text, boot, &fl, NULL);
+    if (st != MACHINE_IDLE)
+        machine_dump(&g_m, stderr);
+    CHECK_EQ(st, MACHINE_IDLE);
+    machine_clear_hooks(&g_m);
+    frame_list_free(&fl);
+}
+
+static void strip_newline(char *s)
+{
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r'))
+        s[--n] = '\0';
+}
+
+void suite_diff_lts(void)
+{
+    size_t len;
+    const uint8_t *rom = test_rom(&len);
+    if (!rom)
+        SKIP("ROM not found (set APOLLO2_ROM)");
+    CHECK(fw_replacement_count <= DIFF_MAX);
+    memset(g_checked, 0, sizeof g_checked);
+    g_mismatches = 0;
+    for (size_t c = 0; c < sizeof k_corpus / sizeof k_corpus[0]; c++) {
+        char path[128];
+        snprintf(path, sizeof path, "tests/corpus/%s.txt", k_corpus[c]);
+        char *text = test_read_file(path);
+        CHECK(text != NULL);
+        if (!text)
+            continue;
+        strip_newline(text);
+        run(rom, len, k_corpus[c], text, false);
+        free(text);
+    }
+    run(rom, len, "boot", "", true);
+    for (size_t i = 0; i < sizeof k_extra / sizeof k_extra[0]; i++)
+        run(rom, len, "extra", k_extra[i], false);
+    for (size_t i = 0; i < fw_replacement_count; i++) {
+        printf("  %-20s %u calls checked\n", fw_replacements[i].name, g_checked[i]);
+        CHECK(g_checked[i] > 0);   /* every ported routine is exercised */
+    }
+    CHECK_EQ(g_mismatches, 0);
+}

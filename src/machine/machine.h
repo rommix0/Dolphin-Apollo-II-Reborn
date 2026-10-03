@@ -44,7 +44,8 @@ typedef struct { uint16_t addr, pc; bool write; } machine_access;
 struct machine;
 /* A C replacement or observer for the ROM routine at a hooked address (M4.0 spec section 3.2). It returns
    true when it performed the routine (leaving the machine as the routine's RTS would, e.g. through
-   machine_return), false to let the ROM routine run. Setting m->fault stops the run. */
+   machine_return), false to let the ROM routine run. Setting m->fault stops the run. Returning true with the PC
+   still at the hooked address and no fault set is MFAULT_FIRMWARE at that address (it would run forever). */
 typedef bool (*machine_hook_fn)(struct machine *m, void *user);
 typedef struct { uint16_t addr; machine_hook_fn fn; void *user; } machine_hook_entry;
 typedef struct { uint8_t a, x, y, p; } machine_regs;

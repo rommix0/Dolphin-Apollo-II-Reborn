@@ -268,8 +268,14 @@ static bool exec(machine *m)
     if (m->cpu.pc == APOLLO_SWAP_PC && !m->cpu.waiting)
         capture_frame(m);
     const machine_hook_entry *h = find_hook(m);
-    if (h && h->fn(m, h->user))
+    uint16_t hook_pc = m->cpu.pc;
+    if (h && h->fn(m, h->user)) {
+        if (m->fault == MFAULT_NONE && m->cpu.pc == hook_pc) {
+            m->fault = MFAULT_FIRMWARE;   /* claimed the routine without leaving it: it would run again forever */
+            m->fault_addr = hook_pc;
+        }
         return m->fault == MFAULT_NONE;
+    }
     m->op_pc = m->cpu.pc;
     m->history[m->history_pos++ % MACHINE_HISTORY] = m->cpu.pc;
     cov_space cov_from = COV_ROM;

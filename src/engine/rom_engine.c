@@ -55,17 +55,20 @@ machine_status rom_engine_speak(machine *m, const uint8_t *rom, size_t len, cons
     return rom_engine_speak_cfg(m, rom, len, NULL, text, include_boot, out);
 }
 
-static machine_status speak(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
-                            const char *text, bool include_boot, frame_list *out, frame_list *raw)
+machine_status rom_engine_run(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
+                              engine_setup_fn setup, void *user, const char *text, bool include_boot,
+                              frame_list *produced, frame_list *raw)
 {
     frame_sink sink, raw_sink;
     machine_status st;
-    sink.list = out;
+    sink.list = produced;
     sink.enabled = include_boot;
     raw_sink.list = raw;
     raw_sink.enabled = false;
     if (!machine_init(m, rom, len, cfg))
         return MACHINE_FAULT;
+    if (setup)
+        setup(m, user);
     machine_set_outputs(m, on_frame, &sink);
     if (raw)
         machine_set_raw_output(m, on_frame, &raw_sink);
@@ -94,11 +97,11 @@ static machine_status speak(machine *m, const uint8_t *rom, size_t len, const ma
 machine_status rom_engine_speak_cfg(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
                                     const char *text, bool include_boot, frame_list *out)
 {
-    return speak(m, rom, len, cfg, text, include_boot, out, NULL);
+    return rom_engine_run(m, rom, len, cfg, NULL, NULL, text, include_boot, out, NULL);
 }
 
 machine_status rom_engine_speak_streams(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
                                         const char *text, frame_list *produced, frame_list *raw)
 {
-    return speak(m, rom, len, cfg, text, false, produced, raw);
+    return rom_engine_run(m, rom, len, cfg, NULL, NULL, text, false, produced, raw);
 }
