@@ -1150,26 +1150,28 @@ static void test_list_languages(void)
     CHECK(!g_f.fault);
 }
 
-/* Every handler of this task runs as C through the dispatcher; bank_cmd_select still falls back to ROM. */
+/* Every pattern's handler runs as C through the dispatcher (a dropped k_handlers row would fall back to the ROM
+   cmd_run_next, which behaves the same and would go unnoticed); only bank_cmd_select still falls back to ROM. */
 static void test_run_due_all_rows(void)
 {
-    static const uint16_t k_addrs[] = { ROM_CMD_SOUND, ROM_CMD_SET_VOLUME, ROM_CMD_SET_VOICING, ROM_CMD_MARK_INDEX,
-                                        ROM_CMD_ECHO, ROM_CMD_QUERY, ROM_CMD_LIST_LANGUAGES, ROM_BANK_CMD_SELECT };
-    for (size_t i = 0; i < sizeof k_addrs / sizeof k_addrs[0]; i++) {
+    for (size_t i = 0; i < fw_cmd_pattern_count; i++) {
+        uint16_t handler = fw_cmd_patterns[i].handler;
         setup();
         put_clause(" @A5 ");
+        g_ram[CMD_SPEED] = 3;                      /* the speaker/voice/pitch/speed handlers apply it (a 0 would index past the tables) */
         g_ram[CMD_COUNT] = 1;                      /* one queued command at position 0, argument index 3 */
         g_ram[CMD_NEXT_POS] = 0;
         g_ram[CMD_POSITIONS + 1] = 0xFF;
-        fw_wr16(&g_f, CMD_HANDLERS, k_addrs[i]);
+        fw_wr16(&g_f, CMD_HANDLERS, handler);
         g_ram[CMD_ARG_INDEX] = 3;
         cmd_run_due(&g_f, 0);
         CHECK_EQ(g_ram[CMD_NEXT], 1);
         CHECK_EQ(g_ram[CMD_NEXT_POS], 0xFF);
-        CHECK_EQ(count(ROM_CMD_RUN_NEXT), k_addrs[i] == ROM_BANK_CMD_SELECT ? 1u : 0u);
+        CHECK_EQ(count(ROM_CMD_RUN_NEXT), handler == ROM_BANK_CMD_SELECT ? 1u : 0u);
         CHECK(!g_f.fault);
     }
 }
+
 void suite_fw_cmd(void)
 {
     CHECK(fw_image_get() != NULL);

@@ -118,6 +118,7 @@ static void test_phonetic_mode(void)
     CHECK_EQ(g_ram[TN_PHON_LEN], 4);
     CHECK(memcmp(g_ram + TN_PHONETIC, "Ab c", 4) == 0);
     CHECK_EQ(g_ram[TN_POS], 4);
+    CHECK_EQ(g_ram[TN_KEY_POS], 3);                /* phonetic mode lags tn_key_pos one behind tn_pos ($B20A-$B215) */
     CHECK_EQ(g_ram[CMD_EV_COUNT], 0);
     CHECK_EQ(count(ROM_ISR_PAR_READY), 4);
     /* each command runs before its character is copied, with X = its position; the one due at the clause end

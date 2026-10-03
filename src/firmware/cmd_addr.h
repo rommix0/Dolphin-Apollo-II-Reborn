@@ -2,7 +2,8 @@
 #define FW_CMD_ADDR_H
 /* ROM code addresses of the command parser (M4.2 spec 2), checked against build/ghidra740/dump. They are code,
    not data: the pattern records hold the handler addresses, the scan copies them into cmd_handlers and the event
-   producers write the event handlers into cmd_ev_handlers, byte for byte; the C dispatcher switches on them. */
+   producers write the event handlers into cmd_ev_handlers, byte for byte; the C dispatcher looks them
+   up (k_handlers). */
 
 /* Deferred command handlers, in pattern order: entered by cmd_run_next's JMP (cmd_vector) with X = the argument's
    boot_clause index and A = boot_clause[X]; each ends with JMP cmd_run_done ($A8BD) */
