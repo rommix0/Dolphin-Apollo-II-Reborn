@@ -6,6 +6,7 @@
 #include "firmware/cmd_match.h"
 #include "firmware/cmd_scan.h"
 #include "firmware/cmd_run.h"
+#include "firmware/cmd_apply.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -91,6 +92,18 @@ static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
     }
     machine_return(m);
     return true;
+}
+
+/* cmd_apply_speaker $A78C: X, Y in (handed to par_setup_voice, which does not read them). A = the cmd_speaker it
+   read, X and Y as par_setup_voice leaves them, out. boot_reset reads all three: after its second call ($A675),
+   bank_load_ramcode saves X in $76 and Y in $78; A is preserved into bank_scan and, after the first call
+   ($A651), through boot_selftest_sound. */
+static void cmd_apply_speaker_regs(fw *f, cpu740 *c)
+{
+    uint8_t x = c->x, y = c->y;
+    c->a = cmd_apply_speaker(f, &x, &y);
+    c->x = x;
+    c->y = y;
 }
 
 /* cmd_run_due $A880: X in. X out unchanged (every handler ends at cmd_run_done's PLA/TAX). Y out = cmd_next,
@@ -218,6 +231,7 @@ static void cmd_hex_value_regs(fw *f, cpu740 *c)
 /* The hook of each routine: its register mapping run in the shared thunk frame, user = the bound fw_bridge. */
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
+THUNK(cmd_apply_speaker)
 THUNK(cmd_run_due)
 THUNK(cmd_scan_clause)
 THUNK(cmd_match_table)
@@ -236,6 +250,7 @@ THUNK(cmd_hex_value)
 #undef THUNK
 
 const fw_replacement fw_replacements[] = {
+    { "cmd_apply_speaker",  0xA78C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_apply_speaker },
     { "cmd_run_due",        0xA880, FW_OUT_X | FW_OUT_Y, t_cmd_run_due },
     { "cmd_scan_clause",    0xACFA, 0,                   t_cmd_scan_clause },
     { "cmd_match_table",    0xADBF, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_match_table },

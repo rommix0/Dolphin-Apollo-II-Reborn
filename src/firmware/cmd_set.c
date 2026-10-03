@@ -1,6 +1,7 @@
 /* The setting handlers of the deferred commands (ROM $A902-$ABDE), decompiled (M4.2 spec 2.2). Each one is
    entered with X = its argument index and A = boot_clause[X] (cmd_handlers.h). */
 #include "cmd_handlers.h"
+#include "cmd_apply.h"
 #include "cmd_match.h"
 #include "tn_rules.h"
 #include "data/fw_data.h"
@@ -112,4 +113,100 @@ void cmd_ignore(fw *f, uint8_t x, uint8_t a)
     (void)f;
     (void)x;
     (void)a;
+}
+
+void cmd_set_pitch(fw *f, uint8_t x, uint8_t a)
+{
+    if (a == '+') {
+        fw_wr8(f, CMD_PITCH_STEP, 0x10);
+        return;
+    }
+    if (a == '-') {
+        fw_wr8(f, CMD_PITCH_STEP, 0);
+        return;
+    }
+    uint8_t v = cmd_hex_value(f, a);
+    if (v >= 0x10)
+        return;
+    fw_wr8(f, CMD_PITCH, v);
+    fw_wr8(f, CMD_PITCH_STEP, 8);
+    uint8_t y = cmd_handler_y(f);                       /* handed on to par_setup_voice, which does not read it */
+    cmd_apply_pitch(f, &x, &y);
+}
+
+void cmd_set_speed(fw *f, uint8_t x, uint8_t a)
+{
+    (void)x;
+    uint8_t v = cmd_hex_value(f, a);
+    if (v < 1 || v >= 10)
+        return;
+    fw_wr8(f, CMD_SPEED, v);
+    cmd_apply_speed(f);
+}
+
+void cmd_set_prosody(fw *f, uint8_t x, uint8_t a)
+{
+    x = cmd_find_back(f, 'R', x);                       /* $75 = 'R' */
+    a = clause_at(f, x);                                /* raw: the digit test is not case-mapped */
+    if (a < '0')
+        return;
+    if (a < '8') {                                      /* a digit 0-7: the prosody */
+        fw_wr8(f, CMD_PROSODY, (uint8_t)(a - '0'));
+        uint8_t y = cmd_handler_y(f);
+        cmd_apply_pitch(f, &x, &y);
+        return;
+    }
+    a = cmd_upcase(f, a);                               /* $A9F7: a letter, then two hex digits */
+    if (a < 'A' || a > 'Z')
+        return;
+    fw_wr8(f, FW_TMP_76, (uint8_t)(a - 'A'));
+    fw_wr8(f, FW_TMP_34, cmd_upcase(f, clause_at(f, ++x)));
+    fw_wr8(f, FW_TMP_35, cmd_upcase(f, clause_at(f, ++x)));
+    a = cmd_hex_byte(f);
+    fw_wr8(f, (uint16_t)(PROS_PARAMS + fw_rd8(f, FW_TMP_76)), a);
+}
+
+void cmd_set_source(fw *f, uint8_t x, uint8_t a)
+{
+    uint8_t v = cmd_hex_value(f, a);
+    if (v >= 8)
+        return;
+    fw_wr8(f, CMD_SOURCE, v);
+    uint8_t y = cmd_handler_y(f);
+    cmd_apply_pitch(f, &x, &y);
+}
+
+void cmd_set_speaker(fw *f, uint8_t x, uint8_t a)
+{
+    uint8_t v = cmd_hex_value(f, a);
+    if (v > 1)
+        return;
+    fw_wr8(f, CMD_SPEAKER, v);
+    uint8_t y = cmd_handler_y(f);
+    cmd_apply_speaker(f, &x, &y);
+}
+
+void cmd_set_voice(fw *f, uint8_t x, uint8_t a)
+{
+    /* the presets 1-6: 1-3 with speaker 0 and source 0, 4-6 with speaker 1 and source 7 */
+    static const struct { uint8_t voicing, mark_space, pitch; } k_presets[6] = {
+        { 8, 0x14, 8 },    { 8, 0x28, 6 },    { 7, 0x0A, 9 },
+        { 7, 0x14, 0x0B }, { 6, 0x0A, 0x0A }, { 8, 0x14, 0x0C },
+    };
+    cmd_clear_formant(f);
+    uint8_t v = cmd_hex_value(f, a);
+    if (v == 0) {                                       /* $AA7A: BNE on cmd_hex_value's Z; @V0 turns the voice off */
+        fw_wr8(f, CMD_VOICE, 0);
+        return;
+    }
+    if (v > 6)
+        return;
+    fw_wr8(f, CMD_VOICING, k_presets[v - 1].voicing);
+    fw_wr8(f, CMD_MARK_SPACE, k_presets[v - 1].mark_space);
+    fw_wr8(f, CMD_PITCH, k_presets[v - 1].pitch);
+    fw_wr8(f, CMD_SPEAKER, (uint8_t)(v >= 4 ? 1 : 0));
+    fw_wr8(f, CMD_SOURCE, (uint8_t)(v >= 4 ? 7 : 0));
+    fw_wr8(f, CMD_VOICE, v);
+    uint8_t y = cmd_handler_y(f);
+    cmd_apply_speaker(f, &x, &y);
 }

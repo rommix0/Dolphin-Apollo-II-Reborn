@@ -16,6 +16,12 @@ static const struct { uint16_t addr; cmd_handler *fn; } k_handlers[] = {
     { ROM_CMD_SET_HYPER,        cmd_set_hyper },
     { ROM_CMD_SET_PHONETIC,     cmd_set_phonetic },
     { ROM_CMD_IGNORE,           cmd_ignore },
+    { ROM_CMD_SET_SPEED,        cmd_set_speed },
+    { ROM_CMD_SET_PROSODY,      cmd_set_prosody },
+    { ROM_CMD_SET_PITCH,        cmd_set_pitch },
+    { ROM_CMD_SET_SPEAKER,      cmd_set_speaker },
+    { ROM_CMD_SET_VOICE,        cmd_set_voice },
+    { ROM_CMD_SET_SOURCE,       cmd_set_source },
     { 0, NULL },
 };
 

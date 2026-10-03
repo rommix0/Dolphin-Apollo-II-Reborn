@@ -20,4 +20,15 @@ void cmd_set_phonetic(fw *f, uint8_t x, uint8_t a);       /* $AB9F @X: 0-1 */
 void cmd_set_formant(fw *f, uint8_t x, uint8_t a);        /* $A92F @U: parameter, two digits, sign */
 void cmd_ignore(fw *f, uint8_t x, uint8_t a);             /* $ABDC @G, @I^, @+: nothing */
 
+/* The setters with an apply helper (cmd_set.c) */
+void cmd_set_pitch(fw *f, uint8_t x, uint8_t a);          /* $AA24 @F: + - or 0-$F */
+void cmd_set_speed(fw *f, uint8_t x, uint8_t a);          /* $A9C9 @W: 1-9 */
+void cmd_set_prosody(fw *f, uint8_t x, uint8_t a);        /* $A9DC @R: 0-7, or a letter and two digits */
+void cmd_set_source(fw *f, uint8_t x, uint8_t a);         /* $AB5D @$: 0-7 */
+void cmd_set_speaker(fw *f, uint8_t x, uint8_t a);        /* $AA61 @K: 0-1 */
+void cmd_set_voice(fw *f, uint8_t x, uint8_t a);          /* $AA74 @V: 0 (off) or presets 1-6 */
+
+/* The Y a ROM handler is entered with: cmd_next - 1 (cmd_run_due's LDY, before cmd_run_next's INC). */
+static inline uint8_t cmd_handler_y(const fw *f) { return (uint8_t)(fw_rd8(f, CMD_NEXT) - 1); }
+
 #endif

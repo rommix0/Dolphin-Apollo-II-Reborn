@@ -5,6 +5,7 @@
 #include "firmware/cmd_match.h"
 #include "firmware/cmd_scan.h"
 #include "firmware/cmd_addr.h"
+#include "firmware/cmd_apply.h"
 #include "firmware/cmd_handlers.h"
 #include "firmware/cmd_run.h"
 #include "firmware/tn_convert.h"
@@ -68,6 +69,13 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         g_ram[CMD_NEXT_POS] = g_ram[CMD_POSITIONS + n];
         memcpy(g_before, g_ram, sizeof g_ram);
         return FW_CALL_RETURNED;   /* X back as it was (cmd_run_done) */
+    }
+    if (addr == ROM_PAR_SETUP_VOICE) {
+        /* par_setup_voice reads none of A, X, Y and leaves X = 9 and Y = $0B, as the ROM's does
+           (frm_build_rest_frame's loop ends at X = 9, frm_clamp_mark_space's at Y = $0B) */
+        r->x = 9;
+        r->y = 0x0B;
+        return FW_CALL_RETURNED;
     }
     /* isr_par_ready leaves A, X and Y as they were: the registers come back unchanged */
     return addr == ROM_ISR_PAR_READY ? FW_CALL_RETURNED : FW_CALL_FAILED;
@@ -674,6 +682,243 @@ static void test_ignore(void)
     CHECK_EQ(g_ncalls, 0);
 }
 
+/* Call i went to addr with A, X, Y and the strict budget. */
+static void check_call(unsigned i, uint16_t addr, uint8_t a, uint8_t x, uint8_t y)
+{
+    CHECK(i < g_ncalls && i < MAX_CALLS);
+    if (i >= g_ncalls || i >= MAX_CALLS)
+        return;
+    CHECK_EQ(g_calls[i].addr, addr);
+    CHECK_EQ(g_calls[i].a, a);
+    CHECK_EQ(g_calls[i].x, x);
+    CHECK_EQ(g_calls[i].y, y);
+    CHECK_EQ(g_calls[i].budget, FW_ROM_CALL_BUDGET);
+}
+
+static void test_apply_pitch(void)
+{
+    setup();
+    g_ram[CMD_SOURCE] = 7;
+    g_ram[CMD_PROSODY] = 2;
+    g_ram[CMD_PITCH] = 9;
+    uint8_t x = 0x31, y = 0x42;
+    cmd_apply_pitch(&g_f, &x, &y);
+    CHECK_EQ(g_ram[CMD_SOURCE_PROSODY], 0x72);
+    CHECK_EQ(g_ram[PROS_PITCH_CENTRE], 0x90);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, ROM_PAR_SETUP_VOICE, 0x90, 0x31, 0x42);   /* A = pros_pitch_centre, as at $A845 */
+    CHECK_EQ(x, 9);                             /* as par_setup_voice leaves them */
+    CHECK_EQ(y, 0x0B);
+    CHECK(!g_f.fault);
+}
+
+static void test_apply_speed(void)
+{
+    static const uint8_t k_limits[9] = { 7, 7, 7, 7, 4, 2, 0, 0, 0 };   /* cmd_speed_limits */
+    for (uint8_t s = 1; s <= 9; s++) {
+        setup();
+        g_ram[CMD_SPEED] = s;
+        cmd_apply_speed(&g_f);
+        CHECK_EQ(g_ram[CMD_SPEED_LIMIT], k_limits[s - 1]);
+        CHECK_EQ(fw_rd16(&g_f, CMD_SPEED_MAP), 0xC898 + 32 * (s - 1));    /* the 32-byte maps from $C898 */
+        CHECK_EQ(g_ncalls, 0);
+        CHECK(!g_f.fault);
+    }
+}
+
+static void test_apply_speaker(void)
+{
+    setup();
+    g_ram[CMD_SPEED] = 3;
+    fw_wr16(&g_f, PAR_SPARE, 0xBEEF);
+    uint8_t x = 1, y = 2;
+    CHECK_EQ(cmd_apply_speaker(&g_f, &x, &y), 0);
+    CHECK_EQ(g_ram[CMD_SPEAKER], 0);
+    CHECK_EQ(g_ram[PAR_COUNT], 86);
+    CHECK_EQ(fw_rd16(&g_f, PAR_TABLE_PTR), 0xD46A);    /* par_voice_a */
+    CHECK_EQ(fw_rd16(&g_f, PAR_SPARE), 0);
+    CHECK_EQ(g_ram[CMD_SPEED_LIMIT], 7);
+    CHECK_EQ(count(ROM_PAR_SETUP_VOICE), 1);
+    check_call(0, ROM_PAR_SETUP_VOICE, 0, 1, 2);
+    CHECK_EQ(x, 9);
+    CHECK_EQ(y, 0x0B);
+
+    setup();
+    g_ram[CMD_SPEED] = 3;
+    g_ram[CMD_SPEAKER] = 5;                     /* any non-zero speaker selects voice B */
+    CHECK_EQ(cmd_apply_speaker(&g_f, &x, &y), 5);    /* A = the cmd_speaker read at $A78C */
+    CHECK_EQ(g_ram[CMD_SPEAKER], 1);
+    CHECK_EQ(g_ram[PAR_COUNT], 86);
+    CHECK_EQ(fw_rd16(&g_f, PAR_TABLE_PTR), 0xE5E3);    /* par_voice_b */
+    CHECK(!g_f.fault);
+}
+
+static void test_clear_formant(void)
+{
+    setup();
+    memset(g_ram + CMD_FORMANT_OFS, 0x55, 12);
+    cmd_clear_formant(&g_f);
+    for (int i = 0; i <= 10; i++)
+        CHECK_EQ(g_ram[CMD_FORMANT_OFS + i], 0);    /* $2014-$201E: the ten offsets and par_ofs */
+    CHECK_EQ(g_ram[PAR_OFS_WEIGHT], 0x55);
+}
+
+static void test_set_pitch(void)
+{
+    setup();
+    g_ram[CMD_NEXT] = 3;                        /* the handler's Y is cmd_next - 1 */
+    g_ram[CMD_PITCH] = 0x0C;
+    cmd_set_pitch(&g_f, 7, '+');
+    CHECK_EQ(g_ram[CMD_PITCH_STEP], 0x10);
+    cmd_set_pitch(&g_f, 7, '-');
+    CHECK_EQ(g_ram[CMD_PITCH_STEP], 0);
+    cmd_set_pitch(&g_f, 7, 'G');
+    CHECK_EQ(g_ram[CMD_PITCH], 0x0C);
+    CHECK_EQ(g_ncalls, 0);                      /* + - and a rejected digit do not apply */
+    cmd_set_pitch(&g_f, 7, 'b');
+    CHECK_EQ(g_ram[CMD_PITCH], 0x0B);
+    CHECK_EQ(g_ram[CMD_PITCH_STEP], 8);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, ROM_PAR_SETUP_VOICE, 0xB0, 7, 2);
+    CHECK(!g_f.fault);
+}
+
+static void test_set_speed(void)
+{
+    setup();
+    g_ram[CMD_SPEED] = 3;
+    g_ram[CMD_SPEED_LIMIT] = 0xEE;
+    cmd_set_speed(&g_f, 3, '0');                /* 1-9 only */
+    cmd_set_speed(&g_f, 3, 'A');
+    CHECK_EQ(g_ram[CMD_SPEED], 3);
+    CHECK_EQ(g_ram[CMD_SPEED_LIMIT], 0xEE);
+    cmd_set_speed(&g_f, 3, '9');
+    CHECK_EQ(g_ram[CMD_SPEED], 9);
+    CHECK_EQ(g_ram[CMD_SPEED_LIMIT], 0);
+    CHECK_EQ(fw_rd16(&g_f, CMD_SPEED_MAP), 0xC998);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+static void test_set_source(void)
+{
+    setup();
+    g_ram[CMD_NEXT] = 1;
+    g_ram[CMD_PROSODY] = 3;
+    cmd_set_source(&g_f, 4, '8');               /* 0-7 only */
+    CHECK_EQ(g_ram[CMD_SOURCE], 0);
+    CHECK_EQ(g_ncalls, 0);
+    cmd_set_source(&g_f, 4, '7');
+    CHECK_EQ(g_ram[CMD_SOURCE], 7);
+    CHECK_EQ(g_ram[CMD_SOURCE_PROSODY], 0x73);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, ROM_PAR_SETUP_VOICE, 0, 4, 0);
+    CHECK(!g_f.fault);
+}
+
+static void test_set_speaker(void)
+{
+    setup();
+    g_ram[CMD_SPEED] = 3;
+    g_ram[CMD_NEXT] = 1;
+    cmd_set_speaker(&g_f, 4, '2');              /* 0 or 1 only */
+    CHECK_EQ(g_ram[CMD_SPEAKER], 0);
+    CHECK_EQ(g_ncalls, 0);
+    cmd_set_speaker(&g_f, 4, '1');
+    CHECK_EQ(g_ram[CMD_SPEAKER], 1);
+    CHECK_EQ(fw_rd16(&g_f, PAR_TABLE_PTR), 0xE5E3);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, ROM_PAR_SETUP_VOICE, 0, 4, 0);
+    CHECK(!g_f.fault);
+}
+
+static void test_set_voice(void)
+{
+    static const struct { uint8_t voicing, mark_space, pitch, speaker, source; } k_want[6] = {
+        { 8, 0x14, 8, 0, 0 },    { 8, 0x28, 6, 0, 0 },    { 7, 0x0A, 9, 0, 0 },
+        { 7, 0x14, 0x0B, 1, 7 }, { 6, 0x0A, 0x0A, 1, 7 }, { 8, 0x14, 0x0C, 1, 7 },
+    };
+    for (uint8_t v = 1; v <= 6; v++) {
+        setup();
+        g_ram[CMD_SPEED] = 3;
+        g_ram[CMD_FORMANT_OFS + 4] = 0x33;
+        cmd_set_voice(&g_f, 2, (uint8_t)('0' + v));
+        CHECK_EQ(g_ram[CMD_VOICE], v);
+        CHECK_EQ(g_ram[CMD_VOICING], k_want[v - 1].voicing);
+        CHECK_EQ(g_ram[CMD_MARK_SPACE], k_want[v - 1].mark_space);
+        CHECK_EQ(g_ram[CMD_PITCH], k_want[v - 1].pitch);
+        CHECK_EQ(g_ram[CMD_SPEAKER], k_want[v - 1].speaker);
+        CHECK_EQ(g_ram[CMD_SOURCE], k_want[v - 1].source);
+        CHECK_EQ(g_ram[CMD_FORMANT_OFS + 4], 0);
+        CHECK_EQ(fw_rd16(&g_f, PAR_TABLE_PTR), v <= 3 ? 0xD46A : 0xE5E3);
+        CHECK_EQ(g_ncalls, 1);
+        check_call(0, ROM_PAR_SETUP_VOICE, (uint8_t)(k_want[v - 1].pitch << 4), 2, 0xFF);
+        CHECK(!g_f.fault);
+    }
+
+    setup();                                    /* @V0: the voice off, no apply ($AA7A BNE on Z) */
+    g_ram[CMD_VOICE] = 1;
+    g_ram[CMD_PITCH] = 0x0C;
+    g_ram[CMD_FORMANT_OFS] = 0x33;
+    cmd_set_voice(&g_f, 2, '0');
+    CHECK_EQ(g_ram[CMD_VOICE], 0);
+    CHECK_EQ(g_ram[CMD_FORMANT_OFS], 0);
+    CHECK_EQ(g_ram[CMD_PITCH], 0x0C);
+    CHECK_EQ(g_ncalls, 0);
+
+    setup();                                    /* 7: no preset; only the formant offsets are cleared */
+    g_ram[CMD_VOICE] = 1;
+    g_ram[CMD_FORMANT_OFS] = 0x33;
+    cmd_set_voice(&g_f, 2, '7');
+    CHECK_EQ(g_ram[CMD_VOICE], 1);
+    CHECK_EQ(g_ram[CMD_FORMANT_OFS], 0);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+static void test_set_prosody(void)
+{
+    setup();
+    put_clause(" @R3");                         /* R#: X = 3 */
+    g_ram[CMD_NEXT] = 1;
+    cmd_set_prosody(&g_f, 3, '3');
+    CHECK_EQ(g_ram[CMD_PROSODY], 3);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, ROM_PAR_SETUP_VOICE, 0, 3, 0);   /* X = cmd_find_back's */
+
+    setup();
+    put_clause(" @RR12");                       /* R***: re-anchors on the second R, so the digit path */
+    cmd_set_prosody(&g_f, 5, '2');
+    CHECK_EQ(g_ram[CMD_PROSODY], 1);
+    CHECK_EQ(g_ncalls, 1);
+
+    setup();
+    put_clause(" @RA80");                       /* R***: letter A, hex $80 */
+    cmd_set_prosody(&g_f, 5, '0');
+    CHECK_EQ(g_ram[PROS_PARAMS + 0], 0x80);
+    CHECK_EQ(g_ram[FW_TMP_76], 0);
+    CHECK_EQ(g_ram[FW_TMP_34], '8');
+    CHECK_EQ(g_ram[FW_TMP_35], '0');
+    CHECK_EQ(g_ram[FW_TMP_1809], 0x80);         /* cmd_hex_byte's scratch: the high digit times 16 */
+    CHECK_EQ(g_ncalls, 0);                      /* the letter path does not apply */
+
+    setup();
+    put_clause(" @rz1f");                       /* lower case through cmd_upcase: Z (25), $1F */
+    cmd_set_prosody(&g_f, 5, 'f');
+    CHECK_EQ(g_ram[PROS_PARAMS + 25], 0x1F);
+    CHECK_EQ(g_ram[FW_TMP_35], 'F');
+
+    setup();
+    put_clause(" @R9");                         /* 8 and 9 take the letter path and fail it */
+    g_ram[FW_TMP_76] = 0x99;
+    cmd_set_prosody(&g_f, 3, '9');
+    CHECK_EQ(g_ram[CMD_PROSODY], 0);
+    CHECK_EQ(g_ram[FW_TMP_76], 0x99);
+    CHECK_EQ(g_ram[FW_TMP_75], 'R');
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_cmd(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -700,4 +945,14 @@ void suite_fw_cmd(void)
     test_set_formant();
     test_say_version();
     test_ignore();
+    test_apply_pitch();
+    test_apply_speed();
+    test_apply_speaker();
+    test_clear_formant();
+    test_set_pitch();
+    test_set_speed();
+    test_set_source();
+    test_set_speaker();
+    test_set_voice();
+    test_set_prosody();
 }
