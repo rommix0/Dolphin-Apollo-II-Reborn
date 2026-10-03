@@ -25,8 +25,8 @@ When M4.1 is done, the clause-to-phonetic-text driver and the phonetic append ru
 - **Effect:**
   - m = 0: nothing is written.
   - Otherwise `$78` = m.
-  - When `cmd_voice` is not 0, the m bytes after the length byte are copied to `tn_phonetic` at `tn_phon_len`, and `tn_phon_len` advances by m. Y ends past the last byte and X = the new `tn_phon_len`.
-  - When `cmd_voice` = 0 (voice off), `$78` is still written. `tn_phon_len`, X and Y are unchanged.
+  - When `cmd_voice` is not 0, the m bytes after the length byte are copied to `tn_phonetic` at `tn_phon_len`, and `tn_phon_len` advances by m. `$78` counts down to 0, Y ends on the last byte copied, and X = the new `tn_phon_len`.
+  - When `cmd_voice` = 0 (voice off), `$78` keeps m, X = `tn_phon_len`, and `tn_phon_len` and Y are unchanged.
   - Returns A = `$FF`.
 - **Callers:**
   - The C ports `tn_say_char` and `lts_match_list` now call the C version directly. `tn_append_phonetic_rom` and its `rom_call` are removed.
