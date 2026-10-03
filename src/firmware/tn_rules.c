@@ -6,7 +6,7 @@ static uint8_t rule_byte(fw *f, uint8_t y) { return fw_ind_y(f, (uint8_t)TN_RULE
 void tn_append_phonetic_rom(fw *f, uint8_t len, uint8_t y)
 {
     fw_regs r = { len, 0, y, 0 };
-    fw_rom_call(f, TN_APPEND_PHONETIC, &r);   /* returns A = $FF */
+    fw_rom_call(f, TN_APPEND_PHONETIC, &r, FW_ROM_CALL_BUDGET);   /* returns A = $FF */
 }
 
 uint8_t tn_rule_skip_text(fw *f, uint8_t *y)

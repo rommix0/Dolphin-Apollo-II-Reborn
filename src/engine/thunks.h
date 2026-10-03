@@ -6,8 +6,6 @@
 #include "machine/machine.h"
 #include "firmware/fw.h"
 
-#define FW_ROM_CALL_BUDGET 10000000ULL   /* cycles a ROM routine called from C may take (spec 3.3) */
-
 /* The registers and flags a routine's callers use: the thunk sets them, the differential test compares them. */
 enum { FW_OUT_A = 0x01, FW_OUT_X = 0x02, FW_OUT_Y = 0x04, FW_OUT_Z = 0x08 };
 

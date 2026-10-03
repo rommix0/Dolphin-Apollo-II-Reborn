@@ -11,8 +11,9 @@ static fw g_f;
 static fw_host g_host;
 static bool g_window_was_on;
 
-static bool mock_rom_call(void *ctx, uint16_t addr, fw_regs *r)
+static bool mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
+    (void)budget;
     fw *f = ctx;
     if (addr != TN_APPEND_PHONETIC)
         return false;

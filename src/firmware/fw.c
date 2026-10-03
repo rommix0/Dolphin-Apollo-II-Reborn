@@ -61,9 +61,9 @@ void fw_set_low_window(fw *f, bool on)
         f->host->set_low_window(f->host->ctx, on);
 }
 
-bool fw_rom_call(fw *f, uint16_t addr, fw_regs *regs)
+bool fw_rom_call(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget)
 {
-    if (!f->host || !f->host->rom_call || !f->host->rom_call(f->host->ctx, addr, regs)) {
+    if (!f->host || !f->host->rom_call || !f->host->rom_call(f->host->ctx, addr, regs, budget)) {
         fault(f, addr);
         return false;
     }

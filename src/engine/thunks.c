@@ -12,11 +12,11 @@
 
 static bool window_on(const machine *m) { return (m50734_port_pins(&m->sfr, 2) & P2_LOWER_WINDOW) != 0; }
 
-static bool host_rom_call(void *ctx, uint16_t addr, fw_regs *r)
+static bool host_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     fw_bridge *b = ctx;
     machine_regs mr = { r->a, r->x, r->y, b->m->cpu.p };   /* the routine starts with the machine's flags */
-    bool ok = machine_rom_call(b->m, addr, &mr, FW_ROM_CALL_BUDGET);
+    bool ok = machine_rom_call(b->m, addr, &mr, budget);
     r->a = mr.a;
     r->x = mr.x;
     r->y = mr.y;

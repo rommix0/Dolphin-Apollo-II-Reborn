@@ -11,14 +11,20 @@
 #define FW_RAM_SIZE  0x4000
 #define FW_TMP_78    0x0078   /* zero-page scratch, unnamed in the annotations: a saved Y, byte counters */
 
+/* Cycle budgets of a ROM call from C (M4.1 spec 3.1): a helper that does not return within FW_ROM_CALL_BUDGET
+   is a fault; a call that plays speech (prosody and playback) gets FW_ROM_CALL_SPEECH_BUDGET. */
+#define FW_ROM_CALL_BUDGET         10000000ULL
+#define FW_ROM_CALL_SPEECH_BUDGET  1000000000ULL
+
 typedef struct { uint8_t a, x, y, p; } fw_regs;
 
 /* The machine or native host. In hybrid runs it is the emulator (src/engine/thunks.c). */
 typedef struct fw_host {
     void *ctx;
-    /* Runs the routine at addr, still in ROM, to its RTS. A, X and Y in and out; the routine starts with the
-       machine's current flags, and p returns its exit flags. False if it faulted or did not return. */
-    bool (*rom_call)(void *ctx, uint16_t addr, fw_regs *regs);
+    /* Runs the routine at addr, still in ROM, to its RTS, within budget cycles. A, X and Y in and out; the
+       routine starts with the machine's current flags, and p returns its exit flags. False if it faulted or
+       did not return. */
+    bool (*rom_call)(void *ctx, uint16_t addr, fw_regs *regs, uint64_t budget);
     /* P2 bit 7, the lower-ROM window, as SEB7/CLB7 $F0 set and clear it. */
     void (*set_low_window)(void *ctx, bool on);
 } fw_host;
@@ -61,7 +67,8 @@ uint8_t fw_mem8(fw *f, uint16_t addr);
 uint8_t fw_ind_y(fw *f, uint8_t zp, uint8_t y);
 /* SEB7/CLB7 P2: sets the window and tells the host. */
 void fw_set_low_window(fw *f, bool on);
-/* Calls a routine still in ROM through the host. Without a host, or when the call fails, a fault. */
-bool fw_rom_call(fw *f, uint16_t addr, fw_regs *regs);
+/* Calls a routine still in ROM through the host, within budget cycles. Without a host, or when the call fails,
+   a fault. */
+bool fw_rom_call(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget);
 
 #endif
