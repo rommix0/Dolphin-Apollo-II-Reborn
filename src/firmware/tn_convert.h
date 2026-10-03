@@ -1,0 +1,19 @@
+#ifndef FW_TN_CONVERT_H
+#define FW_TN_CONVERT_H
+/* The clause-to-phonetic-text driver of text normalisation (ROM $B1E6), decompiled (M4.1 spec section 2.2). */
+#include "fw.h"
+
+/* Routines still in ROM that tn_convert_clause calls */
+#define ROM_ISR_PAR_READY       0xC5D6   /* parallel mode: ready for the next host byte; A, X, Y preserved */
+#define ROM_CMD_RUN_DUE         0xA880   /* X = a clause position: run the deferred commands due there; X kept */
+#define ROM_PROS_MAKE_SEGMENTS  0xCA92   /* prosody of tn_phonetic */
+#define ROM_BOOT_LOOP_PLAY      0xA7D4   /* play the utterance */
+#define TN_PHONETIC_FLUSH       0xFA     /* tn_phon_len at which tn_phonetic is spoken mid-clause */
+
+/* $B1E6: convert cmd_text (boot_clause_len characters) to phonetic text in tn_phonetic: per character the
+   deferred commands due, then a verbatim copy (@X), the rules (letters and digits; a word with no vowel before
+   its end is spelled), or a copy or spoken name (space and punctuation). A nearly full tn_phonetic is spoken
+   mid-clause and the conversion goes on from tn_resume_pos. */
+void tn_convert_clause(fw *f);
+
+#endif

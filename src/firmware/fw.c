@@ -9,6 +9,7 @@ void fw_init(fw *f, uint8_t *ram, const fw_image *img, const fw_host *host)
     f->fault = false;
     f->fault_addr = 0;
     f->trap = NULL;
+    f->tn_flushes = 0;
 }
 
 static void fault(fw *f, uint16_t addr)

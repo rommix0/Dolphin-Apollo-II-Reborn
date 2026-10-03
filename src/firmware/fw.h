@@ -10,6 +10,7 @@
 
 #define FW_RAM_SIZE  0x4000
 #define FW_TMP_78    0x0078   /* zero-page scratch, unnamed in the annotations: a saved Y, byte counters */
+#define FW_TMP_75    0x0075   /* zero-page scratch, unnamed in the annotations: tn_convert_clause's saved X */
 
 /* Cycle budgets of a ROM call from C (M4.1 spec 3.1): a helper that does not return within FW_ROM_CALL_BUDGET
    is a fault; a call that plays speech (prosody and playback) gets FW_ROM_CALL_SPEECH_BUDGET. */
@@ -45,6 +46,7 @@ typedef struct fw {
     bool fault;                    /* a read outside the converted data, or a failed ROM call */
     uint16_t fault_addr;
     jmp_buf *trap;                 /* when set, a fault longjmps here and the routine is abandoned */
+    unsigned tn_flushes;           /* mid-clause flushes by tn_convert_clause (a statistic for the tests) */
 } fw;
 
 /* RAM by name; a < FW_RAM_SIZE. */
