@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "engine/rom_engine.h"
+#include "engine/rom_id.h"
 #include "machine/coverage.h"
 #include "../../tests/corpus_list.h"
 
@@ -14,9 +15,10 @@ static const char *const k_corpus[] = { CORPUS_NAMES };
 
 static int usage(void)
 {
-    fprintf(stderr, "usage: apollo2_coverage [--rom PATH] -o FILE [TEXTFILE...]\n"
+    fprintf(stderr, "usage: apollo2_coverage [--rom PATH] [--rom-any] -o FILE [TEXTFILE...]\n"
                     "  runs boot, every tests/corpus/<name>.txt of the golden corpus, then each TEXTFILE\n"
-                    "  --rom PATH  ROM image (default: $APOLLO2_ROM or UK_V2.01_4.04_ROM.BIN)\n");
+                    "  --rom PATH  ROM image (default: $APOLLO2_ROM or UK_V2.01_4.04_ROM.BIN)\n"
+                    "  --rom-any   accept a ROM whose MD5 is not the UK V2.01 4.04 image (with a warning)\n");
     return 1;
 }
 
@@ -87,11 +89,14 @@ int main(int argc, char **argv)
 {
     const char *rom_path = getenv("APOLLO2_ROM");
     const char *out_path = NULL;
+    bool rom_any = false;
     int first_extra = argc;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--rom") && i + 1 < argc) {
             rom_path = argv[++i];
+        } else if (!strcmp(argv[i], "--rom-any")) {
+            rom_any = true;
         } else if (!strcmp(argv[i], "-o") && i + 1 < argc) {
             out_path = argv[++i];
         } else if (argv[i][0] == '-') {
@@ -109,6 +114,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "cannot load a %d-byte ROM from %s\n", MACHINE_ROM_SIZE, rom_path);
         return 1;
     }
+    if (!rom_id_accept(rom_path, g_rom, sizeof g_rom, rom_any, stderr))
+        return 1;
 
     coverage_init(&g_cov);
     bool ok = run("boot", "", true);

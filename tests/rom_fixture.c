@@ -1,11 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "rom_fixture.h"
+#include "engine/rom_id.h"
 
 const uint8_t *test_rom(size_t *len)
 {
     static uint8_t rom[0x10000];
-    static int state;   /* 0 = not tried, 1 = loaded, -1 = missing or wrong size */
+    static int state;   /* 0 = not tried, 1 = loaded, -1 = missing, wrong size or not the UK V2.01 4.04 image */
     if (state == 0) {
         const char *path = getenv("APOLLO2_ROM");
         FILE *f = fopen(path ? path : "UK_V2.01_4.04_ROM.BIN", "rb");
@@ -14,6 +15,13 @@ const uint8_t *test_rom(size_t *len)
             if (fread(rom, 1, sizeof rom, f) == sizeof rom && fgetc(f) == EOF)
                 state = 1;
             fclose(f);
+        }
+        if (state == 1 && !rom_id_is_apollo2(rom, sizeof rom)) {
+            char hex[33];
+            rom_id_md5_hex(rom, sizeof rom, hex);
+            fprintf(stderr, "  ROM %s has MD5 %s, not the UK V2.01 4.04 image (%s): ROM tests are skipped\n",
+                    path ? path : "UK_V2.01_4.04_ROM.BIN", hex, ROM_ID_MD5);
+            state = -1;
         }
     }
     if (state != 1)

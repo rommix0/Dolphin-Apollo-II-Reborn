@@ -5,6 +5,7 @@
 #include <string.h>
 #include "audio/playback.h"
 #include "audio/wav.h"
+#include "engine/rom_id.h"
 #include "render/render.h"
 
 #define APOLLO2_MAX_TEXT 1500   /* keeps the speech inside ROM_ENGINE_SPEAK_CYCLES (about 200 s) */
@@ -20,6 +21,7 @@ static int usage(void)
             "  --voice a|b        speaker table: a = male (default), b = non-male (@K1)\n"
             "  --engine rom       firmware engine (hybrid and native arrive in milestones 4 and 5)\n"
             "  --rom PATH         ROM image (default: $APOLLO2_ROM or UK_V2.01_4.04_ROM.BIN)\n"
+            "  --rom-any          accept a ROM whose MD5 is not the UK V2.01 4.04 image (with a warning)\n"
             "  --hyp LIST         synthesizer hypothesis switches, comma-separated: b11,b13\n"
             "  --stream S         frame stream fed to the synthesizer: produced (default) or raw\n"
             "  --prosody N        intonation strength 0-7, sent as @Rn (default 4 = the firmware's\n"
@@ -80,6 +82,7 @@ int main(int argc, char **argv)
     static uint8_t rom[MACHINE_ROM_SIZE];
     const char *rom_path = getenv("APOLLO2_ROM");
     const char *out_path = NULL, *text = NULL, *text_file = NULL;
+    bool rom_any = false;
     render_options opt;
     render_default_options(&opt);
 
@@ -105,6 +108,8 @@ int main(int argc, char **argv)
         } else if (!strcmp(a, "--rom") && val) {
             rom_path = val;
             i++;
+        } else if (!strcmp(a, "--rom-any")) {
+            rom_any = true;
         } else if (!strcmp(a, "--hyp") && val) {
             if (!parse_hyp(val, &opt.synth))
                 return usage();
@@ -146,6 +151,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "cannot load a %d-byte ROM from %s\n", MACHINE_ROM_SIZE, rom_path);
         return 1;
     }
+    if (!rom_id_accept(rom_path, rom, sizeof rom, rom_any, stderr))
+        return 1;
 
     render_result r;
     machine_status st = render_text(&g_machine, rom, sizeof rom, text, &opt, &r);
