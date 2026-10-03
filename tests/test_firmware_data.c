@@ -6,7 +6,8 @@
 #include "firmware/data/fw_data.h"
 
 typedef struct { uint32_t from, to; } range;   /* [from, to) in CPU addresses */
-static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9824, 0x989C }, { 0x9AB4, 0x9BB4 } };
+static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9804, 0x989C }, { 0x9AB4, 0x9BB4 }, { 0xACC7, 0xACE8 },
+                               { 0xF75B, 0xF77B } };
 static const range k_low[] = { { 0x4010, 0x7832 } };
 
 static bool bit(const uint8_t *ok, uint32_t i) { return (ok[i >> 3] >> (i & 7)) & 1; }
@@ -22,8 +23,8 @@ static bool in(const range *r, size_t n, uint32_t a)
 static void test_coverage(const fw_image *img)
 {
     for (uint32_t a = 0; a < 0x10000; a++) {
-        if (bit(img->rom_ok, a) != in(k_rom, 3, a)) {
-            fprintf(stderr, "  $%04X: converted %d, expected %d\n", a, bit(img->rom_ok, a), in(k_rom, 3, a));
+        if (bit(img->rom_ok, a) != in(k_rom, sizeof k_rom / sizeof k_rom[0], a)) {
+            fprintf(stderr, "  $%04X: converted %d, expected %d\n", a, bit(img->rom_ok, a), in(k_rom, sizeof k_rom / sizeof k_rom[0], a));
             g_test_failures++;
             break;
         }
@@ -50,6 +51,7 @@ static void test_counts(void)
     CHECK_EQ(lists, 531);
     CHECK_EQ(rules, 3766);
     CHECK_EQ(fw_affix_list_count, 3);
+    CHECK_EQ(fw_phonetic_text_count, 5);
 }
 
 static void test_against_rom(const fw_image *img, const uint8_t *rom)

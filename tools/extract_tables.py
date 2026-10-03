@@ -3,7 +3,7 @@
 character classes -> readable C in src/firmware/data/. The output is a first draft: review it, annotate it by
 hand if useful, and commit it. Nothing runs this at build or test time; tests/test_firmware_data.c checks the
 committed C against the ROM.
-usage: python tools/extract_tables.py [ROM]   (default $APOLLO2_ROM, else UK_V2.01_4.04_ROM.BIN)"""
+usage: python tools/extract_tables.py [--phonetic-only] [ROM]   (default $APOLLO2_ROM, else UK_V2.01_4.04_ROM.BIN)"""
 import os
 import sys
 
@@ -23,6 +23,12 @@ PAIR_TABLES = [
     ("z", 0x77D7, 91),
 ]
 AFFIXES = [("lts_suffixes", 0x9825, 60), ("lts_sibilants", 0x9861, 35), ("lts_at_consonants", 0x9884, 24)]
+# (name, address, size), as annotated in ghidra740/annotations/command.txt and boot.txt (M4.1 spec 4)
+PHONETIC_TEXTS = [
+    ("cmd_version_engine_text", 0x9804, 32), ("boot_baud_text_19200", 0xACC7, 3),
+    ("boot_baud_text_300", 0xACCA, 14), ("boot_baud_text_1200", 0xACD8, 16),
+    ("cmd_version_lang_text", 0xF75B, 32),
+]
 CLASS_BITS = [(0x80, "CC_LETTER"), (0x40, "CC_VOWEL"), (0x20, "CC_FRONT_VOWEL"), (0x10, "CC_NASAL"),
               (0x08, "CC_VOICED"), (0x04, "CC_CONSONANT"), (0x02, "CC_HIGH"), (0x01, "CC_PUNCT")]
 HEADER = ("/* Converted from the Apollo 2 ROM by tools/extract_tables.py (M4.0 spec section 4), then reviewed.\n"
@@ -48,10 +54,30 @@ def char_name(c):
     return "$%02X" % c
 
 
+def write_phonetic_texts(rom):
+    """src/firmware/data/phonetic_text_data.c: each text as its counted text plus the bytes after it (tail)."""
+    lines = [HEADER.replace("M4.0 spec section 4", "M4.1 spec section 4") +
+             "/* name, address, annotated size, counted text, tail (bytes after the count) */",
+             "const fw_phonetic_text fw_phonetic_texts[] = {"]
+    for name, addr, size in PHONETIC_TEXTS:
+        n = rom[addr]
+        assert 0 < n and 1 + n <= size, "%s: length %d does not fit %d bytes" % (name, n, size)
+        text, tail = rom[addr + 1:addr + 1 + n], rom[addr + 1 + n:addr + size]
+        lines.append('    { "%s", 0x%04X, %d, %s, %s },' % (name, addr, size, cstr(text), cstr(tail)))
+    lines += ["};", "const size_t fw_phonetic_text_count = sizeof fw_phonetic_texts / sizeof fw_phonetic_texts[0];"]
+    with open(os.path.join(OUT, "phonetic_text_data.c"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    print("wrote phonetic_text_data.c in", OUT)
+
+
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("APOLLO2_ROM", "UK_V2.01_4.04_ROM.BIN")
+    args = [a for a in sys.argv[1:] if a != "--phonetic-only"]
+    path = args[0] if args else os.environ.get("APOLLO2_ROM", "UK_V2.01_4.04_ROM.BIN")
     rom = open(path, "rb").read()
     assert len(rom) == 0x10000, "need the 64 KB ROM"
+    write_phonetic_texts(rom)
+    if "--phonetic-only" in sys.argv:   # M4.1: leave the reviewed M4.0 tables alone
+        return
 
     def rd(a, low):
         return rom[a - 0x4000] if low else rom[a]

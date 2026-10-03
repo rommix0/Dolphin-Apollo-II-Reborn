@@ -151,6 +151,19 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
     /* 5. lts_char_class. */
     for (int c = 0; c < 256; c++)
         put(&e, false, LTS_CHAR_CLASS + (uint32_t)c, lts_char_class[c]);
+    /* 6. The length-prefixed phonetic texts (M4.1 spec 4). */
+    for (size_t i = 0; i < fw_phonetic_text_count; i++) {
+        const fw_phonetic_text *t = &fw_phonetic_texts[i];
+        size_t n = strlen(t->text);
+        if (n == 0 || n > 0xFF)
+            fail(&e, "%s: text length %u", t->name, (unsigned)n);
+        uint32_t at = t->addr;
+        put(&e, false, at++, (uint8_t)n);
+        at = put_text(&e, false, at, t->text, false);
+        at = put_text(&e, false, at, t->tail, false);
+        if (at - t->addr != t->size)
+            fail(&e, "%s: %u bytes, the annotation says %u", t->name, (unsigned)(at - t->addr), t->size);
+    }
     return e.ok;
 }
 

@@ -22,6 +22,9 @@ typedef struct {
 } fw_rule_table;
 /* A context-symbol list (% & @): $00 CR LF, then each entry followed by CR LF, then $00. */
 typedef struct { const char *name; uint16_t addr; const char *const *entries; uint8_t count; } fw_affix_list;
+/* A length-prefixed phonetic text (M4.1 spec 4): the length byte strlen(text), the text, then tail, the bytes the
+   ROM keeps after the counted text (a CR, or nothing). size: the annotated bytes in all. */
+typedef struct { const char *name; uint16_t addr, size; const char *text, *tail; } fw_phonetic_text;
 
 /* Pinned addresses (ghidra740/annotations: text_norm.txt, lts.txt) */
 #define TN_CHAR_RULES_LO   0x4000   /* low byte of each character's list address */
@@ -64,6 +67,8 @@ extern const fw_rule_table *const fw_rule_tables[];           /* every rule tabl
 extern const size_t fw_rule_table_count;
 extern const fw_affix_list fw_affix_lists[];
 extern const size_t fw_affix_list_count;
+extern const fw_phonetic_text fw_phonetic_texts[];
+extern const size_t fw_phonetic_text_count;
 extern const uint8_t lts_char_class[256];
 
 /* Encodes every table into img at its ROM address. False with a reason in err on any inconsistency. */
