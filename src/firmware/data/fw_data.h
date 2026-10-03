@@ -52,6 +52,9 @@ typedef struct { uint8_t first, last, to; bool shift; } fw_case_fold;
 #define CMD_TABLE           0x994F   /* ptr[32]: the records in match order, then the end */
 #define CMD_QUERY_TABLE     0x998F   /* 18 x (letter, zero-page setting), then 0 */
 #define CMD_CASE_MAP        0x99B4   /* byte[256] */
+/* The version texts (phonetic texts converted in M4.1, fw_phonetic_texts) that cmd_say_version passes by tn_rule_ptr */
+#define CMD_VERSION_ENGINE_TEXT 0x9804   /* cmd_version_engine_text */
+#define CMD_VERSION_LANG_TEXT   0xF75B   /* cmd_version_lang_text */
 #define CMD_SPEED_MAPS      0xC87B   /* ptr[10], indexed by speed - 1 */
 #define CMD_SPEED_LIMITS    0xC88F   /* byte[9], indexed by speed - 1 */
 #define CMD_SPEED_MAP_DATA  0xC898   /* not converted (prosody's, M4.3): cmd_speed_maps point into it */

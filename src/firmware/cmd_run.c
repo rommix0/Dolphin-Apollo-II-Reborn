@@ -6,6 +6,16 @@
 /* The C handlers by ROM address: the bytes cmd_scan_clause copies into cmd_handlers. A command whose address is
    not here runs through the ROM cmd_run_next (spec 2.4). The NULL row ends the table. */
 static const struct { uint16_t addr; cmd_handler *fn; } k_handlers[] = {
+    { ROM_CMD_SAY_VERSION,      cmd_say_version },
+    { ROM_CMD_SET_PHRASE_PAUSE, cmd_set_phrase_pause },
+    { ROM_CMD_SET_FORMANT,      cmd_set_formant },
+    { ROM_CMD_SET_WORD_PAUSE,   cmd_set_word_pause },
+    { ROM_CMD_SET_MARK_SPACE,   cmd_set_mark_space },
+    { ROM_CMD_SET_SPELL,        cmd_set_spell },
+    { ROM_CMD_SET_PUNCT,        cmd_set_punct },
+    { ROM_CMD_SET_HYPER,        cmd_set_hyper },
+    { ROM_CMD_SET_PHONETIC,     cmd_set_phonetic },
+    { ROM_CMD_IGNORE,           cmd_ignore },
     { 0, NULL },
 };
 

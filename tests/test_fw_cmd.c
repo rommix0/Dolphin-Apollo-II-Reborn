@@ -503,6 +503,177 @@ static void test_run_due_queue_order(void)
     CHECK(!g_f.fault);
 }
 
+/* A C handler gets cmd_run_next's writes from the C (cmd_vector, cmd_next, cmd_next_pos) and runs with
+   A = boot_clause[cmd_arg_index]; a ROM handler after it in the queue still goes to the ROM. */
+static void test_run_due_c_handler(void)
+{
+    setup();
+    g_ram[BOOT_CLAUSE + 6] = '1';
+    queue(0, 0, ROM_CMD_SET_SPELL, 6);
+    g_ram[CMD_POSITIONS + 1] = 0x42;
+    cmd_run_due(&g_f, 0);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK_EQ(g_ram[CMD_SPELL], 1);
+    CHECK_EQ(fw_rd16(&g_f, CMD_VECTOR), ROM_CMD_SET_SPELL);
+    CHECK_EQ(g_ram[CMD_NEXT], 1);
+    CHECK_EQ(g_ram[CMD_NEXT_POS], 0x42);
+
+    setup();
+    g_ram[BOOT_CLAUSE + 6] = '1';
+    queue(0, 4, ROM_CMD_SET_SPELL, 6);
+    queue(1, 4, ROM_BANK_CMD_SELECT, 9);
+    g_ram[CMD_POSITIONS + 2] = 0x77;
+    cmd_run_due(&g_f, 4);
+    CHECK_EQ(g_ram[CMD_SPELL], 1);
+    CHECK_EQ(g_ncalls, 1);                      /* only bank_cmd_select goes to the ROM */
+    CHECK_EQ(g_calls[0].addr, ROM_CMD_RUN_NEXT);
+    CHECK_EQ(g_calls[0].x, 4);
+    CHECK_EQ(g_calls[0].y, 1);
+    CHECK_EQ(g_calls[0].next, 1);               /* the C's bookkeeping for the first command */
+    CHECK_EQ(g_calls[0].next_pos, 4);
+    CHECK_EQ(g_calls[0].vector, ROM_CMD_SET_SPELL);
+    CHECK_EQ(g_ram[CMD_NEXT], 2);
+    CHECK_EQ(g_ram[CMD_NEXT_POS], 0x77);
+    CHECK(!g_f.fault);
+}
+
+/* The one-digit setters: accepted and rejected values (cmd_hex_value, through the case map). */
+static void test_set_ranges(void)
+{
+    static const struct { cmd_handler *h; uint16_t setting; uint8_t ok, want, bad; } k[] = {
+        { cmd_set_phrase_pause, CMD_PHRASE_PAUSE, 'f', 15, 'G' },   /* 0-$F */
+        { cmd_set_word_pause,   CMD_WORD_PAUSE,   '9', 9,  'A' },   /* 0-9 */
+        { cmd_set_spell,        CMD_SPELL,        '1', 1,  '2' },   /* 0-1 */
+        { cmd_set_punct,        CMD_PUNCT,        '1', 1,  '2' },
+        { cmd_set_hyper,        CMD_HYPER,        '1', 1,  '2' },
+        { cmd_set_phonetic,     CMD_PHONETIC,     '1', 1,  '2' },
+    };
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) {
+        setup();
+        g_ram[k[i].setting] = 0x5A;
+        k[i].h(&g_f, 3, k[i].bad);
+        CHECK_EQ(g_ram[k[i].setting], 0x5A);
+        k[i].h(&g_f, 3, '+');                   /* cmd_hex_value('+') = $FB */
+        CHECK_EQ(g_ram[k[i].setting], 0x5A);
+        k[i].h(&g_f, 3, '0');
+        CHECK_EQ(g_ram[k[i].setting], 0);
+        k[i].h(&g_f, 3, k[i].ok);
+        CHECK_EQ(g_ram[k[i].setting], k[i].want);
+        CHECK_EQ(g_ncalls, 0);
+        CHECK(!g_f.fault);
+    }
+}
+
+static void test_set_mark_space(void)
+{
+    setup();
+    put_clause(" @m2a");                        /* M**: X = 4, the last digit; lower case through the map */
+    cmd_set_mark_space(&g_f, 4, 'a');
+    CHECK_EQ(g_ram[CMD_MARK_SPACE], 0x2A);
+    CHECK_EQ(g_ram[FW_TMP_75], 0x20);           /* the first digit times 16 */
+
+    setup();
+    put_clause(" @M3G");                        /* the second digit out of range */
+    g_ram[CMD_MARK_SPACE] = 0x11;
+    cmd_set_mark_space(&g_f, 4, 'G');
+    CHECK_EQ(g_ram[CMD_MARK_SPACE], 0x11);
+    CHECK_EQ(g_ram[FW_TMP_75], 0x30);
+
+    setup();
+    put_clause(" @MM5");                        /* re-anchors on the second M: the first digit is the 5 */
+    g_ram[CMD_MARK_SPACE] = 0x11;
+    cmd_set_mark_space(&g_f, 4, '5');
+    CHECK_EQ(g_ram[CMD_MARK_SPACE], 0x11);
+    CHECK_EQ(g_ram[FW_TMP_75], 'M');            /* cmd_find_back's letter, left there */
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+static void check_formant_clear(void)
+{
+    for (int i = 0; i < 10; i++)
+        CHECK_EQ(g_ram[CMD_FORMANT_OFS + i], 0);
+}
+
+static void test_set_formant(void)
+{
+    setup();
+    put_clause(" @u312+");                      /* U#**+: X = 6, the sign */
+    cmd_set_formant(&g_f, 6, '+');
+    CHECK_EQ(g_ram[CMD_FORMANT_OFS + 3], 0x12);
+    CHECK_EQ(g_ram[FW_TMP_75], 0x12);
+
+    setup();
+    put_clause(" @U9A0-");
+    cmd_set_formant(&g_f, 6, '-');
+    CHECK_EQ(g_ram[CMD_FORMANT_OFS + 9], 0x60);    /* 0 - $A0 */
+    CHECK_EQ(g_ram[FW_TMP_75], 0xA0);
+
+    setup();
+    put_clause(" @U312x");                      /* neither sign: nothing stored */
+    cmd_set_formant(&g_f, 6, 'x');
+    check_formant_clear();
+    CHECK_EQ(g_ram[FW_TMP_75], 0x12);
+
+    setup();
+    put_clause(" @U31+");                       /* U#*+: matched, but the sign fails as the low digit */
+    cmd_set_formant(&g_f, 5, '+');
+    check_formant_clear();
+    CHECK_EQ(g_ram[FW_TMP_75], 0x10);
+
+    setup();
+    put_clause(" @U3U+");                       /* re-anchors on the second U: the parameter is the '+' */
+    cmd_set_formant(&g_f, 5, '+');
+    check_formant_clear();
+    CHECK_EQ(g_ram[FW_TMP_75], 'U');
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+static const char *version_text(const char *name)
+{
+    for (size_t i = 0; i < fw_phonetic_text_count; i++)
+        if (!strcmp(fw_phonetic_texts[i].name, name))
+            return fw_phonetic_texts[i].text;
+    return NULL;
+}
+
+static void test_say_version(void)
+{
+    const char *e = version_text("cmd_version_engine_text"), *l = version_text("cmd_version_lang_text");
+    CHECK(e != NULL && l != NULL);
+    if (!e || !l)
+        return;
+    size_t ne = strlen(e), nl = strlen(l);
+    setup();
+    g_ram[CMD_VOICE] = 1;
+    g_ram[TN_PHON_LEN] = 2;
+    cmd_say_version(&g_f, 1, '?');
+    CHECK_EQ(g_ram[TN_PHON_LEN], 2 + ne + nl);
+    CHECK(memcmp(g_ram + TN_PHONETIC + 2, e, ne) == 0);
+    CHECK(memcmp(g_ram + TN_PHONETIC + 2 + ne, l, nl) == 0);
+    CHECK_EQ(fw_rd16(&g_f, TN_RULE_PTR), 0xF75B);    /* left at the language text */
+    CHECK_EQ(g_ram[FW_TMP_78], 0);              /* tn_append_phonetic counted down */
+    CHECK_EQ(g_ncalls, 0);
+
+    setup();                                    /* A is not '?': nothing */
+    g_ram[CMD_VOICE] = 1;
+    cmd_say_version(&g_f, 1, '!');
+    CHECK_EQ(fw_rd16(&g_f, TN_RULE_PTR), 0);
+    CHECK_EQ(g_ram[TN_PHON_LEN], 0);
+    CHECK(!g_f.fault);
+}
+
+static void test_ignore(void)
+{
+    setup();
+    put_clause(" @G1");
+    memcpy(g_before, g_ram, sizeof g_ram);
+    cmd_ignore(&g_f, 3, '1');
+    CHECK(memcmp(g_ram, g_before, sizeof g_ram) == 0);
+    CHECK_EQ(g_ncalls, 0);
+}
+
 void suite_fw_cmd(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -523,4 +694,10 @@ void suite_fw_cmd(void)
     test_run_due_nothing_queued();
     test_run_due_position();
     test_run_due_queue_order();
+    test_run_due_c_handler();
+    test_set_ranges();
+    test_set_mark_space();
+    test_set_formant();
+    test_say_version();
+    test_ignore();
 }
