@@ -8,8 +8,17 @@ if not defined VSCMD_VER (
 if not exist build mkdir build
 set CFLAGS=/nologo /std:c11 /W4 /WX /wd4244 /O2 /Zi /Isrc /D_CRT_SECURE_NO_WARNINGS
 set LIBS=winmm.lib
+rem M4.0 spec 3.1: src\firmware builds without the emulator. Syntax-check it without /Isrc, so an include of
+rem a machine\ or cpu740\ header cannot be found.
+set FWSRC=
+for %%d in (src\firmware src\firmware\data) do (
+    if exist %%d\*.c set FWSRC=!FWSRC! %%d\*.c
+)
+if defined FWSRC (
+    cl /nologo /std:c11 /W4 /WX /wd4244 /Zs /D_CRT_SECURE_NO_WARNINGS !FWSRC! || exit /b 1
+)
 set LIBSRC=
-for %%d in (src\cpu740 src\machine src\engine src\synth src\audio src\render) do (
+for %%d in (src\cpu740 src\machine src\engine src\firmware src\firmware\data src\synth src\audio src\render) do (
     if exist %%d\*.c set LIBSRC=!LIBSRC! %%d\*.c
 )
 cl %CFLAGS% /Fobuild\ /Fdbuild\ /Febuild\apollo2_tests.exe tests\*.c !LIBSRC! %LIBS% || exit /b 1
