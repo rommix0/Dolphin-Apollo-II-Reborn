@@ -3,7 +3,9 @@
    returns, scratch B is cloned and runs the C thunk, and the two must agree on the exit PC and SP, the routine's
    declared outputs, the P2 latch and all RAM except the SFRs and the dead stack below the exit SP. A call whose
    ROM copy reaches boot_loop_play ($A7D4, tn_convert_clause's mid-clause flush) cannot finish with interrupts
-   held: it is skipped and counted (golden_hybrid covers it, M4.1 spec 5.1). */
+   held: it is skipped and counted (golden_hybrid covers it, M4.1 spec 5.1), in tn_convert_clause only. A call
+   whose ROM copy resets the stack (@= entering a bank) stops right after the reset in both copies and is
+   compared like any other (M4.2 spec 3). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,7 +19,7 @@
 #define DIFF_FULL_CALLS 1000      /* every call up to this many per routine and corpus file ... */
 #define DIFF_STRIDE     64        /* ... then every 64th */
 #define DIFF_BUDGET     10000000ULL
-#define DIFF_MAX        16
+#define DIFF_MAX        24
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
 /* Extra text, for this test only (not goldens): words whose rules use the % & @ context symbols. */
@@ -97,12 +99,15 @@ static bool observe(machine *m, void *user)
     bool same = false;
     fw_bridge b;
     if (!machine_finish_routine(&g_ref, DIFF_BUDGET)) {
-        if (g_flushed) {
+        if (g_flushed && !strcmp(o->r->name, "tn_convert_clause")) {
             g_flush_skips++;   /* golden_hybrid covers this call end to end */
             return false;
         }
         g_checked[o - g_obs]++;
-        snprintf(why, sizeof why, "the ROM routine did not return (fault %d)", (int)g_ref.fault);
+        if (g_flushed)
+            snprintf(why, sizeof why, "a mid-clause flush outside tn_convert_clause");
+        else
+            snprintf(why, sizeof why, "the ROM routine did not return (fault %d)", (int)g_ref.fault);
     } else {
         g_checked[o - g_obs]++;
         machine_clone(&g_c, m);

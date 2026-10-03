@@ -119,11 +119,14 @@ void machine_return(machine *m);
 /* While hold is set, no IRQ line reaches the CPU; requests stay pending in the SFRs. */
 void machine_hold_irqs(machine *m, bool hold);
 /* Calls the routine at addr with A/X/Y/P from regs, as if by JSR from MACHINE_ROM_CALL_SENTINEL, and steps
-   until it returns there. Hooks, interrupts (unless held) and frame capture work normally. On success regs
-   holds the exit registers, the PC is restored and the other registers keep their exit values. False on a
-   fault or when max_cycles pass first. Precondition: it does not clear cpu.waiting, so it must not be called
-   while the CPU is waiting at WIT (hooks never fire then). */
-bool machine_rom_call(machine *m, uint16_t addr, machine_regs *regs, uint64_t max_cycles);
+   until it returns there. Hooks, interrupts (unless held) and frame capture work normally. MCALL_RETURNED: regs
+   holds the exit registers, the PC is restored and the other registers keep their exit values. MCALL_UNWOUND:
+   an instruction lifted SP above the call's frame without returning to it (a stack reset, M4.2 spec 3), so the
+   routine can never return; the call stops right after that instruction, with PC and SP where the routine left
+   them. MCALL_FAILED: a fault, or max_cycles passed first. Precondition: it does not clear cpu.waiting, so it
+   must not be called while the CPU is waiting at WIT (hooks never fire then). */
+typedef enum { MCALL_FAILED = 0, MCALL_RETURNED, MCALL_UNWOUND } machine_call_result;
+machine_call_result machine_rom_call(machine *m, uint16_t addr, machine_regs *regs, uint64_t max_cycles);
 /* Runs the routine the PC has just entered (by JSR) until the stack pointer rises above its value now, i.e.
    the routine returned, also two levels up. False on a fault or when max_cycles pass first. */
 bool machine_finish_routine(machine *m, uint64_t max_cycles);

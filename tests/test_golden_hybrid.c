@@ -36,7 +36,7 @@ static unsigned check(const uint8_t *rom, size_t len, const char *only, const ch
     if (!want)
         return 0;
     frame_list fl = { 0 };
-    hybrid_stats stats = { 0, 0 };
+    hybrid_stats stats = { 0, 0, 0 };
     machine_status st = hybrid_engine_speak(&g_m, rom, len, NULL, only, text, boot, &fl, NULL, &stats);
     g_thunk_calls += stats.thunk_calls;
     if (st != MACHINE_IDLE)
@@ -121,6 +121,17 @@ static void check_stopped(const machine *m, const fw_bridge *b, uint16_t entry, 
     CHECK(b->f.trap == NULL);
 }
 
+#define BOOT_RESET_ADDR 0xA61C   /* any ROM address: where reset_stack_hook "jumps" */
+
+/* Stands for bank_enter's stack reset: SP = $FF and a jump elsewhere. */
+static bool reset_stack_hook(machine *m, void *user)
+{
+    (void)user;
+    m->cpu.s = 0xFF;
+    m->cpu.pc = BOOT_RESET_ADDR;
+    return true;
+}
+
 static void test_thunk_faults(const uint8_t *rom, size_t len)
 {
     fw_bridge b;
@@ -166,6 +177,25 @@ static void test_thunk_faults(const uint8_t *rom, size_t len)
     CHECK(r->thunk(&g_other, &b));
     check_stopped(&g_other, &b, r->addr, r->addr, sp);
     CHECK_EQ(g_m.fault, MFAULT_NONE);
+
+    /* (4) a ROM call from the C that resets the stack (bank_enter's LDX #$FF / TXS): the C is abandoned, no
+       fault; the machine goes on where the ROM went (M4.2 spec 3) */
+    CHECK(machine_init(&g_m, rom, len, NULL));
+    CHECK(fw_bridge_init(&b, &g_m));
+    CHECK(machine_hook(&g_m, ROM_ISR_PAR_READY, reset_stack_hook, NULL));
+    r = fw_replacement_find("tn_convert_clause");
+    CHECK(r != NULL);
+    if (!r)
+        return;
+    g_m.cpu.pc = r->addr;
+    g_m.cpu.s = 0xF0;                            /* a caller's frame below the stack reset */
+    CHECK(r->thunk(&g_m, &b));
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+    CHECK_EQ(g_m.cpu.pc, BOOT_RESET_ADDR);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    CHECK_EQ(b.unwinds, 1);
+    CHECK(!b.f.unwound);
+    CHECK(b.f.trap == NULL);
 }
 
 void suite_golden_hybrid(void)

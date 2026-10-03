@@ -20,13 +20,15 @@ static void host_window(void *ctx, bool on)
 
 static uint64_t g_budget;
 
-static bool host_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
+static fw_call_result g_call_result = FW_CALL_RETURNED;
+
+static fw_call_result host_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     (void)ctx;
     (void)addr;
     r->a = 0x42;
     g_budget = budget;
-    return true;
+    return g_call_result;
 }
 
 void suite_fw(void)
@@ -85,6 +87,18 @@ void suite_fw(void)
     CHECK(fw_rom_call(&f, 0xC5D6, &r, FW_ROM_CALL_BUDGET));
     CHECK_EQ(g_budget, FW_ROM_CALL_BUDGET);
     CHECK(!f.fault);
+    g_call_result = FW_CALL_UNWOUND;   /* the ROM reset the stack: abandoned, not a fault (M4.2 spec 3) */
+    fw_init(&f, g_ram, &g_img, &caller);
+    CHECK(!f.unwound);
+    CHECK(!fw_rom_call(&f, 0xA893, &r, FW_ROM_CALL_BUDGET));
+    CHECK(f.unwound);
+    CHECK(!f.fault);
+    g_call_result = FW_CALL_FAILED;
+    fw_init(&f, g_ram, &g_img, &caller);
+    CHECK(!fw_rom_call(&f, 0xA893, &r, FW_ROM_CALL_BUDGET));
+    CHECK(f.fault);
+    CHECK(!f.unwound);
+    g_call_result = FW_CALL_RETURNED;
 
     CHECK_EQ(TN_POS, 0x0051);
     CHECK_EQ(CMD_TEXT, 0x1A00);

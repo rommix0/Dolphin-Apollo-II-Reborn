@@ -356,7 +356,7 @@ void machine_hold_irqs(machine *m, bool hold)
     m->irq_hold = hold;
 }
 
-bool machine_rom_call(machine *m, uint16_t addr, machine_regs *regs, uint64_t max_cycles)
+machine_call_result machine_rom_call(machine *m, uint16_t addr, machine_regs *regs, uint64_t max_cycles)
 {
     cpu740 *c = &m->cpu;
     uint16_t saved_pc = c->pc, ret = (uint16_t)(MACHINE_ROM_CALL_SENTINEL - 1);   /* RTS adds 1 */
@@ -373,14 +373,16 @@ bool machine_rom_call(machine *m, uint16_t addr, machine_regs *regs, uint64_t ma
     uint64_t end = c->cycles + max_cycles;
     while (!(c->pc == MACHINE_ROM_CALL_SENTINEL && c->s == s0)) {
         if (c->cycles >= end || !machine_step(m))
-            return false;
+            return MCALL_FAILED;
+        if (c->s > s0 && c->pc != MACHINE_ROM_CALL_SENTINEL)
+            return MCALL_UNWOUND;   /* the sentinel's frame was popped without returning to it */
     }
     regs->a = c->a;
     regs->x = c->x;
     regs->y = c->y;
     regs->p = c->p;
     c->pc = saved_pc;
-    return true;
+    return MCALL_RETURNED;
 }
 
 bool machine_finish_routine(machine *m, uint64_t max_cycles)

@@ -19,13 +19,16 @@
 
 typedef struct { uint8_t a, x, y, p; } fw_regs;
 
+/* How a ROM call from C ended: returned; failed (a fault, or out of budget); or unwound: the ROM reset the
+   stack past the call's own frame (bank_enter, M4.2 spec 3), so it can never return. */
+typedef enum { FW_CALL_FAILED = 0, FW_CALL_RETURNED, FW_CALL_UNWOUND } fw_call_result;
+
 /* The machine or native host. In hybrid runs it is the emulator (src/engine/thunks.c). */
 typedef struct fw_host {
     void *ctx;
     /* Runs the routine at addr, still in ROM, to its RTS, within budget cycles. A, X and Y in and out; the
-       routine starts with the machine's current flags, and p returns its exit flags. False if it faulted or
-       did not return. */
-    bool (*rom_call)(void *ctx, uint16_t addr, fw_regs *regs, uint64_t budget);
+       routine starts with the machine's current flags, and p returns its exit flags. */
+    fw_call_result (*rom_call)(void *ctx, uint16_t addr, fw_regs *regs, uint64_t budget);
     /* P2 bit 7, the lower-ROM window, as SEB7/CLB7 $F0 set and clear it. */
     void (*set_low_window)(void *ctx, bool on);
 } fw_host;
@@ -46,6 +49,7 @@ typedef struct fw {
     bool fault;                    /* a read outside the converted data, or a failed ROM call */
     uint16_t fault_addr;
     jmp_buf *trap;                 /* when set, a fault longjmps here and the routine is abandoned */
+    bool unwound;                  /* a ROM call reset the stack: the C was abandoned (not a fault; M4.2 spec 3) */
     unsigned tn_flushes;           /* mid-clause flushes by tn_convert_clause (a statistic for the tests) */
 } fw;
 
@@ -69,8 +73,9 @@ uint8_t fw_mem8(fw *f, uint16_t addr);
 uint8_t fw_ind_y(fw *f, uint8_t zp, uint8_t y);
 /* SEB7/CLB7 P2: sets the window and tells the host. */
 void fw_set_low_window(fw *f, bool on);
-/* Calls a routine still in ROM through the host, within budget cycles. Without a host, or when the call fails,
-   a fault. */
+/* Calls a routine still in ROM through the host, within budget cycles. True when it returned. Without a host, or
+   when the call fails, a fault. When the ROM reset the stack (unwound), f->unwound is set and the routine is
+   abandoned like a fault (a longjmp to f->trap), but it is not a fault. */
 bool fw_rom_call(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget);
 
 #endif

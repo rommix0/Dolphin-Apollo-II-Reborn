@@ -17,7 +17,7 @@ static bool g_window;
 static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
 
-static bool mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
+static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     (void)ctx;
     if (g_ncalls < MAX_CALLS) {
@@ -28,7 +28,9 @@ static bool mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
     }
     g_ncalls++;
     return addr == ROM_ISR_PAR_READY || addr == ROM_CMD_RUN_DUE || addr == ROM_PROS_MAKE_SEGMENTS ||
-           addr == ROM_BOOT_LOOP_PLAY;   /* registers come back unchanged, as these leave X alone */
+                   addr == ROM_BOOT_LOOP_PLAY
+               ? FW_CALL_RETURNED
+               : FW_CALL_FAILED;   /* registers come back unchanged, as these leave X alone */
 }
 
 static void mock_window(void *ctx, bool on)

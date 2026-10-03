@@ -127,7 +127,7 @@ static bool hook_calls_rom(machine *m, void *user)
 {
     (void)user;
     machine_regs r = { m->cpu.a, 0, 0, m->cpu.p };
-    CHECK(machine_rom_call(m, 0xC100, &r, 1000));
+    CHECK_EQ(machine_rom_call(m, 0xC100, &r, 1000), MCALL_RETURNED);
     m->cpu.a = (uint8_t)(r.a + 1);
     machine_return(m);
     return true;
@@ -147,7 +147,7 @@ static void test_rom_call(void)
     run_to(&g_m, 0x9007);
     uint8_t s = g_m.cpu.s;
     machine_regs r = { 3, 0, 0, g_m.cpu.p };
-    CHECK(machine_rom_call(&g_m, 0xC100, &r, 1000));
+    CHECK_EQ(machine_rom_call(&g_m, 0xC100, &r, 1000), MCALL_RETURNED);
     CHECK_EQ(r.a, 12);
     CHECK_EQ(g_m.cpu.pc, 0x9007);
     CHECK_EQ(g_m.cpu.s, s);
@@ -162,7 +162,7 @@ static void test_rom_call(void)
     put(0xC300, spin, sizeof spin);
     CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
     machine_regs r2 = { 0, 0, 0, g_m.cpu.p };
-    CHECK(!machine_rom_call(&g_m, 0xC300, &r2, 1000));   /* never returns: the budget ends it */
+    CHECK_EQ(machine_rom_call(&g_m, 0xC300, &r2, 1000), MCALL_FAILED);   /* never returns: the budget ends it */
 
     load_main(0xC100);
     CHECK(machine_hook(&g_m, 0xC100, hook_fault, NULL));
@@ -219,7 +219,7 @@ static void test_rom_call_real_rom(void)
         SKIP("ROM not found (set APOLLO2_ROM)");
     CHECK(machine_init(&g_m, rom, len, NULL));
     machine_regs r = { 0x1F, 0, 0, g_m.cpu.p };
-    CHECK(machine_rom_call(&g_m, 0xC656, &r, 1000));   /* util_shl4: A = A * 16 */
+    CHECK_EQ(machine_rom_call(&g_m, 0xC656, &r, 1000), MCALL_RETURNED);   /* util_shl4: A = A * 16 */
     CHECK_EQ(r.a, 0xF0);
     CHECK(r.p & 0x01);                                   /* the last shift carried */
 }
@@ -297,6 +297,69 @@ static void test_mapper(void)
     }
 }
 
+static machine_call_result g_outer, g_inner;
+
+/* $C100 hooked: calls $C200 in ROM; $C200: JSR $C300 / RTS. */
+static bool hook_outer(machine *m, void *user)
+{
+    (void)user;
+    machine_regs r = { 0, 0, 0, m->cpu.p };
+    g_outer = machine_rom_call(m, 0xC200, &r, 1000);
+    if (g_outer == MCALL_RETURNED)
+        machine_return(m);
+    return true;   /* unwound: the machine goes on where the ROM went */
+}
+
+/* $C300 hooked: calls $C400 in ROM, which resets the stack: LDX #$FF / TXS / JMP $9007. */
+static bool hook_inner(machine *m, void *user)
+{
+    (void)user;
+    machine_regs r = { 0, 0, 0, m->cpu.p };
+    g_inner = machine_rom_call(m, 0xC400, &r, 1000);
+    if (g_inner == MCALL_RETURNED)
+        machine_return(m);
+    return true;
+}
+
+/* A ROM call whose routine lifts SP above the call's frame (a stack reset) can never return: it reports
+   MCALL_UNWOUND at once, with PC and SP where the routine left them (M4.2 spec 3). A hook inside an outer
+   rom_call that unwinds unwinds the outer call too. */
+static void test_rom_call_unwound(void)
+{
+    static const uint8_t reset[] = { 0xA2, 0xFF, 0x9A, 0x4C, 0x07, 0x90 };   /* LDX #$FF / TXS / JMP $9007 */
+    static const uint8_t call_c300[] = { 0x20, 0x00, 0xC3, 0x60 };            /* JSR $C300 / RTS */
+
+    /* direct: a hook at $C100 calls $C400 */
+    load_main(0xC100);
+    put(0xC400, reset, sizeof reset);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    g_inner = MCALL_FAILED;
+    CHECK(machine_hook(&g_m, 0xC100, hook_inner, NULL));
+    run_to(&g_m, 0xC100);
+    CHECK(machine_step(&g_m));                   /* the hook runs; its ROM call unwinds */
+    CHECK_EQ(g_inner, MCALL_UNWOUND);
+    CHECK_EQ(g_m.cpu.pc, 0xC403);                /* right after the TXS */
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    run_to(&g_m, 0x9007);                        /* and the machine runs on from there */
+    CHECK_EQ(g_m.ram[0x10], 0x00);               /* the STA after the JSR never ran */
+
+    /* nested: hook $C100 -> ROM $C200 -> JSR $C300 hooked -> ROM $C400 resets the stack */
+    load_main(0xC100);
+    put(0xC200, call_c300, sizeof call_c300);
+    put(0xC400, reset, sizeof reset);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    g_outer = g_inner = MCALL_FAILED;
+    CHECK(machine_hook(&g_m, 0xC100, hook_outer, NULL));
+    CHECK(machine_hook(&g_m, 0xC300, hook_inner, NULL));
+    run_to(&g_m, 0xC100);
+    CHECK(machine_step(&g_m));
+    CHECK_EQ(g_inner, MCALL_UNWOUND);
+    CHECK_EQ(g_outer, MCALL_UNWOUND);            /* the outer call sees the same reset */
+    CHECK_EQ(g_m.cpu.pc, 0xC403);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+}
+
 void suite_machine_hooks(void)
 {
     test_mapper();
@@ -306,6 +369,7 @@ void suite_machine_hooks(void)
     test_hook_only_in_main_rom(0x70, 0x77, 1);   /* window off: $4100 is main ROM, the hook fires */
     test_hook_only_in_main_rom(0xF0, 0x14, 0);   /* window on: $4100 is file 0x0100, no hook */
     test_rom_call();
+    test_rom_call_unwound();
     test_clone_and_finish();
     test_irq_hold(true);
     test_irq_hold(false);

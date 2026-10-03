@@ -7,6 +7,7 @@
 typedef struct {
     uint64_t thunk_calls;   /* times a C routine ran instead of the ROM's */
     unsigned tn_flushes;    /* mid-clause flushes by the C tn_convert_clause */
+    unsigned unwinds;       /* C call chains abandoned at a stack reset (@= entering a bank, M4.2 spec 3) */
 } hybrid_stats;
 
 /* rom_engine_run with every replacement active, or only the one named only. MACHINE_FAULT (MFAULT_FIRMWARE)

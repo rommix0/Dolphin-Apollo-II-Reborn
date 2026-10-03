@@ -9,6 +9,7 @@ void fw_init(fw *f, uint8_t *ram, const fw_image *img, const fw_host *host)
     f->fault = false;
     f->fault_addr = 0;
     f->trap = NULL;
+    f->unwound = false;
     f->tn_flushes = 0;
 }
 
@@ -64,9 +65,17 @@ void fw_set_low_window(fw *f, bool on)
 
 bool fw_rom_call(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget)
 {
-    if (!f->host || !f->host->rom_call || !f->host->rom_call(f->host->ctx, addr, regs, budget)) {
-        fault(f, addr);
+    fw_call_result r = FW_CALL_FAILED;
+    if (f->host && f->host->rom_call)
+        r = f->host->rom_call(f->host->ctx, addr, regs, budget);
+    if (r == FW_CALL_RETURNED)
+        return true;
+    if (r == FW_CALL_UNWOUND) {
+        f->unwound = true;   /* the ROM abandoned this call chain, and so does the C */
+        if (f->trap)
+            longjmp(*f->trap, 1);
         return false;
     }
-    return true;
+    fault(f, addr);
+    return false;
 }

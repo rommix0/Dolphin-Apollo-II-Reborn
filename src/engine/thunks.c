@@ -13,17 +13,19 @@
 
 static bool window_on(const machine *m) { return (m50734_port_pins(&m->sfr, 2) & P2_LOWER_WINDOW) != 0; }
 
-static bool host_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
+static fw_call_result host_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     fw_bridge *b = ctx;
     machine_regs mr = { r->a, r->x, r->y, b->m->cpu.p };   /* the routine starts with the machine's flags */
-    bool ok = machine_rom_call(b->m, addr, &mr, budget);
+    machine_call_result res = machine_rom_call(b->m, addr, &mr, budget);
     r->a = mr.a;
     r->x = mr.x;
     r->y = mr.y;
     r->p = mr.p;
     b->f.low_window = window_on(b->m);
-    return ok;
+    if (res == MCALL_RETURNED)
+        return FW_CALL_RETURNED;
+    return res == MCALL_UNWOUND ? FW_CALL_UNWOUND : FW_CALL_FAILED;
 }
 
 /* SEB7/CLB7 $F0: a read-modify-write of P2 through the bus, as the CPU does it */
@@ -39,6 +41,7 @@ bool fw_bridge_init(fw_bridge *b, machine *m)
     const fw_image *img = fw_image_get();
     b->m = m;
     b->thunk_calls = 0;
+    b->unwinds = 0;
     b->host.ctx = b;
     b->host.rom_call = host_rom_call;
     b->host.set_low_window = host_set_low_window;
@@ -51,8 +54,8 @@ bool fw_bridge_init(fw_bridge *b, machine *m)
 typedef void (*thunk_regs)(fw *f, cpu740 *c);
 
 /* The frame every thunk shares: set the fault trap (saving an outer thunk's, as a ROM call from C can reach
-   another thunk on the same bridge), sync the window, run the routine; then restore the trap and either report
-   the fault or emulate the RTS. */
+   another thunk on the same bridge), sync the window, run the routine; then restore the trap and either leave the
+   machine where an unwound ROM call left it, report the fault, or emulate the RTS. */
 static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
 {
     if (m != b->m) {   /* registers come from m, RAM and host calls from b->m: they must be one machine */
@@ -69,6 +72,11 @@ static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
     if (setjmp(trap) == 0)
         regs(&b->f, &m->cpu);
     b->f.trap = saved;
+    if (b->f.unwound) {   /* a ROM call reset the stack: the C is abandoned, the machine goes on where the ROM went */
+        b->f.unwound = false;
+        b->unwinds++;
+        return true;
+    }
     if (b->f.fault) {
         if (m->fault == MFAULT_NONE) {
             m->fault = MFAULT_FIRMWARE;

@@ -31,6 +31,7 @@ machine_status hybrid_engine_speak(machine *m, const uint8_t *rom, size_t len, c
     if (stats) {
         stats->thunk_calls = h.bridge.thunk_calls;
         stats->tn_flushes = h.bridge.f.tn_flushes;
+        stats->unwinds = (unsigned)h.bridge.unwinds;
     }
     return h.ok ? st : MACHINE_FAULT;
 }
