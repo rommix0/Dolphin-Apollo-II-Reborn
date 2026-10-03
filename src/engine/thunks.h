@@ -6,7 +6,8 @@
 #include "machine/machine.h"
 #include "firmware/fw.h"
 
-/* The registers and flags a routine's callers use: the thunk sets them, the differential test compares them. */
+/* The registers and flags a routine's callers use (or more: tn_append_phonetic declares A, X and Y, M4.1 spec 7):
+   the thunk sets them, the differential test compares them. */
 enum { FW_OUT_A = 0x01, FW_OUT_X = 0x02, FW_OUT_Y = 0x04, FW_OUT_Z = 0x08 };
 
 /* The firmware context of one machine: its RAM, the converted data image, the emulator as host. */

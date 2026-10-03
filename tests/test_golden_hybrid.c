@@ -1,6 +1,7 @@
 /* The hybrid engine reproduces every golden (M4.0 spec section 5.2): with all ported routines active, and with
-   each alone. The rendered audio of hybrid equals the rom engine's (criterion 8). Also the fault path of a
-   thunk: a firmware fault stops the run instead of continuing on wrong data. */
+   each alone. The rendered audio of hybrid equals the rom engine's (criterion 8). The C tn_convert_clause must
+   take its mid-clause flush on long_clause (all-routines mode and tn_convert_clause alone; M4.1 spec 5.2).
+   Also the fault path of a thunk: a firmware fault stops the run instead of continuing on wrong data. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -1,7 +1,9 @@
 /* Live differential test of the ported routines (M4.0 spec section 5.1). Every corpus file runs on the ROM
-   engine; at each entry of a ported routine (sampled) the machine is cloned twice: scratch A runs the ROM
-   routine and scratch B its C thunk, both with interrupts held. They must agree on the exit PC and SP, the
-   routine's declared outputs, the P2 latch and all RAM except the SFRs and the dead stack below the exit SP. */
+   engine; at each entry of a ported routine (sampled) scratch A runs the ROM routine with interrupts held. If it
+   returns, scratch B is cloned and runs the C thunk, and the two must agree on the exit PC and SP, the routine's
+   declared outputs, the P2 latch and all RAM except the SFRs and the dead stack below the exit SP. A call whose
+   ROM copy reaches boot_loop_play ($A7D4, tn_convert_clause's mid-clause flush) cannot finish with interrupts
+   held: it is skipped and counted (golden_hybrid covers it, M4.1 spec 5.1). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -1,5 +1,5 @@
-/* Unit checks of tn_convert_clause on the converted data, with a mock host that records every ROM call. The full proof
-   is the live differential test (diff_lts) and the hybrid goldens (golden_hybrid). */
+/* Unit checks of tn_convert_clause and tn_append_phonetic on the converted data, with a mock host that records
+   every ROM call. The full proof is the live differential test (diff_lts) and the hybrid goldens (golden_hybrid). */
 #include <string.h>
 #include "test.h"
 #include "firmware/tn_convert.h"
@@ -98,6 +98,7 @@ static void test_phonetic_mode(void)
 static void test_copy_and_final_run_due(void)
 {
     setup(".");
+    g_ram[FW_TMP_75] = 0xAA;                    /* the copy must overwrite it with X = 0 */
     tn_convert_clause(&g_f);
     CHECK_EQ(g_ram[TN_PHON_LEN], 1);
     CHECK_EQ(g_ram[TN_PHONETIC], '.');

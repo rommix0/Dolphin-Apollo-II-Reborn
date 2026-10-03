@@ -73,9 +73,9 @@ void suite_fw(void)
     CHECK(g_window);
     CHECK(f.low_window);
     fw_regs r = { 0, 0, 0, 0 };
-    CHECK(!fw_rom_call(&f, 0xB154, &r, FW_ROM_CALL_BUDGET));  /* the host has no rom_call */
+    CHECK(!fw_rom_call(&f, 0xCA92, &r, FW_ROM_CALL_BUDGET));  /* the host has no rom_call */
     CHECK(f.fault);
-    CHECK_EQ(f.fault_addr, 0xB154);
+    CHECK_EQ(f.fault_addr, 0xCA92);
 
     fw_host caller = { NULL, host_call, host_window };   /* the budget reaches the host unchanged */
     fw_init(&f, g_ram, &g_img, &caller);
