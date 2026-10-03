@@ -5,6 +5,8 @@
 #include "firmware/cmd_match.h"
 #include "firmware/cmd_scan.h"
 #include "firmware/cmd_addr.h"
+#include "firmware/cmd_handlers.h"
+#include "firmware/cmd_run.h"
 #include "firmware/tn_convert.h"
 #include "firmware/data/fw_data.h"
 
@@ -24,13 +26,22 @@ enum {
     P_END = 31              /* the $FF end marker */
 };
 
-typedef struct { uint16_t addr; uint8_t a, x, y; uint64_t budget; } rom_call_record;
+/* One ROM call, with the dispatcher's RAM as the C left it at the call. */
+typedef struct {
+    uint16_t addr;
+    uint8_t a, x, y;
+    uint64_t budget;
+    uint8_t next, next_pos;
+    uint16_t vector;
+} rom_call_record;
 
 static uint8_t g_ram[FW_RAM_SIZE];
 static fw g_f;
 static fw_host g_host;
 static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
+static uint8_t g_before[FW_RAM_SIZE];   /* RAM as a test left it: the C must not touch it before a ROM cmd_run_next */
+static unsigned g_touched;              /* ROM cmd_run_next calls that found RAM changed since g_before */
 
 /* Records every ROM call and answers the routines the C calls as the ROM would; any other call fails. */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
@@ -43,8 +54,21 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         c->x = r->x;
         c->y = r->y;
         c->budget = budget;
+        c->next = g_ram[CMD_NEXT];
+        c->next_pos = g_ram[CMD_NEXT_POS];
+        c->vector = (uint16_t)(g_ram[CMD_VECTOR] | g_ram[CMD_VECTOR + 1] << 8);
     }
     g_ncalls++;
+    if (addr == ROM_CMD_RUN_NEXT) {
+        /* cmd_run_next: count it if the C changed RAM since g_before, then play the ROM's bookkeeping
+           (cmd_next += 1, cmd_next_pos = cmd_positions[cmd_next]) so that cmd_run_due moves on */
+        g_touched += memcmp(g_ram, g_before, sizeof g_ram) != 0;
+        uint8_t n = (uint8_t)(g_ram[CMD_NEXT] + 1);
+        g_ram[CMD_NEXT] = n;
+        g_ram[CMD_NEXT_POS] = g_ram[CMD_POSITIONS + n];
+        memcpy(g_before, g_ram, sizeof g_ram);
+        return FW_CALL_RETURNED;   /* X back as it was (cmd_run_done) */
+    }
     /* isr_par_ready leaves A, X and Y as they were: the registers come back unchanged */
     return addr == ROM_ISR_PAR_READY ? FW_CALL_RETURNED : FW_CALL_FAILED;
 }
@@ -57,6 +81,7 @@ static void setup(void)
     g_host.rom_call = mock_rom_call;
     g_host.set_low_window = NULL;   /* no command routine in C drives P2 (bank_cmd_select stays in ROM) */
     g_ncalls = 0;
+    g_touched = 0;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
 }
 
@@ -409,6 +434,75 @@ static void test_scan_empty(void)
     CHECK(!g_f.fault);
 }
 
+/* Queues command n as cmd_scan_clause does: due at cmd_text position pos, handler address h, argument at
+   boot_clause[arg]; cmd_count = n + 1, cmd_next_pos = cmd_positions[0]. */
+static void queue(uint8_t n, uint8_t pos, uint16_t h, uint8_t arg)
+{
+    g_ram[CMD_POSITIONS + n] = pos;
+    g_ram[CMD_HANDLERS + 2 * n] = (uint8_t)h;
+    g_ram[CMD_HANDLERS + 2 * n + 1] = (uint8_t)(h >> 8);
+    g_ram[CMD_ARG_INDEX + n] = arg;
+    g_ram[CMD_COUNT] = (uint8_t)(n + 1);
+    g_ram[CMD_NEXT_POS] = g_ram[CMD_POSITIONS];
+}
+
+static void test_run_due_nothing_queued(void)
+{
+    setup();                                    /* cmd_count = 0; cmd_next_pos = 0 matches X = 0 */
+    memcpy(g_before, g_ram, sizeof g_ram);
+    cmd_run_due(&g_f, 0);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(memcmp(g_ram, g_before, sizeof g_ram) == 0);
+    CHECK(!g_f.fault);
+}
+
+static void test_run_due_position(void)
+{
+    setup();
+    queue(0, 3, ROM_BANK_CMD_SELECT, 5);
+    g_ram[CMD_POSITIONS + 1] = 0xFF;            /* the scan leaves it stale */
+    memcpy(g_before, g_ram, sizeof g_ram);
+    cmd_run_due(&g_f, 2);                       /* not due at 2 */
+    CHECK_EQ(g_ncalls, 0);
+    cmd_run_due(&g_f, 3);
+    CHECK_EQ(g_ncalls, 1);
+    CHECK_EQ(g_calls[0].addr, ROM_CMD_RUN_NEXT);
+    CHECK_EQ(g_calls[0].x, 3);                  /* X = the position, as at $A88D */
+    CHECK_EQ(g_calls[0].y, 0);                  /* Y = cmd_next ($A880 LDY): bank_load_ramcode saves it */
+    CHECK_EQ(g_calls[0].budget, FW_ROM_CALL_BUDGET);
+    CHECK_EQ(g_touched, 0);                     /* the C left the bookkeeping to the ROM */
+    CHECK_EQ(g_calls[0].vector, 0);
+    CHECK_EQ(g_ram[CMD_NEXT], 1);               /* the mock's (the ROM's) bookkeeping */
+    cmd_run_due(&g_f, 3);                       /* cmd_next = cmd_count: nothing more */
+    CHECK_EQ(g_ncalls, 1);
+    CHECK(!g_f.fault);
+}
+
+/* Commands due at one position run in queue order; an unknown handler address (the latent NUL bug of the scan,
+   spec 2.6) goes to the ROM like bank_cmd_select. */
+static void test_run_due_queue_order(void)
+{
+    setup();
+    queue(0, 2, ROM_BANK_CMD_SELECT, 4);
+    queue(1, 2, 0x1234, 6);
+    queue(2, 5, ROM_BANK_CMD_SELECT, 8);
+    g_ram[CMD_POSITIONS + 3] = 0xFF;
+    memcpy(g_before, g_ram, sizeof g_ram);
+    cmd_run_due(&g_f, 2);
+    CHECK_EQ(g_ncalls, 2);
+    cmd_run_due(&g_f, 5);
+    CHECK_EQ(g_ncalls, 3);
+    for (unsigned i = 0; i < 3; i++) {
+        CHECK_EQ(g_calls[i].addr, ROM_CMD_RUN_NEXT);
+        CHECK_EQ(g_calls[i].x, i < 2 ? 2 : 5);
+        CHECK_EQ(g_calls[i].y, i);
+        CHECK_EQ(g_calls[i].next, i);
+    }
+    CHECK_EQ(g_touched, 0);
+    CHECK_EQ(g_ram[CMD_NEXT], 3);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_cmd(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -426,4 +520,7 @@ void suite_fw_cmd(void)
     test_scan_phonetic();
     test_scan_nul_partial();
     test_scan_empty();
+    test_run_due_nothing_queued();
+    test_run_due_position();
+    test_run_due_queue_order();
 }

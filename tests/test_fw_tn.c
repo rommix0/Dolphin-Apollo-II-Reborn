@@ -1,14 +1,17 @@
 /* Unit checks of tn_convert_clause and tn_append_phonetic on the converted data, with a mock host that records
-   every ROM call. The full proof is the live differential test (diff_lts) and the hybrid goldens (golden_hybrid). */
+   every ROM call. tn_convert_clause runs the deferred commands through the C cmd_run_due; the tests queue
+   commands whose handler stays in ROM (bank_cmd_select), so the mock sees each one as a cmd_run_next call. The
+   full proof is the live differential test (diff_lts) and the hybrid goldens (golden_hybrid). */
 #include <string.h>
 #include "test.h"
+#include "firmware/cmd_addr.h"
 #include "firmware/tn_convert.h"
 #include "firmware/tn_rules.h"
 #include "firmware/data/fw_data.h"
 
 #define MAX_CALLS 1024
 
-typedef struct { uint16_t addr; uint8_t a, x; uint64_t budget; } rom_call_record;
+typedef struct { uint16_t addr; uint8_t a, x, y, phon_len; uint64_t budget; } rom_call_record;
 
 static uint8_t g_ram[FW_RAM_SIZE];
 static fw g_f;
@@ -17,20 +20,30 @@ static bool g_window;
 static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
 
+/* Records every call with tn_phon_len at that moment. cmd_run_next ($A893) plays the ROM's bookkeeping
+   (cmd_next += 1, cmd_next_pos = cmd_positions[cmd_next]); the other helpers leave the registers unchanged. */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
-    (void)ctx;
+    fw *f = ctx;
     if (g_ncalls < MAX_CALLS) {
-        g_calls[g_ncalls].addr = addr;
-        g_calls[g_ncalls].a = r->a;
-        g_calls[g_ncalls].x = r->x;
-        g_calls[g_ncalls].budget = budget;
+        rom_call_record *c = &g_calls[g_ncalls];
+        c->addr = addr;
+        c->a = r->a;
+        c->x = r->x;
+        c->y = r->y;
+        c->phon_len = fw_rd8(f, TN_PHON_LEN);
+        c->budget = budget;
     }
     g_ncalls++;
-    return addr == ROM_ISR_PAR_READY || addr == ROM_CMD_RUN_DUE || addr == ROM_PROS_MAKE_SEGMENTS ||
-                   addr == ROM_BOOT_LOOP_PLAY
-               ? FW_CALL_RETURNED
-               : FW_CALL_FAILED;   /* registers come back unchanged, as these leave X alone */
+    if (addr == ROM_CMD_RUN_NEXT) {
+        uint8_t n = (uint8_t)(fw_rd8(f, CMD_NEXT) + 1);
+        fw_wr8(f, CMD_NEXT, n);
+        fw_wr8(f, CMD_NEXT_POS, fw_rd8(f, (uint16_t)(CMD_POSITIONS + n)));
+        return FW_CALL_RETURNED;
+    }
+    if (addr == ROM_ISR_PAR_READY || addr == ROM_PROS_MAKE_SEGMENTS || addr == ROM_BOOT_LOOP_PLAY)
+        return FW_CALL_RETURNED;
+    return FW_CALL_FAILED;
 }
 
 static void mock_window(void *ctx, bool on)
@@ -55,6 +68,16 @@ static void setup_n(const char *text, size_t n)
 
 static void setup(const char *text) { setup_n(text, strlen(text)); }
 
+/* Queues command n as cmd_scan_clause does, due at cmd_text position pos, with a handler that stays in ROM. */
+static void queue(uint8_t n, uint8_t pos)
+{
+    g_ram[CMD_POSITIONS + n] = pos;
+    fw_wr16(&g_f, (uint16_t)(CMD_HANDLERS + 2 * n), ROM_BANK_CMD_SELECT);
+    g_ram[CMD_ARG_INDEX + n] = n;
+    g_ram[CMD_COUNT] = (uint8_t)(n + 1);
+    g_ram[CMD_NEXT_POS] = g_ram[CMD_POSITIONS];
+}
+
 static unsigned count(uint16_t addr)
 {
     unsigned n = 0;
@@ -67,32 +90,49 @@ static unsigned count(uint16_t addr)
 static void check_helper_budgets(void)
 {
     for (unsigned i = 0; i < g_ncalls && i < MAX_CALLS; i++)
-        if (g_calls[i].addr == ROM_ISR_PAR_READY || g_calls[i].addr == ROM_CMD_RUN_DUE)
+        if (g_calls[i].addr == ROM_ISR_PAR_READY || g_calls[i].addr == ROM_CMD_RUN_NEXT)
             CHECK_EQ(g_calls[i].budget, FW_ROM_CALL_BUDGET);
 }
 
 /* the spoken name of c: the output of the first rule of its list */
 static const char *name_of(uint8_t c) { return tn_char_lists[c]->rules[0].output; }
 
+static void test_no_commands_queued(void)
+{
+    setup("Ab c");                              /* cmd_count = 0, though cmd_next_pos = 0 matches */
+    tn_convert_clause(&g_f);
+    CHECK_EQ(count(ROM_CMD_RUN_NEXT), 0);
+    CHECK_EQ(g_ram[CMD_NEXT], 0);
+    CHECK_EQ(fw_rd16(&g_f, CMD_VECTOR), 0);
+    CHECK(!g_f.fault);
+}
+
 static void test_phonetic_mode(void)
 {
     setup("Ab c");
     g_ram[CMD_PHONETIC] = 1;
     g_ram[CMD_EV_COUNT] = 9;
+    for (uint8_t n = 0; n < 5; n++)
+        queue(n, n);                            /* one command due at each position 0-4 */
     tn_convert_clause(&g_f);
     CHECK_EQ(g_ram[TN_PHON_LEN], 4);
     CHECK(memcmp(g_ram + TN_PHONETIC, "Ab c", 4) == 0);
     CHECK_EQ(g_ram[TN_POS], 4);
     CHECK_EQ(g_ram[CMD_EV_COUNT], 0);
     CHECK_EQ(count(ROM_ISR_PAR_READY), 4);
-    /* tn_key_pos lags in phonetic mode: cmd_run_due runs at 0, then at k-1 and k for each later k; and there is
-       no final call */
-    static const uint8_t want_x[] = { 0, 0, 1, 1, 2, 2, 3 };
-    CHECK_EQ(count(ROM_CMD_RUN_DUE), 7);
+    /* each command runs before its character is copied, with X = its position; the one due at the clause end
+       never runs, because phonetic mode has no final cmd_run_due */
+    CHECK_EQ(count(ROM_CMD_RUN_NEXT), 4);
     unsigned k = 0;
-    for (unsigned i = 0; i < g_ncalls && i < MAX_CALLS; i++)
-        if (g_calls[i].addr == ROM_CMD_RUN_DUE && k < 7)
-            CHECK_EQ(g_calls[i].x, want_x[k++]);
+    for (unsigned i = 0; i < g_ncalls && i < MAX_CALLS; i++) {
+        if (g_calls[i].addr != ROM_CMD_RUN_NEXT || k >= 4)
+            continue;
+        CHECK_EQ(g_calls[i].x, k);
+        CHECK_EQ(g_calls[i].y, k);              /* Y = cmd_next */
+        CHECK_EQ(g_calls[i].phon_len, k);
+        k++;
+    }
+    CHECK_EQ(g_ram[CMD_NEXT], 4);
     check_helper_budgets();
     CHECK(!g_f.fault);
 }
@@ -101,14 +141,21 @@ static void test_copy_and_final_run_due(void)
 {
     setup(".");
     g_ram[FW_TMP_75] = 0xAA;                    /* the copy must overwrite it with X = 0 */
+    queue(0, 0);
+    queue(1, 1);                                /* due at the clause end */
     tn_convert_clause(&g_f);
     CHECK_EQ(g_ram[TN_PHON_LEN], 1);
     CHECK_EQ(g_ram[TN_PHONETIC], '.');
     CHECK_EQ(g_ram[FW_TMP_75], 0);              /* X saved around the copy */
     CHECK_EQ(g_ram[TN_POS], 1);
-    CHECK_EQ(count(ROM_CMD_RUN_DUE), 2);        /* at 0, then once more at the clause end */
-    CHECK_EQ(g_calls[g_ncalls - 1].addr, ROM_CMD_RUN_DUE);
+    CHECK_EQ(count(ROM_CMD_RUN_NEXT), 2);
+    CHECK_EQ(g_calls[1].addr, ROM_CMD_RUN_NEXT);   /* after isr_par_ready, before the copy */
+    CHECK_EQ(g_calls[1].x, 0);
+    CHECK_EQ(g_calls[1].phon_len, 0);
+    CHECK_EQ(g_calls[g_ncalls - 1].addr, ROM_CMD_RUN_NEXT);   /* the final cmd_run_due, after the copy */
     CHECK_EQ(g_calls[g_ncalls - 1].x, 1);
+    CHECK_EQ(g_calls[g_ncalls - 1].y, 1);
+    CHECK_EQ(g_calls[g_ncalls - 1].phon_len, 1);
     check_helper_budgets();
     CHECK(!g_f.fault);
 }
@@ -239,6 +286,7 @@ void suite_fw_tn(void)
     test_append_voice_on();
     test_append_voice_off();
     test_append_empty();
+    test_no_commands_queued();
     test_phonetic_mode();
     test_copy_and_final_run_due();
     test_punct_spoken();

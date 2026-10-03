@@ -1,4 +1,5 @@
 #include "tn_convert.h"
+#include "cmd_run.h"
 #include "lts.h"
 #include "tn_rules.h"
 #include "data/fw_data.h"
@@ -6,7 +7,7 @@
 static uint8_t char_class(fw *f, uint8_t c) { return fw_rom8(f, (uint16_t)(LTS_CHAR_CLASS + c)); }
 static uint8_t text_at(const fw *f, uint8_t x) { return fw_rd8(f, (uint16_t)(CMD_TEXT + x)); }
 
-/* A ROM helper that reads only X (isr_par_ready, cmd_run_due); returns the X it leaves. */
+/* A ROM helper that reads only X (isr_par_ready); returns the X it leaves. */
 static uint8_t rom_call_x(fw *f, uint16_t addr, uint8_t x)
 {
     fw_regs r = { 0, x, 0, 0 };
@@ -37,7 +38,8 @@ void tn_convert_clause(fw *f)
             if (fw_rd8(f, TN_PHON_LEN) >= TN_PHONETIC_FLUSH)
                 break;                                          /* nearly full: speak it now */
             for (;;) {                                          /* $B20A: the deferred commands up to tn_pos */
-                x = rom_call_x(f, ROM_CMD_RUN_DUE, fw_rd8(f, TN_KEY_POS));
+                x = fw_rd8(f, TN_KEY_POS);
+                cmd_run_due(f, x);                              /* X kept: every handler ends at cmd_run_done */
                 if (x >= fw_rd8(f, TN_POS))
                     break;
                 fw_wr8(f, TN_KEY_POS, (uint8_t)(fw_rd8(f, TN_KEY_POS) + 1));
@@ -98,7 +100,7 @@ void tn_convert_clause(fw *f)
             }
             fw_wr8(f, TN_POS, ++x);                             /* $B297 */
             if (x >= fw_rd8(f, BOOT_CLAUSE_LEN)) {
-                rom_call_x(f, ROM_CMD_RUN_DUE, x);
+                cmd_run_due(f, x);
                 return;
             }
         }

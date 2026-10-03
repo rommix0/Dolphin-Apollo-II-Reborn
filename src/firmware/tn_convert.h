@@ -5,7 +5,6 @@
 
 /* Routines still in ROM that tn_convert_clause calls */
 #define ROM_ISR_PAR_READY       0xC5D6   /* parallel mode: ready for the next host byte; A, X, Y preserved */
-#define ROM_CMD_RUN_DUE         0xA880   /* X = a clause position: run the deferred commands due there; X kept */
 #define ROM_PROS_MAKE_SEGMENTS  0xCA92   /* prosody of tn_phonetic */
 #define ROM_BOOT_LOOP_PLAY      0xA7D4   /* play the utterance */
 #define TN_PHONETIC_FLUSH       0xFA     /* tn_phon_len at which tn_phonetic is spoken mid-clause */

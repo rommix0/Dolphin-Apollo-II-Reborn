@@ -62,7 +62,7 @@ static hybrid_stats check(const uint8_t *rom, size_t len, const char *only, cons
    C call chain unwinds (M4.2 spec 5.3). */
 static bool runs_c_dispatch(const char *only)
 {
-    return !only || !strcmp(only, "tn_convert_clause");
+    return !only || !strcmp(only, "tn_convert_clause") || !strcmp(only, "cmd_run_due");
 }
 
 /* The whole corpus in one mode. Matching the goldens proves nothing if no C ever ran, so the mode must have run

@@ -5,6 +5,7 @@
 #include "firmware/tn_convert.h"
 #include "firmware/cmd_match.h"
 #include "firmware/cmd_scan.h"
+#include "firmware/cmd_run.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -90,6 +91,17 @@ static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
     }
     machine_return(m);
     return true;
+}
+
+/* cmd_run_due $A880: X in. X out unchanged (every handler ends at cmd_run_done's PLA/TAX). Y out = cmd_next,
+   as its last LDY leaves it. The only ROM caller, tn_convert_clause, reads X after it ($B20F CPX tn_pos, then
+   LDA $1A00,X) and writes Y before reading it; Y is declared because the ROM leaves it defined. */
+static void cmd_run_due_regs(fw *f, cpu740 *c)
+{
+    uint8_t x = c->x;
+    cmd_run_due(f, x);
+    c->x = x;
+    c->y = fw_rd8(f, CMD_NEXT);
 }
 
 /* cmd_scan_clause $ACFA: no register input or output (boot_loop_text calls tn_convert_clause next, which starts
@@ -206,6 +218,7 @@ static void cmd_hex_value_regs(fw *f, cpu740 *c)
 /* The hook of each routine: its register mapping run in the shared thunk frame, user = the bound fw_bridge. */
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
+THUNK(cmd_run_due)
 THUNK(cmd_scan_clause)
 THUNK(cmd_match_table)
 THUNK(lts_affix_next)
@@ -223,6 +236,7 @@ THUNK(cmd_hex_value)
 #undef THUNK
 
 const fw_replacement fw_replacements[] = {
+    { "cmd_run_due",        0xA880, FW_OUT_X | FW_OUT_Y, t_cmd_run_due },
     { "cmd_scan_clause",    0xACFA, 0,                   t_cmd_scan_clause },
     { "cmd_match_table",    0xADBF, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_match_table },
     { "lts_affix_next",     0xAF11, FW_OUT_A | FW_OUT_Y, t_lts_affix_next },
