@@ -26,6 +26,14 @@ typedef struct { const char *name; uint16_t addr; const char *const *entries; ui
    ROM keeps after the counted text (a CR, or nothing). size: the annotated bytes in all. */
 typedef struct { const char *name; uint16_t addr, size; const char *text, *tail; } fw_phonetic_text;
 
+/* A command pattern record (M4.2 spec 4): the pattern (* any character, # a digit, both matched on the case-mapped
+   text), its 0 end, then the handler's ROM address (cmd_addr.h), low byte first. */
+typedef struct { const char *pattern; uint16_t handler; } fw_cmd_pattern;
+/* A cmd_query_table entry: a setting letter and the zero-page address of the setting (fw_ram.h). */
+typedef struct { char letter; uint8_t setting; } fw_cmd_query;
+/* A fold of cmd_case_map: the codes first..last map to `to`, or with shift each code c to to + (c - first). */
+typedef struct { uint8_t first, last, to; bool shift; } fw_case_fold;
+
 /* Pinned addresses (ghidra740/annotations: text_norm.txt, lts.txt) */
 #define TN_CHAR_RULES_LO   0x4000   /* low byte of each character's list address */
 #define TN_CHAR_RULES_HI   0x4100
@@ -36,6 +44,21 @@ typedef struct { const char *name; uint16_t addr, size; const char *text, *tail;
 #define LTS_SIBILANTS      0x9861
 #define LTS_AT_CONSONANTS  0x9884
 #define LTS_CHAR_CLASS     0x9AB4
+
+/* Pinned addresses of the command data (ghidra740/annotations: command.txt, params.txt; M4.2 spec 4) */
+#define CMD_IMM_PATTERNS    0x989C   /* the immediate pattern records, then their $FF end */
+#define CMD_IMM_TABLE       0x98A7   /* ptr[3]: each immediate record, then the end */
+#define CMD_PATTERNS        0x98AD   /* the deferred pattern records, then their $FF end */
+#define CMD_TABLE           0x994F   /* ptr[32]: the records in match order, then the end */
+#define CMD_QUERY_TABLE     0x998F   /* 18 x (letter, zero-page setting), then 0 */
+#define CMD_CASE_MAP        0x99B4   /* byte[256] */
+#define CMD_SPEED_MAPS      0xC87B   /* ptr[10], indexed by speed - 1 */
+#define CMD_SPEED_LIMITS    0xC88F   /* byte[9], indexed by speed - 1 */
+#define CMD_SPEED_MAP_DATA  0xC898   /* not converted (prosody's, M4.3): cmd_speed_maps point into it */
+#define PAR_VOICE_A_COUNT   0xD469   /* byte: the phoneme count heading the voice A table (M4.4) */
+#define PAR_VOICE_B_COUNT   0xE5E2   /* byte: the same for voice B */
+#define PAR_VOICE_A         0xD46A   /* the M4.4 voice A table, not converted; the C writes only its address */
+#define PAR_VOICE_B         0xE5E3   /* the M4.4 voice B table, not converted; the C writes only its address */
 
 /* lts_char_class bits */
 #define CC_LETTER       0x80   /* also the apostrophe and the underscore */
@@ -70,6 +93,17 @@ extern const size_t fw_affix_list_count;
 extern const fw_phonetic_text fw_phonetic_texts[];
 extern const size_t fw_phonetic_text_count;
 extern const uint8_t lts_char_class[256];
+extern const fw_cmd_pattern fw_cmd_imm_patterns[], fw_cmd_patterns[];
+extern const size_t fw_cmd_imm_pattern_count, fw_cmd_pattern_count;
+extern const uint8_t fw_cmd_table[];   /* cmd_table in match order, as indices into fw_cmd_patterns */
+extern const size_t fw_cmd_table_count;
+extern const fw_cmd_query fw_cmd_query_table[];
+extern const size_t fw_cmd_query_count;
+extern const fw_case_fold fw_cmd_case_folds[];
+extern const size_t fw_cmd_case_fold_count;
+extern const uint16_t fw_cmd_speed_maps[10];
+extern const uint8_t fw_cmd_speed_limits[9];
+extern const uint8_t fw_par_voice_a_count, fw_par_voice_b_count;
 
 /* Encodes every table into img at its ROM address. False with a reason in err on any inconsistency. */
 bool fw_image_build(fw_image *img, char *err, size_t errlen);

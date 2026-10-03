@@ -92,6 +92,46 @@ static void put_word(enc *e, uint32_t at, uint16_t v)
     put(e, false, at + 1, (uint8_t)(v >> 8));
 }
 
+/* Command pattern records from at, then the $FF end; addr[i] = where record i landed. Returns the end's address. */
+static uint32_t put_cmd_patterns(enc *e, uint32_t at, const fw_cmd_pattern *p, size_t n, uint16_t *addr)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (!p[i].pattern[0] || (uint8_t)p[i].pattern[0] == 0xFF)
+            fail(e, "command pattern at $%04X is empty or starts with $FF", (unsigned)at);
+        addr[i] = (uint16_t)at;
+        at = put_text(e, false, at, p[i].pattern, false);
+        put(e, false, at++, 0x00);
+        put_word(e, at, p[i].handler);
+        at += 2;
+    }
+    put(e, false, at, 0xFF);
+    return at;
+}
+
+/* A pattern pointer table at at: the records in order (indices into addr; order NULL: each record once), then the
+   end's address. Returns the address after the table. */
+static uint32_t put_cmd_table(enc *e, uint32_t at, const uint16_t *addr, size_t n, const uint8_t *order,
+                              size_t entries, uint32_t end)
+{
+    for (size_t i = 0; i < entries; i++) {
+        size_t k = order ? order[i] : i;
+        if (k >= n) {
+            fail(e, "pointer table entry at $%04X names pattern %u of %u", (unsigned)at, (unsigned)k, (unsigned)n);
+            return at;
+        }
+        put_word(e, at, addr[k]);
+        at += 2;
+    }
+    put_word(e, at, (uint16_t)end);
+    return at + 2;
+}
+
+static void check_end(enc *e, const char *what, uint32_t at, uint32_t next)
+{
+    if (at != next)
+        fail(e, "%s ends at $%04X, the next table starts at $%04X", what, (unsigned)at, (unsigned)next);
+}
+
 bool fw_image_build(fw_image *img, char *err, size_t errlen)
 {
     static enc e;
@@ -163,6 +203,58 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
         at = put_text(&e, false, at, t->tail, false);
         if (at - t->addr != t->size)
             fail(&e, "%s: %u bytes, the annotation says %u", t->name, (unsigned)(at - t->addr), t->size);
+    }
+    /* 7. The command data (M4.2 spec 4): the pattern records with each table's $FF end and pointer table, the
+       query table, cmd_case_map, the speed tables and the two voice counts. Each block ends where the next
+       begins. */
+    {
+        uint16_t pat[64];
+        if (fw_cmd_imm_pattern_count > 64 || fw_cmd_pattern_count > 64) {
+            fail(&e, "more than 64 command patterns");
+            return false;
+        }
+        uint32_t end = put_cmd_patterns(&e, CMD_IMM_PATTERNS, fw_cmd_imm_patterns, fw_cmd_imm_pattern_count, pat);
+        check_end(&e, "cmd_imm_patterns", end + 1, CMD_IMM_TABLE);
+        uint32_t at = put_cmd_table(&e, CMD_IMM_TABLE, pat, fw_cmd_imm_pattern_count, NULL,
+                                    fw_cmd_imm_pattern_count, end);
+        check_end(&e, "cmd_imm_table", at, CMD_PATTERNS);
+        end = put_cmd_patterns(&e, CMD_PATTERNS, fw_cmd_patterns, fw_cmd_pattern_count, pat);
+        check_end(&e, "fw_cmd_patterns", end + 1, CMD_TABLE);
+        at = put_cmd_table(&e, CMD_TABLE, pat, fw_cmd_pattern_count, fw_cmd_table, fw_cmd_table_count, end);
+        check_end(&e, "cmd_table", at, CMD_QUERY_TABLE);
+        at = CMD_QUERY_TABLE;
+        for (size_t i = 0; i < fw_cmd_query_count; i++) {
+            if (!fw_cmd_query_table[i].letter)
+                fail(&e, "cmd_query_table entry %u has letter 0", (unsigned)i);
+            put(&e, false, at++, (uint8_t)fw_cmd_query_table[i].letter);
+            put(&e, false, at++, fw_cmd_query_table[i].setting);
+        }
+        put(&e, false, at++, 0x00);
+        check_end(&e, "cmd_query_table", at, CMD_CASE_MAP);
+        uint8_t map[256];
+        bool folded[256] = { false };
+        for (int c = 0; c < 256; c++)
+            map[c] = (uint8_t)c;
+        for (size_t i = 0; i < fw_cmd_case_fold_count; i++) {
+            const fw_case_fold *f = &fw_cmd_case_folds[i];
+            if (f->first > f->last)
+                fail(&e, "case fold %u: first above last", (unsigned)i);
+            for (int c = f->first; c <= f->last; c++) {
+                int to = f->shift ? f->to + (c - f->first) : f->to;
+                if (to > 0xFF || to == c || folded[c])
+                    fail(&e, "case fold %u: $%02X folded twice, to itself or past $FF", (unsigned)i, (unsigned)c);
+                folded[c] = true;
+                map[c] = (uint8_t)to;
+            }
+        }
+        for (int c = 0; c < 256; c++)
+            put(&e, false, CMD_CASE_MAP + (uint32_t)c, map[c]);
+        for (int i = 0; i < 10; i++)
+            put_word(&e, CMD_SPEED_MAPS + 2u * (uint32_t)i, fw_cmd_speed_maps[i]);
+        for (int i = 0; i < 9; i++)
+            put(&e, false, CMD_SPEED_LIMITS + (uint32_t)i, fw_cmd_speed_limits[i]);
+        put(&e, false, PAR_VOICE_A_COUNT, fw_par_voice_a_count);
+        put(&e, false, PAR_VOICE_B_COUNT, fw_par_voice_b_count);
     }
     return e.ok;
 }

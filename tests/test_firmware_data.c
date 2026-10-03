@@ -6,8 +6,8 @@
 #include "firmware/data/fw_data.h"
 
 typedef struct { uint32_t from, to; } range;   /* [from, to) in CPU addresses */
-static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9804, 0x989C }, { 0x9AB4, 0x9BB4 }, { 0xACC7, 0xACE8 },
-                               { 0xF75B, 0xF77B } };
+static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9804, 0x9BB4 }, { 0xACC7, 0xACE8 }, { 0xC87B, 0xC898 },
+                               { 0xD469, 0xD46A }, { 0xE5E2, 0xE5E3 }, { 0xF75B, 0xF77B } };
 static const range k_low[] = { { 0x4010, 0x7832 } };
 
 static bool bit(const uint8_t *ok, uint32_t i) { return (ok[i >> 3] >> (i & 7)) & 1; }
@@ -52,6 +52,12 @@ static void test_counts(void)
     CHECK_EQ(rules, 3766);
     CHECK_EQ(fw_affix_list_count, 3);
     CHECK_EQ(fw_phonetic_text_count, 5);
+    CHECK_EQ(fw_cmd_imm_pattern_count, 2);
+    CHECK_EQ(fw_cmd_pattern_count, 30);
+    CHECK_EQ(fw_cmd_table_count, 31);   /* G# is listed twice */
+    CHECK_EQ(fw_cmd_table[27], fw_cmd_table[28]);
+    CHECK_EQ(fw_cmd_query_count, 18);
+    CHECK_EQ(fw_cmd_case_fold_count, 21);
 }
 
 static void test_against_rom(const fw_image *img, const uint8_t *rom)
@@ -72,7 +78,7 @@ static void test_against_rom(const fw_image *img, const uint8_t *rom)
             fprintf(stderr, "  LOW $%04X: converted %02X, ROM %02X\n", a, img->low[a - 0x4000], rom[a - 0x4000]);
     }
     printf("  %u converted bytes compared with the ROM, %u differ\n", compared, bad);
-    CHECK_EQ(compared, 35311);   /* M4.0's 35,214 plus the five phonetic texts (97 bytes) */
+    CHECK_EQ(compared, 35878);   /* M4.0's 35,214, M4.1's phonetic texts (97) and M4.2's command data (567) */
     CHECK_EQ(bad, 0);
 }
 

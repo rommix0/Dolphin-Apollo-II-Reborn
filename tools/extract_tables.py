@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """One-time converter (M4.0 spec 4.2): the ROM's character rules, letter-to-sound rules, affix lists and
-character classes -> readable C in src/firmware/data/. The output is a first draft: review it, annotate it by
-hand if useful, and commit it. Nothing runs this at build or test time; tests/test_firmware_data.c checks the
-committed C against the ROM.
-usage: python tools/extract_tables.py [--phonetic-only] [ROM]   (default $APOLLO2_ROM, else UK_V2.01_4.04_ROM.BIN)"""
+character classes, the phonetic texts (M4.1) and the command tables (M4.2) -> readable C in src/firmware/data/.
+The output is a first draft: review it, annotate it by hand if useful, and commit it. Nothing runs this at build
+or test time; tests/test_firmware_data.c checks the committed C against the ROM.
+usage: python tools/extract_tables.py [--phonetic-only | --command-only] [ROM]
+       (ROM: default $APOLLO2_ROM, else UK_V2.01_4.04_ROM.BIN)"""
 import os
 import sys
 
@@ -29,6 +30,23 @@ PHONETIC_TEXTS = [
     ("boot_baud_text_300", 0xACCA, 14), ("boot_baud_text_1200", 0xACD8, 16),
     ("cmd_version_lang_text", 0xF75B, 32),
 ]
+# The command data (M4.2 spec 4), as annotated in ghidra740/annotations/command.txt and params.txt
+CMD_IMM_PATTERNS, CMD_IMM_TABLE, CMD_PATTERNS, CMD_TABLE = 0x989C, 0x98A7, 0x98AD, 0x994F
+CMD_QUERY_TABLE, CMD_CASE_MAP = 0x998F, 0x99B4
+CMD_SPEED_MAPS, CMD_SPEED_LIMITS, CMD_SPEED_MAP_DATA = 0xC87B, 0xC88F, 0xC898
+PAR_VOICE_A_COUNT, PAR_VOICE_B_COUNT = 0xD469, 0xE5E2
+# The handlers of the pattern records, named as in src/firmware/cmd_addr.h
+CMD_HANDLERS = {
+    0xC483: "ROM_CMD_IMM_INDEX_ADD", 0xC495: "ROM_CMD_IMM_INDEX_QUERY",
+    0xA902: "ROM_CMD_SAY_VERSION", 0xABD3: "ROM_CMD_QUERY", 0xAB05: "ROM_CMD_SET_VOLUME",
+    0xA91F: "ROM_CMD_SET_PHRASE_PAUSE", 0xAB99: "ROM_CMD_ECHO", 0xAA24: "ROM_CMD_SET_PITCH",
+    0xAB4D: "ROM_CMD_SET_HYPER", 0xA99A: "ROM_CMD_SET_MARK_SPACE", 0xAAF5: "ROM_CMD_SET_PUNCT",
+    0xA98A: "ROM_CMD_SET_WORD_PAUSE", 0xA9DC: "ROM_CMD_SET_PROSODY", 0xAA4F: "ROM_CMD_SET_SPELL",
+    0xAA74: "ROM_CMD_SET_VOICE", 0xA9C9: "ROM_CMD_SET_SPEED", 0xAB9F: "ROM_CMD_SET_PHONETIC",
+    0xA92F: "ROM_CMD_SET_FORMANT", 0xAB5D: "ROM_CMD_SET_SOURCE", 0xAB70: "ROM_CMD_SET_VOICING",
+    0xAB2E: "ROM_CMD_MARK_INDEX", 0xA8C0: "ROM_CMD_SOUND", 0xABAF: "ROM_BANK_CMD_SELECT",
+    0xABBE: "ROM_CMD_LIST_LANGUAGES", 0xAA61: "ROM_CMD_SET_SPEAKER", 0xABDC: "ROM_CMD_IGNORE",
+}
 CLASS_BITS = [(0x80, "CC_LETTER"), (0x40, "CC_VOWEL"), (0x20, "CC_FRONT_VOWEL"), (0x10, "CC_NASAL"),
               (0x08, "CC_VOICED"), (0x04, "CC_CONSONANT"), (0x02, "CC_HIGH"), (0x01, "CC_PUNCT")]
 HEADER = ("/* Converted from the Apollo 2 ROM by tools/extract_tables.py (M4.0 spec section 4), then reviewed.\n"
@@ -70,14 +88,167 @@ def write_phonetic_texts(rom):
     print("wrote phonetic_text_data.c in", OUT)
 
 
+def cchar(c):
+    """A code as a C character constant if it is printable ASCII, else in hex."""
+    if 0x20 <= c < 0x7F and chr(c) not in "'\\":
+        return "'%s'" % chr(c)
+    return "0x%02X" % c
+
+
+def zero_page_names():
+    """Address -> name of the zero-page variables, from src/firmware/fw_ram.h."""
+    names = {}
+    with open(os.path.join("src", "firmware", "fw_ram.h"), encoding="utf-8") as f:
+        for line in f:
+            p = line.split()
+            if len(p) >= 3 and p[0] == "#define" and p[2].startswith("0x") and int(p[2], 16) < 0x100:
+                names[int(p[2], 16)] = p[1]
+    return names
+
+
+def write_command_data(rom):
+    """src/firmware/data/cmd_data.c: the command parser's tables (M4.2 spec 4). The pattern records are kept;
+    the $FF ends, the pointer tables and the query table's 0 end are left to the encoder."""
+    def word(a):
+        return rom[a] | rom[a + 1] << 8
+
+    def records(at):
+        """The pattern records from at to the $FF end: [(address, pattern, handler)], and the end's address."""
+        recs = []
+        while rom[at] != 0xFF:
+            n = rom.index(0, at) - at
+            assert n > 0, "empty pattern at $%04X" % at
+            recs.append((at, rom[at:at + n], word(at + n + 1)))
+            at += n + 3
+        return recs, at
+
+    def pointers(at, recs, end):
+        """The pointer table at at, up to the pointer to end: indices into recs, and the address after it."""
+        starts, order = [a for a, _, _ in recs], []
+        while word(at) != end:
+            assert word(at) in starts, "pointer at $%04X is no pattern record" % at
+            order.append(starts.index(word(at)))
+            at += 2
+        return order, at + 2
+
+    def emit_records(lines, name, recs):
+        lines.append("const fw_cmd_pattern %s[] = {" % name)
+        for i, (a, pat, h) in enumerate(recs):
+            assert h in CMD_HANDLERS, "pattern at $%04X: handler $%04X has no name" % (a, h)
+            entry = "    { %s, %s }," % (cstr(pat), CMD_HANDLERS[h])
+            lines.append(entry.ljust(48) + "/* %2d: $%04X */" % (i, a))
+        lines.append("};")
+        lines.append("const size_t %s_count = sizeof %s / sizeof %s[0];" % (name[:-1], name, name))
+        lines.append("")
+
+    head = HEADER.replace("M4.0 spec section 4", "M4.2 spec section 4")
+    lines = [head.replace('#include "fw_data.h"\n', '#include "fw_data.h"\n#include "../cmd_addr.h"\n').rstrip("\n")
+             + "\n"]
+    imm, end = records(CMD_IMM_PATTERNS)
+    order, at = pointers(CMD_IMM_TABLE, imm, end)
+    assert end + 1 == CMD_IMM_TABLE and order == list(range(len(imm))) and at == CMD_PATTERNS, "cmd_imm_table"
+    lines += ["/* cmd_imm_patterns ($%04X): the immediate commands, matched at interrupt level by cmd_imm_match."
+              % CMD_IMM_PATTERNS,
+              "   The encoder writes the $FF end, then cmd_imm_table ($%04X): each record's address, then the"
+              % CMD_IMM_TABLE,
+              "   end's. */"]
+    emit_records(lines, "fw_cmd_imm_patterns", imm)
+
+    recs, end = records(CMD_PATTERNS)
+    order, at = pointers(CMD_TABLE, recs, end)
+    assert end + 1 == CMD_TABLE and at == CMD_QUERY_TABLE, "cmd_table"
+    lines += ["/* The deferred command patterns ($%04X), in ROM order: * matches any character, # a digit, both on"
+              % CMD_PATTERNS,
+              "   the case-mapped text. A record is the pattern, its 0 end and its handler; the encoder writes the",
+              "   $FF end after the last. */"]
+    emit_records(lines, "fw_cmd_patterns", recs)
+    lines += ["/* cmd_table ($%04X): the patterns in match order (first match wins), as indices into" % CMD_TABLE,
+              "   fw_cmd_patterns. The encoder writes each record's address, then the address of the $FF end. */",
+              "const uint8_t fw_cmd_table[] = {"]
+    seen = set()
+    for i, k in enumerate(order):
+        again = " again: the ROM lists this record twice" if k in seen else ""
+        seen.add(k)
+        lines.append(("    %d," % k).ljust(10) + "/* %2d: \"%s\"%s */" % (i, recs[k][1].decode("ascii"), again))
+    lines += ["};", "const size_t fw_cmd_table_count = sizeof fw_cmd_table / sizeof fw_cmd_table[0];", ""]
+
+    zp, at, query = zero_page_names(), CMD_QUERY_TABLE, []
+    while rom[at]:
+        assert rom[at + 1] in zp, "cmd_query_table at $%04X: no RAM name for $%02X" % (at, rom[at + 1])
+        query.append((rom[at], zp[rom[at + 1]]))
+        at += 2
+    assert at + 1 == CMD_CASE_MAP, "cmd_query_table"
+    lines += ["/* cmd_query_table ($%04X): the settings a @c? query reports, as the letter and the zero-page"
+              % CMD_QUERY_TABLE,
+              "   setting. The encoder writes the 0 end. */",
+              "const fw_cmd_query fw_cmd_query_table[] = {"]
+    lines += ["    { %s, %s }," % (cchar(letter), name) for letter, name in query]
+    lines += ["};", "const size_t fw_cmd_query_count = sizeof fw_cmd_query_table / sizeof fw_cmd_query_table[0];", ""]
+
+    cmap, folds, c = rom[CMD_CASE_MAP:CMD_CASE_MAP + 256], [], 0
+    while c < 256:
+        if cmap[c] == c:
+            c += 1
+            continue
+        shift = c < 255 and cmap[c + 1] == cmap[c] + 1 and cmap[c + 1] != c + 1
+        last = c
+        while last < 255 and cmap[last + 1] != last + 1 and \
+                cmap[last + 1] == (cmap[c] + last + 1 - c if shift else cmap[c]):
+            last += 1
+        folds.append((c, last, cmap[c], shift))
+        c = last + 1
+    lines += ["/* cmd_case_map ($%04X): the identity, except these folds { first, last, to, shift }: the codes"
+              % CMD_CASE_MAP,
+              "   first..last map to to, or with shift each code c to to + (c - first). The encoder writes all",
+              "   256 codes. */",
+              "const fw_case_fold fw_cmd_case_folds[] = {"]
+    for first, last, to, shift in folds:
+        span = "$%02X" % first if first == last else "$%02X-$%02X" % (first, last)
+        dest = "$%02X-$%02X" % (to, to + last - first) if shift else "space" if to == 0x20 else "$%02X" % to
+        entry = "    { %s, %s, %s, %s }," % (cchar(first), cchar(last), cchar(to), "true" if shift else "false")
+        lines.append(entry.ljust(40) + "/* %s to %s */" % (span, dest))
+    lines += ["};", "const size_t fw_cmd_case_fold_count = sizeof fw_cmd_case_folds / sizeof fw_cmd_case_folds[0];",
+              ""]
+
+    assert CMD_SPEED_MAPS + 20 == CMD_SPEED_LIMITS and CMD_SPEED_LIMITS + 9 == CMD_SPEED_MAP_DATA
+    maps = [(word(CMD_SPEED_MAPS + 2 * i) - CMD_SPEED_MAP_DATA) // 32 for i in range(10)]
+    assert all(word(CMD_SPEED_MAPS + 2 * i) == CMD_SPEED_MAP_DATA + 32 * k and 0 <= k < 9
+               for i, k in enumerate(maps)), "cmd_speed_maps"
+    lines += ["/* cmd_speed_maps ($%04X): per speed 1-9 (indexed by speed - 1) its 32-byte duration map in"
+              % CMD_SPEED_MAPS,
+              "   cmd_speed_map_data, which is prosody's (M4.3) and not converted here */",
+              "const uint16_t fw_cmd_speed_maps[10] = {"]
+    for i, k in enumerate(maps):
+        note = "speed %d" % (i + 1) if k == i else "entry %d repeats entry %d" % (i + 1, k + 1)
+        lines.append(("    CMD_SPEED_MAP_DATA + 32 * %d," % k).ljust(36) + "/* %s */" % note)
+    lines += ["};",
+              "/* cmd_speed_limits ($%04X): per speed 1-9 the value cmd_apply_speed puts in cmd_speed_limit */"
+              % CMD_SPEED_LIMITS,
+              "const uint8_t fw_cmd_speed_limits[9] = { %s };"
+              % ", ".join(str(v) for v in rom[CMD_SPEED_LIMITS:CMD_SPEED_LIMITS + 9]),
+              "",
+              "/* par_voice_a_count ($%04X), par_voice_b_count ($%04X): the phoneme counts at the head of the"
+              % (PAR_VOICE_A_COUNT, PAR_VOICE_B_COUNT),
+              "   voice tables (M4.4), read by cmd_select_voice_a and cmd_select_voice_b */",
+              "const uint8_t fw_par_voice_a_count = %d, fw_par_voice_b_count = %d;"
+              % (rom[PAR_VOICE_A_COUNT], rom[PAR_VOICE_B_COUNT])]
+    with open(os.path.join(OUT, "cmd_data.c"), "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    print("wrote cmd_data.c in", OUT)
+
+
 def main():
-    args = [a for a in sys.argv[1:] if a != "--phonetic-only"]
+    args = [a for a in sys.argv[1:] if a not in ("--phonetic-only", "--command-only")]
     path = args[0] if args else os.environ.get("APOLLO2_ROM", "UK_V2.01_4.04_ROM.BIN")
     rom = open(path, "rb").read()
     assert len(rom) == 0x10000, "need the 64 KB ROM"
+    if "--command-only" in sys.argv:   # M4.2: leave the reviewed M4.0 and M4.1 files alone
+        write_command_data(rom)
+        return
     write_phonetic_texts(rom)
     if "--phonetic-only" in sys.argv:   # M4.1: leave the reviewed M4.0 tables alone
         return
+    write_command_data(rom)
 
     def rd(a, low):
         return rom[a - 0x4000] if low else rom[a]
