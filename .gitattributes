@@ -2,3 +2,4 @@
 *.bat text eol=crlf
 ghidra740/annotations/*.txt text eol=lf
 ghidra740/coverage/* text eol=lf
+*.dat binary
