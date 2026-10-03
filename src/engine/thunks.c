@@ -7,6 +7,7 @@
 #include "firmware/cmd_scan.h"
 #include "firmware/cmd_run.h"
 #include "firmware/cmd_apply.h"
+#include "firmware/pros_seg.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -228,6 +229,53 @@ static void cmd_hex_value_regs(fw *f, cpu740 *c)
     c->p = (uint8_t)(v == 0 ? c->p | CPU740_Z : c->p & ~CPU740_Z);
 }
 
+/* ph_append_phrase_pause $C9B8: no register input; A, X and Y out as they came in (PHA / TYA / PHA, then the exit
+   JMP $CA6D into pros_append_segment's PLA / TAY / PLA / RTS; X untouched). The C makes no ROM call, so the thunk
+   leaves all three as they are. The only caller, pros_phrase_gen ($D1DA, $D1DD), calls it twice in a row (the
+   second call pushes the first's A and Y again), then LDA #0 at $D1E0; X and Y then reach isr_par_ready at $D155
+   through JMP $D152 ($D209, $D30F). No caller reads a flag. Declared: A, X, Y. */
+static void ph_append_phrase_pause_regs(fw *f, cpu740 *c)
+{
+    (void)c;
+    ph_append_phrase_pause(f);
+}
+
+/* ph_append_pause $CA15: A in (the duration). A = $80 (its last LDA #$80), Y = the old pros_seg_count low byte
+   (its LDY), X untouched, out. pros_phrase_gen reads A: at the end of the text ($D190) the second JSR at $D193
+   takes the $80 the first leaves as its duration, and after a word pause ($D352) A goes on to isr_par_ready at
+   $D155 (LDM does not change A). Y and X leave pros_phrase_gen after the second end pause ($D196-$D1A1 change
+   neither) as its own Y and X outputs. No caller reads a flag (LDY $78, the next LDY, or LDA follows).
+   Declared: A, X, Y. */
+static void ph_append_pause_regs(fw *f, cpu740 *c)
+{
+    c->y = ph_append_pause(f, c->a);
+    c->a = PROS_SEG_FLAGS_GEN;
+}
+
+/* pros_append_segment $CA3B: A, X, Y in (to isr_par_ready); A, X, Y out as they came in (isr_par_ready preserves
+   them; the ROM pushes A and Y after it and pulls them at $CA6D). They are set back from the locals because the
+   ROM call from C overwrites the machine's registers. The only caller, pros_phrase_gen ($D3CC), loads A next
+   (LDA pros_sym_flag); on its BBC4 path to $D152 X and Y reach isr_par_ready at $D155, else LDY $78 reloads Y.
+   No caller reads a flag. Declared: A, X, Y. */
+static void pros_append_segment_regs(fw *f, cpu740 *c)
+{
+    uint8_t a = c->a, x = c->x, y = c->y;
+    pros_append_segment(f, a, x, y);
+    c->a = a;
+    c->x = x;
+    c->y = y;
+}
+
+/* pros_reset_seg_ptrs $CA71: A = $0E (its last LDA, the high byte of pros_seg_flags) out; X and Y untouched (no
+   ROM call in the C). pros_make_segments ($CAB0) calls pros_mark_stress next, whose first isr_par_ready ($CB1F)
+   gets this Y (X is written first, $CAEC TAX); par_play_start ($BAF5) loads A next, and pros_scale_target pushes
+   and restores X and Y. No caller reads a flag (LDA follows both calls). Declared: A, X, Y. */
+static void pros_reset_seg_ptrs_regs(fw *f, cpu740 *c)
+{
+    pros_reset_seg_ptrs(f);
+    c->a = (uint8_t)(PROS_SEG_FLAGS >> 8);
+}
+
 /* The hook of each routine: its register mapping run in the shared thunk frame, user = the bound fw_bridge. */
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
@@ -247,6 +295,10 @@ THUNK(tn_append_phonetic)
 THUNK(lts_convert_char)
 THUNK(tn_convert_clause)
 THUNK(cmd_hex_value)
+THUNK(ph_append_phrase_pause)
+THUNK(ph_append_pause)
+THUNK(pros_append_segment)
+THUNK(pros_reset_seg_ptrs)
 #undef THUNK
 
 const fw_replacement fw_replacements[] = {
@@ -266,6 +318,10 @@ const fw_replacement fw_replacements[] = {
     { "lts_convert_char",   0xB172, 0,                   t_lts_convert_char },
     { "tn_convert_clause",  0xB1E6, 0,                   t_tn_convert_clause },
     { "cmd_hex_value",      0xC520, FW_OUT_A | FW_OUT_X | FW_OUT_Y | FW_OUT_Z, t_cmd_hex_value },
+    { "ph_append_phrase_pause", 0xC9B8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_phrase_pause },
+    { "ph_append_pause",    0xCA15, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_pause },
+    { "pros_append_segment", 0xCA3B, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_append_segment },
+    { "pros_reset_seg_ptrs", 0xCA71, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_reset_seg_ptrs },
 };
 const size_t fw_replacement_count = sizeof fw_replacements / sizeof fw_replacements[0];
 
