@@ -5,7 +5,9 @@
 #include <string.h>
 #include "test.h"
 #include "engine/thunks.h"
+#include "firmware/ph_expand.h"
 #include "firmware/pros_addr.h"
+#include "firmware/pros_decl.h"
 #include "firmware/pros_seg.h"
 #include "firmware/tn_convert.h"
 #include "firmware/data/fw_data.h"
@@ -292,6 +294,143 @@ static void test_append_across_wrap(void)
     CHECK(!g_f.fault);
 }
 
+static void test_decl_rows(void)
+{
+    check_row("pros_declination", ROM_PROS_DECLINATION, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("pros_declination_step", ROM_PROS_DECLINATION_STEP, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("ph_lengthen_count", ROM_PH_LENGTHEN_COUNT, FW_OUT_A | FW_OUT_Y);
+}
+
+/* Below 31 the table at $D44A, whose entry 0 is the RTS opcode ($60) of ph_lengthen_count itself; from 31 on,
+   a >> 1 */
+static void test_lengthen_count(void)
+{
+    static const uint8_t steps[31] = { 0x60, 1, 2, 3, 4, 4, 5, 6, 6, 7, 7, 8, 9, 9, 9, 10,
+                                       10, 10, 11, 11, 12, 12, 12, 13, 13, 13, 13, 14, 14, 14, 15 };
+    setup();
+    for (unsigned a = 0; a < 31; a++)
+        CHECK_EQ(ph_lengthen_count(&g_f, (uint8_t)a), steps[a]);
+    CHECK_EQ(ph_lengthen_count(&g_f, 0), 96);    /* $D44A: a 96-step entry */
+    CHECK_EQ(ph_lengthen_count(&g_f, 31), 15);   /* $D442: LSR */
+    CHECK_EQ(ph_lengthen_count(&g_f, 32), 16);
+    CHECK_EQ(ph_lengthen_count(&g_f, 61), 30);
+    CHECK_EQ(ph_lengthen_count(&g_f, 0x80), 0x40);
+    CHECK_EQ(ph_lengthen_count(&g_f, 0xFF), 0x7F);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+/* setup(); pros_pos = pos with pros_sym_lengthen[pos] = len (and other counts either side), the baseline from
+   base to end, and stale pros_phrase_len and pros_decl_step. */
+static void decl_setup(uint8_t pos, uint8_t len, uint8_t base, uint8_t end)
+{
+    setup();
+    g_ram[PROS_POS] = pos;
+    g_ram[PROS_SYM_LENGTHEN + (uint8_t)(pos - 1)] = 0x7F;
+    g_ram[PROS_SYM_LENGTHEN + (uint8_t)(pos + 1)] = 0x7F;
+    g_ram[PROS_SYM_LENGTHEN + pos] = len;
+    g_ram[PROS_BASELINE] = base;
+    g_ram[PROS_BASELINE_END] = end;
+    g_ram[PROS_PHRASE_LEN] = 0x33;
+    g_ram[PROS_DECL_STEP] = 0x44;
+}
+
+/* Falling: (base - end) / len, bit 7 of the stored count masked off; the count is stored in pros_phrase_len */
+static void test_declination_falling(void)
+{
+    decl_setup(5, 0x8A, 0xC0, 0x40);          /* $80 / 10 = 12, remainder 8 */
+    CHECK_EQ(pros_declination(&g_f), 12);     /* the tail-branch: A = the step */
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 12);
+    CHECK_EQ(pros_declination_y(&g_f), 12);
+    CHECK_EQ(g_ram[PROS_PHRASE_LEN], 10);
+    CHECK_EQ(g_ram[PROS_BASELINE], 0xC0);     /* the baselines are only read */
+    CHECK_EQ(g_ram[PROS_BASELINE_END], 0x40);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 5], 0x8A);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+
+    decl_setup(200, 10, 120, 0);              /* an exact multiple counts its last subtraction (BCC, not BEQ) */
+    CHECK_EQ(pros_declination(&g_f), 12);
+    decl_setup(200, 10, 119, 0);
+    CHECK_EQ(pros_declination(&g_f), 11);
+    decl_setup(255, 9, 9, 0);                 /* pros_pos 255 reads $1FFF */
+    CHECK_EQ(pros_declination(&g_f), 1);
+    CHECK_EQ(g_ram[PROS_PHRASE_LEN], 9);
+}
+
+/* Level (BEQ): the step is 0, and pros_phrase_len is still stored */
+static void test_declination_level(void)
+{
+    decl_setup(3, 7, 0x80, 0x80);
+    CHECK_EQ(pros_declination(&g_f), 0);
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 0);
+    CHECK_EQ(pros_declination_y(&g_f), 0);
+    CHECK_EQ(g_ram[PROS_PHRASE_LEN], 7);
+    CHECK_EQ(g_ram[PROS_BASELINE], 0x80);
+    CHECK_EQ(g_ram[PROS_BASELINE_END], 0x80);
+}
+
+/* Rising: swap, the step of the swapped values, negate, swap back; A = the restored pros_baseline, Y = the step */
+static void test_declination_rising(void)
+{
+    decl_setup(5, 10, 0x40, 0xC0);
+    CHECK_EQ(pros_declination(&g_f), 0x40);   /* not the step */
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 0xF4);    /* 0 - 12 */
+    CHECK_EQ(pros_declination_y(&g_f), 12);
+    CHECK_EQ(g_ram[PROS_PHRASE_LEN], 10);
+    CHECK_EQ(g_ram[PROS_BASELINE], 0x40);
+    CHECK_EQ(g_ram[PROS_BASELINE_END], 0xC0);
+
+    decl_setup(5, 1, 0x00, 0xFF);             /* capped at 25 before the negation: 0 - 25 */
+    CHECK_EQ(pros_declination(&g_f), 0x00);
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 0xE7);
+    CHECK_EQ(pros_declination_y(&g_f), 25);
+
+    decl_setup(5, 0x81, 0x7F, 0x80);          /* rising by 1 */
+    CHECK_EQ(pros_declination(&g_f), 0x7F);
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 0xFF);
+    CHECK_EQ(pros_declination_y(&g_f), 1);
+}
+
+/* The cap at 25 (CPY #$19) and the counts either side of it */
+static void test_declination_cap(void)
+{
+    decl_setup(1, 1, 24, 0);
+    CHECK_EQ(pros_declination_step(&g_f), 24);
+    decl_setup(1, 1, 25, 0);
+    CHECK_EQ(pros_declination_step(&g_f), 25);
+    decl_setup(1, 1, 26, 0);
+    CHECK_EQ(pros_declination_step(&g_f), 25);
+    decl_setup(1, 1, 0xFF, 0);                /* 255 subtractions, Y = 255, then the cap */
+    CHECK_EQ(pros_declination_step(&g_f), 25);
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 25);
+}
+
+/* $D41A: a stored count of 0 (or $80) becomes 1, and the 1 is stored */
+static void test_declination_divisor_bump(void)
+{
+    decl_setup(9, 0x00, 20, 0);
+    CHECK_EQ(pros_declination_step(&g_f), 20);
+    CHECK_EQ(g_ram[PROS_PHRASE_LEN], 1);
+    decl_setup(9, 0x80, 20, 0);
+    CHECK_EQ(pros_declination(&g_f), 20);
+    CHECK_EQ(g_ram[PROS_PHRASE_LEN], 1);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 9], 0x80);   /* read, not written */
+}
+
+/* The step alone (the entry the tail-branch reaches): A = Y = pros_decl_step; the difference is 8 bits even when
+   pros_baseline_end is above pros_baseline (never so from pros_declination, which swaps first) */
+static void test_declination_step(void)
+{
+    decl_setup(2, 4, 0x10, 0x20);             /* $10 - $20 = $F0: 60 steps, capped */
+    CHECK_EQ(pros_declination_step(&g_f), 25);
+    CHECK_EQ(g_ram[PROS_BASELINE], 0x10);     /* the step never swaps */
+    CHECK_EQ(g_ram[PROS_BASELINE_END], 0x20);
+    decl_setup(2, 0x7F, 0xFE, 0x00);          /* $FE / $7F = 2 */
+    CHECK_EQ(pros_declination_step(&g_f), 2);
+    CHECK_EQ(g_ram[PROS_PHRASE_LEN], 0x7F);
+}
+
 void suite_fw_pros(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -305,4 +444,12 @@ void suite_fw_pros(void)
     test_phrase_pause_zero();
     test_phrase_pause_wrap();
     test_append_across_wrap();
+    test_decl_rows();
+    test_lengthen_count();
+    test_declination_falling();
+    test_declination_level();
+    test_declination_rising();
+    test_declination_cap();
+    test_declination_divisor_bump();
+    test_declination_step();
 }

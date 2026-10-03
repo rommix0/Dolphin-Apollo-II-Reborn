@@ -8,6 +8,8 @@
 #include "firmware/cmd_run.h"
 #include "firmware/cmd_apply.h"
 #include "firmware/pros_seg.h"
+#include "firmware/pros_decl.h"
+#include "firmware/ph_expand.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -276,6 +278,41 @@ static void pros_reset_seg_ptrs_regs(fw *f, cpu740 *c)
     c->a = (uint8_t)(PROS_SEG_FLAGS >> 8);
 }
 
+/* pros_declination $D3DD: no register input; A (the step, or the restored pros_baseline on the rising path),
+   X = pros_pos and Y = the step before its negation out. pros_mark_phrases ($D04D) loads A next and reloads X at
+   $CF23, but Y reaches isr_par_ready at $CF28 (or leaves pros_mark_phrases through $CEEC, which writes no Y); in
+   pros_phrase_gen ($D129) X and Y reach isr_par_ready at $D155. No caller reads a flag (LDA follows both calls).
+   Declared: A, X, Y. */
+static void pros_declination_regs(fw *f, cpu740 *c)
+{
+    c->a = pros_declination(f);
+    c->x = fw_rd8(f, PROS_POS);
+    c->y = pros_declination_y(f);
+}
+
+/* pros_declination_step $D40D: no register input; A = Y = pros_decl_step and X = pros_pos (its LDX) out. Reached
+   by the JSR at $D3F2 (pros_declination's rising path: its X and Y then leave pros_declination unchanged) and by
+   pros_declination's BCC / BEQ at $D3E3 / $D3E5. The hook is on the PC, so it also fires on that tail-branch: the
+   stack then holds pros_declination's return address, and the thunk's emulated RTS pops it as the ROM's RTS at
+   $D43D does, handing A, X and Y to pros_declination's caller. Declared: A, X, Y (pros_declination's outputs). */
+static void pros_declination_step_regs(fw *f, cpu740 *c)
+{
+    uint8_t step = pros_declination_step(f);
+    c->a = step;
+    c->x = fw_rd8(f, PROS_POS);
+    c->y = step;
+}
+
+/* ph_lengthen_count $D43E: A in; Y = A = the step count out, X untouched. The only caller, pros_phrase_gen ($D3A6),
+   loads A (LDA ph_dur_range) and counts Y down (DEY at $D3B0), writing X (TAX) before reading it; no flag is read.
+   Declared: A and Y (both defined as the count; Y is the one read). */
+static void ph_lengthen_count_regs(fw *f, cpu740 *c)
+{
+    uint8_t n = ph_lengthen_count(f, c->a);
+    c->a = n;
+    c->y = n;
+}
+
 /* The hook of each routine: its register mapping run in the shared thunk frame, user = the bound fw_bridge. */
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
@@ -299,6 +336,9 @@ THUNK(ph_append_phrase_pause)
 THUNK(ph_append_pause)
 THUNK(pros_append_segment)
 THUNK(pros_reset_seg_ptrs)
+THUNK(pros_declination)
+THUNK(pros_declination_step)
+THUNK(ph_lengthen_count)
 #undef THUNK
 
 const fw_replacement fw_replacements[] = {
@@ -322,6 +362,9 @@ const fw_replacement fw_replacements[] = {
     { "ph_append_pause",    0xCA15, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_pause },
     { "pros_append_segment", 0xCA3B, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_append_segment },
     { "pros_reset_seg_ptrs", 0xCA71, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_reset_seg_ptrs },
+    { "pros_declination",   0xD3DD, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_declination },
+    { "pros_declination_step", 0xD40D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_declination_step },
+    { "ph_lengthen_count",  0xD43E, FW_OUT_A | FW_OUT_Y, t_ph_lengthen_count },
 };
 const size_t fw_replacement_count = sizeof fw_replacements / sizeof fw_replacements[0];
 
