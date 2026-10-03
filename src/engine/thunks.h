@@ -1,7 +1,8 @@
 #ifndef ENGINE_THUNKS_H
 #define ENGINE_THUNKS_H
 /* The replacement table: ROM routines that run as C in the hybrid engine (M4.0 spec section 3.2). Each thunk
-   maps the routine's registers to its C function, emulates the RTS and takes no emulated time. */
+   maps the routine's registers to its C function, emulates the RTS. The C part takes 0 emulated cycles and cannot be interrupted; a ROM routine
+   it calls through rom_call runs normally, with its cycles and any interrupt that falls due. */
 #include "machine/machine.h"
 #include "firmware/fw.h"
 

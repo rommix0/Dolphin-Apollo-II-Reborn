@@ -101,12 +101,13 @@ static bool stuck_hook(machine *m, void *user)
 }
 
 /* A thunk that cannot finish stops the run: MFAULT_FIRMWARE with the address, the PC still at the hooked entry,
-   the bridge's trap restored. */
-static void check_stopped(const machine *m, const fw_bridge *b, uint16_t entry, uint16_t fault_addr)
+   the SP as it was on entry (a failed ROM call leaves the sentinel frame), the bridge's trap restored. */
+static void check_stopped(const machine *m, const fw_bridge *b, uint16_t entry, uint16_t fault_addr, uint8_t sp)
 {
     CHECK_EQ(m->fault, MFAULT_FIRMWARE);
     CHECK_EQ(m->fault_addr, fault_addr);
     CHECK_EQ(m->cpu.pc, entry);
+    CHECK_EQ(m->cpu.s, sp);
     CHECK(b->f.trap == NULL);
 }
 
@@ -125,8 +126,9 @@ static void test_thunk_faults(const uint8_t *rom, size_t len)
     fw_wr16(&b.f, LTS_AFFIX_PTR, 0x00E0);
     g_m.cpu.y = 0;
     g_m.cpu.pc = r->addr;
+    uint8_t sp = g_m.cpu.s;
     CHECK(r->thunk(&g_m, &b));
-    check_stopped(&g_m, &b, r->addr, 0x00E1);
+    check_stopped(&g_m, &b, r->addr, 0x00E1, sp);
 
     /* (2) a ROM call from the C that does not return */
     CHECK(machine_init(&g_m, rom, len, NULL));
@@ -138,8 +140,9 @@ static void test_thunk_faults(const uint8_t *rom, size_t len)
         return;
     g_m.cpu.a = 'a';
     g_m.cpu.pc = r->addr;
+    sp = g_m.cpu.s;
     CHECK(r->thunk(&g_m, &b));
-    check_stopped(&g_m, &b, r->addr, TN_APPEND_PHONETIC);
+    check_stopped(&g_m, &b, r->addr, TN_APPEND_PHONETIC, sp);
 
     /* (3) a thunk run on another machine than its bridge's: refused */
     CHECK(machine_init(&g_m, rom, len, NULL));
@@ -150,8 +153,9 @@ static void test_thunk_faults(const uint8_t *rom, size_t len)
     if (!r)
         return;
     g_other.cpu.pc = r->addr;
+    sp = g_other.cpu.s;
     CHECK(r->thunk(&g_other, &b));
-    check_stopped(&g_other, &b, r->addr, r->addr);
+    check_stopped(&g_other, &b, r->addr, r->addr, sp);
     CHECK_EQ(g_m.fault, MFAULT_NONE);
 }
 

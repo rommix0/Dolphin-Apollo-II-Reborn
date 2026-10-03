@@ -363,7 +363,7 @@ structural constants such as the `params.c` ranges and clamps and the `source.c`
    - C can call routines that are still in ROM via `rom_call(addr)`.
    - The default porting order is leaf-first. Top-down is allowed where it is clearer.
 
-   *(rev 7)* Built in M4.0: machine_hook (fires only on main-ROM addresses, zero emulated time, no interrupt inside), machine_rom_call (C calling ROM; a routine that does not return within 10 M cycles is a fault), and per-routine thunks that set only the outputs the callers use. A C fault (a read outside the converted data) stops the run as MFAULT_FIRMWARE.
+   *(rev 7)* Built in M4.0: machine_hook (fires only on main-ROM addresses; the C part of a thunk takes 0 emulated cycles and cannot be interrupted, while a ROM routine it calls through rom_call runs normally, with its cycles and any interrupt that falls due), machine_rom_call (C calling ROM; a routine that does not return within 10 M cycles is a fault), and per-routine thunks that set only the outputs the callers use. A C fault (a read outside the converted data) stops the run as MFAULT_FIRMWARE.
 4. **Special cases:**
    - The RAM-resident bank code becomes plain C.
    - In native mode, the ISR double buffer becomes a direct frame sink: the

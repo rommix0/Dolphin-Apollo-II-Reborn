@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "machine/machine.h"
-/* Returns the 64 KB Apollo ROM (APOLLO2_ROM or ./UK_V2.01_4.04_ROM.BIN), or NULL if missing. */
+/* Returns the 64 KB Apollo ROM (APOLLO2_ROM or ./UK_V2.01_4.04_ROM.BIN), or NULL if missing or if it is not the UK V2.01 4.04 image (MD5). */
 const uint8_t *test_rom(size_t *len);
 /* Prints every logged unmodelled access of m to stderr (one line each). */
 void print_unmodelled(const machine *m);

@@ -61,6 +61,7 @@ static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
     }
     b->thunk_calls++;
     uint16_t entry = m->cpu.pc;
+    uint8_t entry_sp = m->cpu.s;
     jmp_buf trap, *saved = b->f.trap;
     b->f.trap = &trap;
     b->f.low_window = window_on(m);
@@ -72,7 +73,8 @@ static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
             m->fault = MFAULT_FIRMWARE;
             m->fault_addr = b->f.fault_addr;
         }
-        m->cpu.pc = entry;   /* a failed ROM call leaves the PC inside the called routine */
+        m->cpu.pc = entry;   /* a failed ROM call leaves the PC inside the called routine and SP on its sentinel frame */
+        m->cpu.s = entry_sp;
         return true;
     }
     machine_return(m);

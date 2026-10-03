@@ -1,7 +1,7 @@
 # M4.0 — Replacement foundation and letter-to-sound pilot — Design
 
 **Status:** implemented 2026-10-03 (plan docs/superpowers/plans/2026-10-03-m4-0-replacement-foundation.md)
-**Parent spec:** `docs/superpowers/specs/2026-09-30-software-apollo2-design.md` (rev 6): §3 architecture, §6 steps 3–6, §7.1, §8 milestone 4.
+**Parent spec:** `docs/superpowers/specs/2026-09-30-software-apollo2-design.md` (rev 7): §3 architecture, §6 steps 3–6, §7.1, §8 milestone 4.
 **User decisions (2026-10-03):**
 - M4 is split into plans. M4.0 hardens the oracle, builds the replacement infrastructure and ports one pilot subsystem end to end. Each later subsystem gets its own short plan (M4.1, M4.2, …).
 - Tom Harte's 6502 SingleStepTests (MIT) are downloaded once. A sample is committed as a compact test file.
@@ -73,7 +73,7 @@ The other deferred M1 and M2 follow-ups stay deferred.
   2. calls the C function on the shared `fw` context;
   3. writes back the routine's declared outputs (registers and the flags callers branch on);
   4. emulates the RTS.
-- A thunk takes 0 emulated cycles, and no interrupt is taken inside it. The produced-frame stream does not depend on timing: the timer-scale tests already prove this (`hello` at 1/4 and 3/1), so this keeps R3.
+- The C part of a thunk takes 0 emulated cycles, and no interrupt is taken inside it. A ROM routine it calls (via `rom_call`, §3.3) runs normally, with its real cycles and any interrupt that falls due, exactly as the ROM original would at the same points; the hybrid engine does not hold IRQs. *(rev 7)* The produced-frame stream does not depend on timing: the timer-scale tests already prove this (`hello` at 1/4 and 3/1), so this keeps R3.
 - **Declared outputs.** Each routine's contract (inputs, outputs, flags, preserved registers) is taken from its Ghidra annotation. It is written as a comment above its thunk. Registers the annotation calls "destroyed" are left as the C produced them.
 
 ### 3.3 Calling ROM from C
@@ -200,6 +200,6 @@ Where the implementation differs from the text above:
 - `machine_clone` copies the ROM image rather than sharing it, and clears hooks, sinks and the IRQ hold.
 - A hook that returns true without moving the PC and without a fault stops the run as `MFAULT_FIRMWARE` (guard against a zero-cycle spin). On a firmware fault inside a thunk, the PC is restored to the hooked entry. `rom_engine_run` returns `MACHINE_FAULT` before booting if its setup callback set a fault (e.g. an unknown `--only` routine name).
 - Each hybrid run uses a fresh fw bridge (its fault flag is sticky); the bridge counts thunk executions and `golden_hybrid` asserts that every mode ran C.
-- Thunks take zero emulated cycles, so the produced frames equal the rom engine's but the raw DSP stream's timing under `--engine hybrid` can differ.
+- The C part of a thunk takes zero emulated cycles (a ROM routine it calls through `rom_call` runs with its real cycles and interrupts), so the produced frames equal the rom engine's but the raw DSP stream's timing under `--engine hybrid` can differ.
 - `diff_lts` also speaks a few extra non-corpus texts, a superset of "over the corpus".
 - Criterion 6's "no `fw_rom8` fault occurs in any test" means no unexpected fault in the differential and golden runs; `test_fw` and the thunk fault-path tests trigger faults on purpose.

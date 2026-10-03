@@ -135,6 +135,8 @@ void suite_diff_lts(void)
     if (!rom)
         SKIP("ROM not found (set APOLLO2_ROM)");
     CHECK(fw_replacement_count <= DIFF_MAX);
+    if (fw_replacement_count > DIFF_MAX)
+        return;   /* install would overflow g_obs */
     memset(g_checked, 0, sizeof g_checked);
     g_mismatches = 0;
     for (size_t c = 0; c < sizeof k_corpus / sizeof k_corpus[0]; c++) {

@@ -108,7 +108,10 @@ machine_status machine_run(machine *m, uint64_t max_cycles);
 bool machine_step(machine *m);
 /* Registers fn for the routine at addr. Before each instruction, when the PC is a hooked address that maps to
    the main ROM file under the current P2, the CPU is not waiting and no interrupt is about to be taken, fn
-   runs. False when the table is full or addr is already hooked. */
+   runs. False when the table is full or addr is already hooked.
+   Limitation: exec treats a hook that returns true with the PC still at the hooked entry as MFAULT_FIRMWARE
+   (zero-cycle spin guard). That would misfire if a JSR's return address were itself a hooked entry (the
+   "JSR x / x:" idiom); every M4.0 entry is preceded by an RTS, so it is not hit. */
 bool machine_hook(machine *m, uint16_t addr, machine_hook_fn fn, void *user);
 void machine_clear_hooks(machine *m);
 /* Pops a return address and continues after it, like RTS. */
@@ -118,7 +121,8 @@ void machine_hold_irqs(machine *m, bool hold);
 /* Calls the routine at addr with A/X/Y/P from regs, as if by JSR from MACHINE_ROM_CALL_SENTINEL, and steps
    until it returns there. Hooks, interrupts (unless held) and frame capture work normally. On success regs
    holds the exit registers, the PC is restored and the other registers keep their exit values. False on a
-   fault or when max_cycles pass first. */
+   fault or when max_cycles pass first. Precondition: it does not clear cpu.waiting, so it must not be called
+   while the CPU is waiting at WIT (hooks never fire then). */
 bool machine_rom_call(machine *m, uint16_t addr, machine_regs *regs, uint64_t max_cycles);
 /* Runs the routine the PC has just entered (by JSR) until the stack pointer rises above its value now, i.e.
    the routine returned, also two levels up. False on a fault or when max_cycles pass first. */
