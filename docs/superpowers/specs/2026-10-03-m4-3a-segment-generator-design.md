@@ -1,6 +1,6 @@
 # M4.3a — The segment generator in C (phoneme expansion and the phrase generator) — Design
 
-**Status:** design, awaiting user review
+**Status:** implemented (plan docs/superpowers/plans/2026-10-03-m4-3a-segment-generator.md)
 **Parent specs:**
 - `docs/superpowers/specs/2026-09-30-software-apollo2-design.md` (rev 9): §6 step 3, §8 milestone 4.
 - `docs/superpowers/specs/2026-10-03-m4-0-replacement-foundation-design.md`: hooks, thunks, `rom_call`, the data image and the tests (§3–§5, §8 "As built").
@@ -163,3 +163,46 @@ All 2,319 bytes, read by the decoder. `firmware_data` goes from 35,878 to **38,1
 - Everything at playback (M4.4): `par_*`, `pros_scale_target`, `pros_microprosody`, `cmd_run_event` and the `cmd_ev_*` handlers; `pros_pitch_code_dither` is dead code.
 - `isr_par_ready` (M4.6).
 - Raising `MACHINE_MAX_HOOKS`.
+
+## 6. As built
+
+Where the ROM is more precise than, or differs from, the sections above. The ROM wins; `ghidra740/` is not edited.
+
+- **The end of the utterance** (§2.2 says two 4-frame pauses): one pause of 4 frames, then one of 128 ($80) frames. `ph_append_pause` leaves A = $80 (its last `LDA #$80`, the segment flags), and the second `JSR` at $D193 takes that A as its duration (`pros_gen.c`, the end of `pros_phrase_gen`).
+- **The duration loops** (§2.7 and §4.4 say both run 256 steps for a count of $FF): only the shortening loop can, because its Y = (n + 1) / 2 = 0 goes straight into `DEY / BNE`. The lengthening count goes through `ph_lengthen_count`: a count of $FF gives a half-count of 0 and so entry 0 of `ph_lengthen_steps`, the `RTS` opcode $60, which is 96 steps. Entries 1–30 are 1–15 and a half-count of 31 or more gives half of it, so the lengthening loop never runs more than 96 steps (`append_triple` in `pros_gen.c`, `ph_expand.c`, the unit test `test_gen_duration_loops`: 256 steps shortening, 96 lengthening).
+- **`pros_phrase_gen`'s exit registers** (§2.3 says Y = the last list index): A = `pros_seg_count`'s low byte before the final `DEC`, X = `pros_pos` (= `tn_phon_len`), Y = the old `pros_seg_count` low byte that the second end pause's `LDY` leaves ($D196–$D1A1 change neither X nor Y). The C signature is `uint8_t pros_phrase_gen(fw *f, uint8_t *x, uint8_t *y)`, returning A.
+- **Thunk outputs as finally declared** (`src/engine/thunks.c`): A, X and Y for `ph_append_phrase_pause`, `ph_append_pause`, `pros_append_segment`, `pros_reset_seg_ptrs`, `pros_phrase_gen`, `pros_declination` and `pros_declination_step`; A and Y for `ph_lengthen_count`. §2.3 named A = $0E for `pros_reset_seg_ptrs`, A for `pros_declination_step` and the result in A for `ph_lengthen_count`. Why (no caller reads a flag):
+  - X and Y reach `isr_par_ready` at $D155 through `JMP $D152` after the phrase pauses, a segment, the declination and its step; Y also reaches it at $CF28 in `pros_mark_phrases` (after `pros_declination`) and at $CB1F in `pros_mark_stress` (after `pros_reset_seg_ptrs`, from `pros_make_segments`);
+  - `ph_append_pause`'s A is the second end pause's duration, and after a word pause it goes on to `isr_par_ready` (`LDM` does not change A);
+  - `ph_lengthen_count`'s Y is the loop count its caller reads (`DEY`); X is untouched, and the caller writes it (`TAX`) before reading it;
+  - `pros_phrase_gen`'s registers have no reader (its callers go on to `boot_loop_play`, which loads A from $6B), but they are defined, so they are declared.
+- **`pros_declination`'s registers** (§2.3 says A is the step or its negation): on the rising path A is the restored `pros_baseline` and Y the step before the negation (the negation is in RAM only); on a falling or level baseline A = Y = the step. X = `pros_pos` on every path. The C returns A only; the inline helper `pros_declination_y` in `pros_decl.h` recovers the Y from the RAM the routine leaves (`pros_baseline_end > pros_baseline` still marks the rising path, because the swaps restore both bytes). The thunk and `pros_phrase_gen`'s first `isr_par_ready` use it.
+- **`isr_par_ready` preserves A, X and Y** (§2.4 says A), which is why `pros_append_segment`'s thunk hands its entry registers back.
+- **The registers at `isr_par_ready` $D155** depend on how the loop reached $D152; the C tracks them as the ROM has them:
+  - the first time: A = $FF, X = `pros_pos` before its reset, Y = `pros_declination`'s Y;
+  - after punctuation: A = 0, Y = the symbol (the phrase pauses preserve A, X and Y);
+  - after a marker (class bit 7 clear): A = Y = `pros_class`;
+  - after a hypermode skip: A = `pros_func_word`, Y = `pros_class`;
+  - at a list's end byte: A = $FF (or 0 at the space's word-pause item with @Q0), Y = the list index;
+  - after a word pause: A = $80, X = `pros_pos`, Y = `$78`;
+  - after the closure of an unreleased stop: A = `pros_sym_flag`, Y = the speed-map index;
+  - after a triple, X is the index of the last `ph_dur_lengthen` lookup when the position has a lengthening count, else `pros_pos`. That X also goes to `pros_append_segment`'s `isr_par_ready`.
+- **Phrase pauses** (§2.7 says only that 0 becomes 1): punctuation appends two in a row ($D1DA, $D1DD) unless `cmd_phrase_pause` is 0. After `.` `?` `!` the pause is `cmd_phrase_pause` in full, unmasked; after `,` `;` `:` it is `(cmd_phrase_pause >> 1) & $0F`, after any other symbol `(cmd_phrase_pause >> 2) & $0F`. The 0 → 1 bump (`INC A` at $C9EC) applies on all three paths, so the mask can make 0 and 0 becomes 1 (`@D` $20 after `,` gives 1). Every pause, the word and end pauses included, also stores $3B into `ph_phoneme`; no pause writes `pros_last_target` or calls `isr_par_ready`.
+- **The declination step** (§2.7): `pros_phrase_len = pros_sym_lengthen[pros_pos] & $7F` is stored first and then bumped from 0 to 1 ($D41A), so a stored count of $00 or $80 ends as 1. The difference `pros_baseline − pros_baseline_end` is 8 bits, and the repeated subtraction stops only when the remainder is below the divisor, so an exact multiple counts its last subtraction.
+- **`$6B`** (`FW_UTT_CONTENT`, §2.5) is set by `LDM #$FF` at a word pause only when @Q ≠ 0 ($D35A), and before each triple ($D360). Nothing in the routine clears it.
+- **One pointer table for every symbol**: the decoder's list pointer is at `PH_LIST_PTRS + 2 * symbol`. The `CLC` at $D31E is dead (`ASL` sets the carry), and the $80–$FF branch reads $9E74 = $9D74 + $100.
+- **The C layout**:
+  - `pros_addr.h`: the ROM addresses (with `ROM_PH_DECODE_SYMBOL` and `ROM_PROS_SEG_TAIL` $CA6D);
+  - `pros_seg.c`: the four appenders, sharing one static pause body (`append_pause`: $C9ED–$CA11 is the same code as $CA15–$CA39) and one page-wrap helper (`seg_advance`);
+  - `ph_expand.c`: only `ph_lengthen_count`;
+  - `pros_decl.c`: the declination and its step, with `pros_declination_y` in `pros_decl.h`;
+  - `pros_gen.c`: `pros_phrase_gen`. `ph_decode_symbol` is a label inside it, so it and the other blocks are static helpers: `rewrite_events`, `word_start`, `symbol_terms`, `pitch_target`, `decode_symbol` and `append_triple`.
+- **The RAM names added to `fw.h`** are exactly the set §2.6 expected: `FW_UTT_CONTENT` $6B, `FW_PROS_STRESS_TOGGLE` $1C0D and `FW_PROS_WORD_U` $1C1F, with the existing `FW_TMP_78`.
+- **The converted data** (§3): no phoneme has a name in `ghidra740/annotations` (they are numbered), so the list comments are the symbols and the annotation's notes. `fw_data.h` also gained `UNUSED_A397` (the 617 bytes of $FF after the lists), `PH_WORD_PAUSE` ($5F), the class and feature bit names `PHC_*` and `PHF_*`, and the types `fw_ph_triple` and `fw_ph_list`. The encoder now also checks that M4.2's `cmd_speed_maps` point at the start of a map.
+- **Two corpus texts were retuned from §4.1** (the other five are as listed there):
+  - `phrase_127` is `@X1. ` followed by 15 × `BABABABA ` and `BABABAB.`: exactly 127 letters (the spaces do not count). A 128-letter phrase never reaches $D41A; a sweep of 110–149 letters reached it only at 127.
+  - `seg_wrap_word` is two clauses, each led by `@Q9 `: the first 55 words of the cycle and `.`, then the same 55 words and ` oh.`. One clause makes fewer than 512 segments, so it wraps only once: the first clause wraps at a word pause ($CA2F), the second at a segment ($CA62). Without the second `@Q9 ` the second clause wraps at a phrase pause instead. The committed file is one line:
+
+    ```
+    @Q9 a go i to it o at a go i to it o at a go i to it o at a go i to it o at a go i to it o at a go i to it o at a go i to it o at a go i to it o. @Q9 a go i to it o at a go i to it o at a go i to it o at a go i to it o at a go i to it o at a go i to it o at a go i to it o at a go i to it o oh.
+    ```

@@ -44,8 +44,9 @@ device's DAC filter; both are always on.
 
 `apollo2 --engine hybrid "text" -o out.wav` runs the original firmware with the ported routines replaced by C
 (src/firmware). Today these are the letter-to-sound routines (M4.0), text normalisation, tn_convert_clause
-and tn_append_phonetic (M4.1), and the command parser: the @ command matcher, the clause scan, the dispatcher
-and every deferred command handler (M4.2); the rest still runs on the emulated CPU.
+and tn_append_phonetic (M4.1), the command parser: the @ command matcher, the clause scan, the dispatcher
+and every deferred command handler (M4.2), and the segment generator: phoneme expansion, the phrase generator,
+the segment appenders and the declination (M4.3a); the rest still runs on the emulated CPU.
 The hybrid engine must reproduce every golden frame stream byte for byte (`build.bat test golden_hybrid`), and
 `build.bat test diff_lts` compares each ported routine with the ROM at real call sites.
 
