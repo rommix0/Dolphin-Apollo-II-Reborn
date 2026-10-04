@@ -461,6 +461,11 @@ static uint16_t gen_list(uint8_t symbol)   /* the address of a symbol's phoneme 
     return (uint16_t)(fw_rom8(&g_f, p) | fw_rom8(&g_f, (uint16_t)(p + 1)) << 8);
 }
 
+static void test_gen_row(void)
+{
+    check_row("pros_phrase_gen", ROM_PROS_PHRASE_GEN, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+}
+
 static void test_gen_lists(void)   /* the symbols, lists and table entries the tests below rely on */
 {
     static const struct { char sym; uint8_t cls, features, items[10]; } k[] = {
@@ -754,6 +759,7 @@ void suite_fw_pros(void)
     test_declination_cap();
     test_declination_divisor_bump();
     test_declination_step();
+    test_gen_row();
     test_gen_lists();
     test_gen_clause();
     test_gen_carry_chain();

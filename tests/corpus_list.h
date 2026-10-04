@@ -15,5 +15,7 @@
     "voice_b", "presets", "source_filter", "mark_space", "breathy", "pitch", "speed", \
     "prosody", "spell", "punct_mode", "pauses", "phonetic", "hypermode", "effects", \
     "formant_mod", "version", "volume", "mute", "queries", "long_clause", \
-    "cmd_misc", "index_marks", "cmd_args", "cmd_unmatched", "bank_select",     "phrase_pauses", "baseline", "phonetic_stress", "phrase_127", "seg_256", "seg_wrap_phrase",     "seg_wrap_word"
+    "cmd_misc", "index_marks", "cmd_args", "cmd_unmatched", "bank_select", \
+    "phrase_pauses", "baseline", "phonetic_stress", "phrase_127", "seg_256", "seg_wrap_phrase", \
+    "seg_wrap_word"
 #endif
