@@ -10,6 +10,7 @@
 #include "firmware/pros_seg.h"
 #include "firmware/pros_decl.h"
 #include "firmware/ph_expand.h"
+#include "firmware/pros_gen.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -278,6 +279,19 @@ static void pros_reset_seg_ptrs_regs(fw *f, cpu740 *c)
     c->a = (uint8_t)(PROS_SEG_FLAGS >> 8);
 }
 
+/* pros_phrase_gen $D129: no register input. A, X and Y out as the ROM leaves them: A = pros_seg_count's low byte
+   before the final DEC, X = pros_pos (= tn_phon_len), Y = the second end pause's LDY pros_seg_count. Its one ROM
+   caller, pros_make_segments, returns at once ($CABC RTS); its callers (boot_reset $A687, boot_selftest_sound $A7BA
+   and the C tn_convert_clause) call boot_loop_play next, which loads A from $6B and, when that is 0, returns with X
+   and Y untouched. No reader of them was found; they are defined, so all three are declared. */
+static void pros_phrase_gen_regs(fw *f, cpu740 *c)
+{
+    uint8_t x, y;
+    c->a = pros_phrase_gen(f, &x, &y);
+    c->x = x;
+    c->y = y;
+}
+
 /* pros_declination $D3DD: no register input; A (the step, or the restored pros_baseline on the rising path),
    X = pros_pos and Y = the step before its negation out. pros_mark_phrases ($D04D) loads A next and reloads X at
    $CF23, but Y reaches isr_par_ready at $CF28 (or leaves pros_mark_phrases through $CEEC, which writes no Y); in
@@ -336,6 +350,7 @@ THUNK(ph_append_phrase_pause)
 THUNK(ph_append_pause)
 THUNK(pros_append_segment)
 THUNK(pros_reset_seg_ptrs)
+THUNK(pros_phrase_gen)
 THUNK(pros_declination)
 THUNK(pros_declination_step)
 THUNK(ph_lengthen_count)
@@ -362,6 +377,7 @@ const fw_replacement fw_replacements[] = {
     { "ph_append_pause",    0xCA15, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_pause },
     { "pros_append_segment", 0xCA3B, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_append_segment },
     { "pros_reset_seg_ptrs", 0xCA71, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_reset_seg_ptrs },
+    { "pros_phrase_gen",    0xD129, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_phrase_gen },
     { "pros_declination",   0xD3DD, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_declination },
     { "pros_declination_step", 0xD40D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_declination_step },
     { "ph_lengthen_count",  0xD43E, FW_OUT_A | FW_OUT_Y, t_ph_lengthen_count },

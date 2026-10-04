@@ -8,6 +8,7 @@
 #include "firmware/ph_expand.h"
 #include "firmware/pros_addr.h"
 #include "firmware/pros_decl.h"
+#include "firmware/pros_gen.h"
 #include "firmware/pros_seg.h"
 #include "firmware/tn_convert.h"
 #include "firmware/data/fw_data.h"
@@ -431,6 +432,307 @@ static void test_declination_step(void)
     CHECK_EQ(g_ram[PROS_PHRASE_LEN], 0x7F);
 }
 
+/* ---- the phrase generator (Task 5) ---- */
+
+#define GEN_SPEED_MAP 0x3000   /* a speed map in free RAM: map[i] = i, so ph_duration = (min + range) / 8 */
+
+/* tn_phonetic = text; the page pointers at the arrays; the identity speed map; a level baseline ($80 to $80, so
+   pros_decl_step 0); every count, flag, parameter and setting 0. */
+static void gen_setup(const char *text)
+{
+    setup();
+    size_t n = strlen(text);
+    memcpy(g_ram + TN_PHONETIC, text, n);
+    g_ram[TN_PHON_LEN] = (uint8_t)n;
+    pros_reset_seg_ptrs(&g_f);
+    for (unsigned i = 0; i < 32; i++)
+        g_ram[GEN_SPEED_MAP + i] = (uint8_t)i;
+    fw_wr16(&g_f, CMD_SPEED_MAP, GEN_SPEED_MAP);
+    g_ram[PROS_BASELINE] = 0x80;
+    g_ram[PROS_BASELINE_END] = 0x80;
+}
+
+/* Runs the phrase generator; *a, *x, *y = the registers it leaves. */
+static void gen_run(uint8_t *a, uint8_t *x, uint8_t *y) { *a = pros_phrase_gen(&g_f, x, y); }
+
+static uint16_t gen_list(uint8_t symbol)   /* the address of a symbol's phoneme list in the converted data */
+{
+    uint16_t p = (uint16_t)(PH_LIST_PTRS + 2 * symbol);
+    return (uint16_t)(fw_rom8(&g_f, p) | fw_rom8(&g_f, (uint16_t)(p + 1)) << 8);
+}
+
+static void test_gen_lists(void)   /* the symbols, lists and table entries the tests below rely on */
+{
+    static const struct { char sym; uint8_t cls, features, items[10]; } k[] = {
+        { ' ', 0x00, 0x00, { 0x5F, 0xFF } },                    /* the word-pause item */
+        { '.', 0x0B, 0x00, { 0xFF } },                          /* punctuation (class bit 0) */
+        { '~', 0x00, 0x00, { 0xFF } },                          /* a marker (class 0) */
+        { '8', 0x80, 0x00, { 0xFF } },                          /* phonetic, no features, an empty list */
+        { 'X', 0x80, 0x00, { 0x3B, 10, 10, 0xFF } },            /* phonetic, no features, one triple */
+        { 'M', 0x80, 0x49, { 0x2A, 80, 60, 0xFF } },            /* a consonant */
+        { 'E', 0xC0, 0x83, { 0x10, 150, 50, 0xFF } },           /* a vowel */
+        { 'S', 0x80, 0x50, { 0x3E, 125, 80, 0xFF } },
+        { 'T', 0x80, 0x60, { 0x40, 80, 40, 0x41, 20, 20, 0x42, 30, 20, 0xFF } },   /* a stop: three triples */
+    };
+    setup();
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) {
+        uint8_t s = (uint8_t)k[i].sym;
+        CHECK_EQ(fw_rom8(&g_f, (uint16_t)(PH_SYMBOL_CLASS + s)), k[i].cls);
+        CHECK_EQ(fw_rom8(&g_f, (uint16_t)(PH_SYMBOL_FEATURES + s)), k[i].features);
+        uint16_t p = gen_list(s);
+        for (unsigned j = 0;; j++) {
+            CHECK_EQ(fw_rom8(&g_f, (uint16_t)(p + j)), k[i].items[j]);
+            if (k[i].items[j] == 0xFF)
+                break;
+        }
+    }
+    CHECK_EQ(fw_rom8(&g_f, (uint16_t)(PH_DUR_SHORTEN + 20)), 18);
+    CHECK_EQ(fw_rom8(&g_f, (uint16_t)(PH_DUR_LENGTHEN + 100)), 110);
+    CHECK(!g_f.fault);
+}
+
+static void test_gen_clause(void)   /* " ME." end to end */
+{
+    uint8_t a, x, y;
+    gen_setup(" ME.");
+    g_ram[PROS_SYM_FLAGS + 0] = 2;            /* the space: the next word has 2 symbols */
+    g_ram[PROS_SYM_FLAGS + 2] = 0x21;         /* E: accent, nucleus */
+    g_ram[PROS_SYM_SHORTEN + 1] = 1;          /* M: one shortening step */
+    g_ram[PROS_SYM_LENGTHEN + 2] = 2;         /* E: ph_lengthen_count(1) = 1 step */
+    g_ram[PROS_SYM_LENGTHEN + 0] = 4;         /* the phrase's count, read by pros_declination at pros_pos 0 */
+    g_ram[PROS_BASELINE_END] = 0x70;          /* falling: (0x80 - 0x70) / 4 = 4 */
+    g_ram[PROS_PARAMS + 20] = 3;              /* U */
+    g_ram[PROS_PARAMS + 21] = 2;              /* V */
+    g_ram[PROS_PARAMS + 22] = 10;             /* W */
+    g_ram[PROS_PARAMS + 24] = 5;              /* Y */
+    g_ram[PROS_PARAMS + 25] = 1;              /* Z */
+    g_ram[PROS_STRESS_PARAM] = 7;
+    g_ram[PROS_NUCLEUS_PARAM] = 9;
+    g_ram[PROS_FINAL_PARAM] = 6;
+    g_ram[CMD_PHRASE_PAUSE] = 8;              /* @D8: two pauses of 8 after '.' */
+    gen_run(&a, &x, &y);
+    CHECK_EQ(g_ncalls, 7);
+    check_call(0, ROM_ISR_PAR_READY, 0xFF, 0, 4);       /* position 0; X and Y as pros_declination leaves them */
+    check_call(1, ROM_ISR_PAR_READY, 0, 0, 0);          /* position 1: the space's list ended at its item (@Q0) */
+    check_call(2, ROM_ISR_PAR_READY, 9, 1, 9);          /* M's segment: (60 + 18) / 8 */
+    check_call(3, ROM_ISR_PAR_READY, 0xFF, 1, 3);       /* position 2: M's list end */
+    check_call(4, ROM_ISR_PAR_READY, 20, 100, 20);      /* E's segment: X = the last lengthening index */
+    check_call(5, ROM_ISR_PAR_READY, 0xFF, 100, 3);
+    check_call(6, ROM_ISR_PAR_READY, 0, 3, '.');        /* position 4 (the end), after the punctuation */
+    /* M: $80 / 8 + U 3 + 105 = $7C. E: ($7C >> 3 = 15, carry 1) + W 10 + Z 1 + final 6 + 105 = $8A */
+    check_segment(0, 0x2A, 9, 0x7C);
+    check_segment(1, 0x10, 20, 0x8A);
+    check_segment(2, 0x3B, 8, 0x8A);                    /* the phrase pauses, at the last target */
+    check_segment(3, 0x3B, 8, 0x8A);
+    check_segment(4, 0x3B, 4, 0x8A);                    /* the end: 4 frames ... */
+    check_segment(5, 0x3B, 0x80, 0x8A);                 /* ... then $80, the A the first pause leaves */
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 5);
+    CHECK_EQ(a, 6);
+    CHECK_EQ(x, 4);
+    CHECK_EQ(y, 5);
+    CHECK_EQ(g_ram[PROS_POS], 4);
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 4);
+    CHECK_EQ(g_ram[PROS_BASELINE], 0x78);               /* two symbols with features: $80 - 2 * 4 */
+    CHECK_EQ(g_ram[PROS_TARGET], 0x8A);
+    CHECK_EQ(g_ram[PROS_LAST_TARGET], 0x8A);
+    CHECK_EQ(g_ram[PROS_TERM_ACCENT], 10);              /* not reset by the punctuation */
+    CHECK_EQ(g_ram[PROS_TERM_STRESS], 0);
+    CHECK_EQ(g_ram[PROS_TERM_TAIL], 0);
+    CHECK_EQ(g_ram[PROS_ACCENT_STATE], 0);
+    CHECK_EQ(g_ram[FW_PROS_STRESS_TOGGLE], 0);
+    CHECK_EQ(g_ram[FW_PROS_WORD_U], 3);
+    CHECK_EQ(g_ram[PROS_WORD_POS], 0);
+    CHECK_EQ(g_ram[PROS_WORD_LEN], 0);                  /* the '.' flags */
+    CHECK_EQ(g_ram[PROS_SYMBOL], '.');
+    CHECK_EQ(g_ram[PROS_CLASS], 0x0B);
+    CHECK_EQ(g_ram[PH_PHONEME], 0x3B);
+    CHECK_EQ(g_ram[PH_MAX_DUR], 150);
+    CHECK_EQ(g_ram[PH_MIN_DUR], 50);
+    CHECK_EQ(g_ram[PH_DUR_RANGE], 110);                 /* 100, lengthened once */
+    CHECK_EQ(g_ram[PH_DURATION], 20);
+    CHECK_EQ(fw_rd16(&g_f, PH_LIST_PTR), gen_list('E'));
+    CHECK_EQ(g_ram[FW_TMP_78], 2);
+    CHECK_EQ(g_ram[FW_UTT_CONTENT], 0xFF);
+    CHECK(!g_f.fault);
+}
+
+/* " E", E accented at the word's end: pros_target = baseline / 8 (+ the carry) + W + U + final + 105 */
+static uint8_t gen_target(uint8_t baseline, uint8_t w, uint8_t u, uint8_t final)
+{
+    uint8_t a, x, y;
+    gen_setup(" E");
+    g_ram[PROS_SYM_FLAGS + 0] = 1;
+    g_ram[PROS_SYM_FLAGS + 1] = 0x21;
+    g_ram[PROS_BASELINE] = baseline;
+    g_ram[PROS_BASELINE_END] = baseline;
+    g_ram[PROS_PARAMS + 22] = w;
+    g_ram[PROS_PARAMS + 20] = u;
+    g_ram[PROS_FINAL_PARAM] = final;
+    gen_run(&a, &x, &y);
+    CHECK_EQ(g_ram[PROS_TERM_ACCENT], w);
+    CHECK_EQ(g_ram[PROS_TERM_STRESS], u);
+    CHECK_EQ(g_ram[PROS_TERM_TAIL], final);
+    CHECK_EQ(g_ram[PROS_SEG_PITCH + 0], g_ram[PROS_TARGET]);
+    CHECK(!g_f.fault);
+    return g_ram[PROS_TARGET];
+}
+
+static void test_gen_carry_chain(void)   /* $D2DF-$D2EE: no CLC between the ADCs */
+{
+    CHECK_EQ(gen_target(0x00, 0, 0, 0), 0x69);
+    CHECK_EQ(gen_target(0x04, 0, 0, 0), 0x6A);          /* the LSR's carry (bit 2) into $D2E5 */
+    CHECK_EQ(gen_target(0x08, 0xFF, 2, 0), 0x6C);       /* 1 + $FF: a carry into $D2E8 */
+    CHECK_EQ(gen_target(0x00, 1, 0xFF, 2), 0x6C);       /* 1 + $FF: a carry into $D2EB */
+    CHECK_EQ(gen_target(0x00, 0, 1, 0xFF), 0x6A);       /* 1 + $FF: a carry into $D2EE */
+    CHECK_EQ(gen_target(0xFC, 0xE1, 0xFE, 0xFF), 0x6A); /* every carry set; the last one is lost */
+}
+
+static void test_gen_duration_loops(void)   /* "S": max 125, min 80, range 45 */
+{
+    uint8_t a, x, y;
+    gen_setup("S");
+    g_ram[PROS_SYM_SHORTEN + 0] = 0xFF;                 /* (255 + 1) / 2 = 0 in 8 bits: DEY/BNE runs 256 steps */
+    gen_run(&a, &x, &y);
+    CHECK_EQ(g_ram[PH_DUR_RANGE], 5);                   /* x0.9 down to its fixed point (0 steps would leave 45) */
+    check_call(1, ROM_ISR_PAR_READY, 10, 0, 10);        /* (80 + 5) / 8; X = pros_pos (no lengthening) */
+    CHECK_EQ(g_ram[PROS_SEG_DURATION + 0], 10);
+
+    gen_setup("S");
+    g_ram[PROS_SYM_LENGTHEN + 0] = 0xFF;                /* half-count 0: ph_lengthen_count(0) = $60, 96 steps */
+    gen_run(&a, &x, &y);
+    CHECK_EQ(g_ram[PH_DUR_RANGE], 255);                 /* x1.1 up to 255 */
+    check_call(1, ROM_ISR_PAR_READY, 31, 255, 31);      /* 80 + 255 capped at 255, / 8; X = the last index */
+    CHECK_EQ(g_ram[PROS_SEG_DURATION + 0], 31);
+    CHECK(!g_f.fault);
+}
+
+static void test_gen_events(void)
+{
+    uint8_t a, x, y;
+    gen_setup("ME");
+    g_ram[CMD_EV_COUNT] = 3;
+    fw_wr16(&g_f, CMD_EV_POS, 0x0500);                  /* only the low byte is compared: due at position 0 */
+    fw_wr16(&g_f, CMD_EV_POSITIONS + 0, 0x0000);
+    fw_wr16(&g_f, CMD_EV_POSITIONS + 2, 0x0200);        /* due at 0 as well (low byte 0) */
+    fw_wr16(&g_f, CMD_EV_POSITIONS + 4, 0x0001);
+    fw_wr16(&g_f, CMD_EV_POSITIONS + 6, 0x0077);        /* past cmd_ev_count: still read as the next position */
+    gen_run(&a, &x, &y);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POSITIONS + 0), 0);   /* now segment indexes */
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POSITIONS + 2), 0);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POSITIONS + 4), 1);   /* after M's one segment */
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POSITIONS + 6), 0x0077);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0x0077);        /* the high byte zeroed */
+    CHECK_EQ(g_ram[CMD_EV_NEXT], 3);
+
+    gen_setup("M");                                     /* index 130: TXA/ASL wraps it to entry 2 */
+    g_ram[CMD_EV_COUNT] = 131;
+    g_ram[CMD_EV_NEXT] = 130;
+    fw_wr16(&g_f, CMD_EV_POSITIONS + 4, 0x1234);
+    fw_wr16(&g_f, CMD_EV_POSITIONS + 6, 0x0009);
+    fw_wr16(&g_f, CMD_EV_POSITIONS + 260, 0x5678);      /* where entry 130 would be */
+    gen_run(&a, &x, &y);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POSITIONS + 4), 0);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 9);             /* entry 3's low byte */
+    CHECK_EQ(g_ram[CMD_EV_NEXT], 131);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POSITIONS + 260), 0x5678);
+    CHECK(!g_f.fault);
+}
+
+static void test_gen_punctuation(void)   /* @D0: '.' adds no phrase pause */
+{
+    uint8_t a, x, y;
+    gen_setup("M.");
+    gen_run(&a, &x, &y);
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 2);         /* M and the two end pauses */
+    check_segment(1, 0x3B, 4, g_ram[PROS_SEG_PITCH + 0]);
+    check_segment(2, 0x3B, 0x80, g_ram[PROS_SEG_PITCH + 0]);
+    check_call(3, ROM_ISR_PAR_READY, 0, 1, '.');
+    CHECK(!g_f.fault);
+}
+
+static void test_gen_no_features(void)   /* class bit 7, features 0 ('8', 'X'): no declination, no stress reset */
+{
+    uint8_t a, x, y;
+    gen_setup("8X");
+    g_ram[PROS_BASELINE_END] = 0x40;                    /* falling: the step is 25 (the cap) */
+    g_ram[PROS_PARAMS + 25] = 4;                        /* Z: pros_term_stress of a word's later symbols */
+    gen_run(&a, &x, &y);
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 25);
+    CHECK_EQ(g_ram[PROS_BASELINE], 0x80);
+    CHECK_EQ(g_ram[PROS_TERM_STRESS], 4);
+    CHECK_EQ(g_ram[PROS_TARGET], 0x80 / 8 + 4 + 105);
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 2);         /* '8' has an empty list; X makes one segment */
+    check_segment(0, 0x3B, 1, 0x80 / 8 + 4 + 105);      /* (10 + 0) / 8 */
+    CHECK(!g_f.fault);
+}
+
+static void test_gen_content_flag(void)   /* $6B: $FF at a word pause and at a triple, else unchanged */
+{
+    uint8_t a, x, y;
+    gen_setup(" ");                                     /* @Q0 */
+    gen_run(&a, &x, &y);
+    CHECK_EQ(g_ram[FW_UTT_CONTENT], 0);
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 1);
+    gen_setup("8");
+    gen_run(&a, &x, &y);
+    CHECK_EQ(g_ram[FW_UTT_CONTENT], 0);
+    gen_setup(" ");
+    g_ram[CMD_WORD_PAUSE] = 5;                          /* @Q5 */
+    gen_run(&a, &x, &y);
+    CHECK_EQ(g_ram[FW_UTT_CONTENT], 0xFF);
+    check_segment(0, 0x3B, 5, 0x80);                    /* pitch: pros_last_target as initialised */
+    CHECK_EQ(g_ram[FW_TMP_78], 0);
+    check_call(1, ROM_ISR_PAR_READY, 0x80, 0, 0);       /* A as ph_append_pause leaves it, X = pros_pos, Y = $78 */
+    gen_setup("X");
+    gen_run(&a, &x, &y);
+    CHECK_EQ(g_ram[FW_UTT_CONTENT], 0xFF);
+    CHECK(!g_f.fault);
+}
+
+static void test_gen_final_count(void)   /* 254 segments and the two pauses: 256, then a 16-bit decrement */
+{
+    char text[255];
+    uint8_t a, x, y;
+    memset(text, 'E', 254);
+    text[254] = '\0';
+    gen_setup(text);
+    gen_run(&a, &x, &y);
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 0x00FF);    /* $0100 - 1 */
+    CHECK_EQ(a, 0);                                     /* the low byte before the decrement */
+    CHECK_EQ(x, 254);
+    CHECK_EQ(y, 0xFF);                                  /* the second pause's index */
+    CHECK_EQ(g_ram[PROS_SEG_DURATION + 0xFE], 4);
+    CHECK_EQ(g_ram[PROS_SEG_DURATION + 0xFF], 0x80);
+    CHECK_EQ(fw_rd16(&g_f, PROS_PHONEME_PTR), PROS_SEG_PHONEME + 0x100);   /* the second pause wrapped the page */
+    CHECK_EQ(fw_rd16(&g_f, PROS_DURATION_PTR), PROS_SEG_DURATION + 0x100);
+    CHECK_EQ(fw_rd16(&g_f, PROS_PITCH_PTR), PROS_SEG_PITCH + 0x100);
+    CHECK_EQ(fw_rd16(&g_f, PROS_FLAGS_PTR), PROS_SEG_FLAGS + 0x100);
+    CHECK_EQ(g_ncalls, 255 + 254);                      /* one per position and at the end, one per segment */
+    CHECK(!g_f.fault);
+}
+
+static void test_gen_closure_and_hyper(void)
+{
+    uint8_t a, x, y;
+    gen_setup("T");
+    g_ram[PROS_SYM_FLAGS + 0] = 0x10;                   /* an unreleased stop: the closure only */
+    gen_run(&a, &x, &y);
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 2);
+    CHECK_EQ(g_ram[PROS_SEG_PHONEME + 0], 0x40);
+    check_call(1, ROM_ISR_PAR_READY, 10, 0, 10);        /* (40 + 40) / 8 */
+    check_call(2, ROM_ISR_PAR_READY, 0x10, 0, 10);      /* A = pros_sym_flag at the JMP */
+
+    gen_setup("~M");                                    /* @H1: a function word makes no segment */
+    g_ram[CMD_HYPER] = 1;
+    gen_run(&a, &x, &y);
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 1);         /* the two end pauses only */
+    CHECK_EQ(g_ram[PROS_FUNC_WORD], 1);
+    CHECK_EQ(g_ncalls, 3);
+    check_call(1, ROM_ISR_PAR_READY, 0, 0, 0);          /* after '~' (class 0): A = Y = pros_class */
+    check_call(2, ROM_ISR_PAR_READY, 1, 1, 0x80);       /* after M: A = pros_func_word, Y = pros_class */
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_pros(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -452,4 +754,14 @@ void suite_fw_pros(void)
     test_declination_cap();
     test_declination_divisor_bump();
     test_declination_step();
+    test_gen_lists();
+    test_gen_clause();
+    test_gen_carry_chain();
+    test_gen_duration_loops();
+    test_gen_events();
+    test_gen_punctuation();
+    test_gen_no_features();
+    test_gen_content_flag();
+    test_gen_final_count();
+    test_gen_closure_and_hyper();
 }
