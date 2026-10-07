@@ -919,6 +919,7 @@ static void test_phrases_params(void)
     CHECK_EQ(g_ram[PROS_DECL_STEP], 25);                /* still computed: $22 over 1, capped */
     CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 0x81);       /* still stored; '-' has no class bit 3 ... */
     CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 0], 0x01);       /* ... so the count before it gets no bit 7 */
+    CHECK(!g_f.fault);
 
     /* ... and keeps the nucleus mask: the E before '-' gets no nucleus marks, the one before '.' does */
     phrase_setup(" E-E");
@@ -927,6 +928,7 @@ static void test_phrases_params(void)
     phrase_run(0, &r);
     CHECK_EQ(g_ram[PROS_SYM_FLAGS + 3], 0x67);          /* the accent and the nucleus marks */
     CHECK_EQ(g_ram[PROS_SYM_FLAGS + 1], PSF_STRESS);    /* the mask is still 0 */
+    CHECK(!g_f.fault);
     phrase_setup(" E.E");
     g_ram[PROS_SYM_FLAGS + 1] = PSF_STRESS;
     g_ram[PROS_SYM_FLAGS + 3] = PSF_STRESS;
@@ -1242,6 +1244,7 @@ static void test_stress_past_end(void)
     CHECK_EQ(g_ram[FW_PROS_STRESS_TOGGLE], 0xFF);       /* no vowel after L */
     CHECK_EQ(g_ram[PROS_ACCENT_STATE], 0xFF);
     CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 1], 3);
+    CHECK(!g_f.fault);
 
     stress_setup("AE");                                 /* no L: $1C12 = 0 */
     g_ram[FW_PROS_WRITE_ONLY_1C12] = 0x55;

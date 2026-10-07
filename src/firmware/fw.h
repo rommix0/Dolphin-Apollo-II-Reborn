@@ -21,7 +21,9 @@
 #define FW_PROS_STRESS_TOGGLE  0x1C0D   /* unnamed in the annotations: pros_phrase_gen's "a stress or an accent seen
                                            in this word" (0 at each word start). pros_mark_stress: the syllable's
                                            stress, $FF at its start, at each word end and at '}', 0 at '~', '{' and
-                                           'x', inverted ($CC45) at the onset of each later syllable of a word.
+                                           'x' ($CBC4, $CC06, $CC1E; on the vowel path $CD74 too), inverted ($CC45)
+                                           at the onset of each later syllable of a word, and 0 ($CC5D) at a long
+                                           symbol (features bit 1) while pros_accent_state is 0.
                                            pros_mark_phrases writes it (0 at its start and at each space or
                                            punctuation, 1 at '{') and never reads it */
 #define FW_PROS_WORD_U         0x1C1F   /* unnamed in the annotations: the U term (pros_params[20]) that the first
@@ -44,33 +46,40 @@
                                                word it walks next (the one before it in the text); 5 or more
                                                shortens each of its phonetic symbols by 4 ($D0B5) */
 #define FW_PROS_VOWEL_SEEN         0x1C0C   /* pros_mark_stress: a vowel seen in this word (1 on the vowel path, 0 at
-                                               each word end) */
+                                               its start ($CAD7) and at each word end) */
 #define FW_PROS_TILDE_SHORTEN      0x1C11   /* pros_mark_stress: 1 at its start and at '~', 0 at each word end and
                                                while FW_PROS_ACCENT_PENDING is set ($CC81); while set, each symbol's
                                                shortening count gets 3 ($CC92). A space copies it into
                                                FW_PROS_ACCENT_PENDING ($CEA2) */
 #define FW_PROS_WRITE_ONLY_1C12    0x1C12   /* pros_mark_stress, on the vowel path: 1 when FW_PROS_NEXT_PHON is '1' or
-                                               'L' ($CDCB), else 0 ($CDD2); never read */
+                                               'L' (stored at $CDCB), else 0 (stored at $CDD4); never read */
 #define FW_PROS_FINAL              0x1C13   /* pros_mark_stress: the vowel's syllable ends a phrase (the class bit 0,
-                                               punctuation, of the first non-consonant from pros_pos + 2 on, $CDEA).
+                                               punctuation, of the first non-consonant from pros_pos + 2 on, or from
+                                               pros_pos + 3 when FW_PROS_NEXT_PHON is '1' or 'L' ($CDBA-$CDCE), $CDEA).
                                                pros_mark_phrases: walking back through a word's last syllable (1 at
                                                its start and at each space and punctuation, 0 at the consonant
-                                               before a vowel, $D079); a vowel outside it is shortened by 3 */
+                                               before a vowel or long symbol, $D079, tested at $D06E-$D075); a vowel
+                                               outside it is shortened by 3 */
 #define FW_PROS_BACKQUOTE          0x1C14   /* pros_mark_stress: a backquote seen ($CC12), so the next '?' becomes '.'
                                                ($CEB3); 0 at its start, at that '?' and at $CEC2 */
 #define FW_PROS_PUNCT_NOT_KIND3    0x1C15   /* pros_store_phrase_len: the punctuation it stored at last (the next one
                                                in the text) had no class bit 3 (PHC_KIND_3 is set for . : ; ?), so
-                                               this store gets no bit 7. Cleared by pros_mark_stress ($CAE0) only */
+                                               this store gets no bit 7. Cleared by pros_mark_stress at its start ($CAE0),
+                                               which pros_mark_phrases' entry relies on; then by each
+                                               pros_store_phrase_len call ($D11B), which sets it to 1 ($D125) when
+                                               pros_class has no bit 3 */
 #define FW_PROS_FINAL_LENGTHEN     0x1C16   /* pros_mark_phrases: the phrase-final syllable's lengthening: 8
                                                (PHC_KIND_3) after a punctuation with class bit 3 ($D057); 0 at its
                                                start, at each space and punctuation, and at the consonant before a
-                                               vowel ($D07C). While set, each phonetic symbol's lengthening count
-                                               gets 8 ($D084); while clear, a vowel's shortening gets 7 ($D0A5) */
+                                               vowel or long symbol ($D07C). While set, each phonetic symbol's
+                                               lengthening count gets 8 ($D084); while clear, a vowel or long
+                                               symbol's shortening gets 7 ($D0A5) */
 #define FW_PROS_ACCENT_PENDING     0x1C19   /* pros_mark_stress: lengthen the word's symbols by 4 ($CC84): 1 at its
                                                start and at each word end but a space, 0 at '~', and at a space
                                                FW_PROS_TILDE_SHORTEN (1 after a function word). pros_mark_phrases: an
                                                accent still to place: 1 at its start and at each '~'; the next
-                                               stressed vowel walked gets the accent $60 and clears it ($D0E1) */
+                                               stressed vowel or long symbol walked (features bit 7 or 1, $D0CB and
+                                               $D0CD) gets the accent $60 and clears it ($D0E1) */
 #define FW_PROS_PREV_FEATURES_COPY 0x1C1A   /* pros_mark_stress: pros_prev_features as stored at $CD58, but 0 at its
                                                start and at each word end ($CEDE), where pros_prev_features is kept:
                                                the previous symbol's features within the word ($CD81) */
