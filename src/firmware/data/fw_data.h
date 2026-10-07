@@ -40,6 +40,27 @@ typedef struct { uint8_t phoneme, max, min; } fw_ph_triple;
 /* The phoneme list of one symbol: count triples (at most 3), then the $FF end; word_pause: the list starts with the
    word-pause item PH_WORD_PAUSE (the space's, with no triples). */
 typedef struct { uint8_t count; fw_ph_triple item[3]; bool word_pause; } fw_ph_list;
+/* One parameter of a phoneme in a voice table (M4.4a spec 3), its five rows in the ROM's order: the target; the
+   signed fixed contribution and the proportion 0-8 (eighths of the other phoneme's target) of the boundary value;
+   the transition durations in frames in the dominated neighbour (ext_dur) and in this phoneme (int_dur), both
+   when this phoneme dominates. */
+typedef struct { uint8_t target; int8_t fixed; uint8_t prop, ext_dur, int_dur; } fw_par_rule;
+/* One phoneme of a voice table: its rank, its spare byte and P1..P10 (p[0..9]). */
+typedef struct { uint8_t rank, spare; fw_par_rule p[10]; } fw_par_phoneme;
+
+#define CMD_SOUND_EFFECTS   17     /* @T0-@TF, and @TG or @TX */
+#define CMD_SOUND_MAX       18     /* the most phonemes in an effect, and the length of the shared flag array */
+#define CMD_SOUND_END       0xFF   /* ends the phoneme array of an effect */
+/* The segment arrays of a @T sound effect (M4.4a spec 3): count phonemes (rows of the voice tables), then per
+   phoneme its duration in frames and its pitch target. The encoder writes the end CMD_SOUND_END after the
+   phonemes. */
+typedef struct {
+    uint8_t count;
+    uint8_t phoneme[CMD_SOUND_MAX], duration[CMD_SOUND_MAX], pitch[CMD_SOUND_MAX];
+} fw_cmd_sound_effect;
+/* A cmd_sound_table entry: the arrays cmd_ev_sound_start points pros_phoneme_ptr, pros_duration_ptr,
+   pros_pitch_ptr and pros_flags_ptr at, as references into fw_cmd_sound_effects and fw_cmd_sound_flags. */
+typedef struct { const uint8_t *phoneme, *duration, *pitch, *flags; } fw_cmd_sound;
 
 /* Pinned addresses (ghidra740/annotations: text_norm.txt, lts.txt) */
 #define TN_CHAR_RULES_LO   0x4000   /* low byte of each character's list address */
@@ -67,8 +88,9 @@ typedef struct { uint8_t count; fw_ph_triple item[3]; bool word_pause; } fw_ph_l
 #define CMD_SPEED_MAP_DATA  0xC898   /* byte[9][32], converted with the prosody data: cmd_speed_maps point into it */
 #define PAR_VOICE_A_COUNT   0xD469   /* byte: the phoneme count heading the voice A table (M4.4) */
 #define PAR_VOICE_B_COUNT   0xE5E2   /* byte: the same for voice B */
-#define PAR_VOICE_A         0xD46A   /* the M4.4 voice A table, not converted; the C writes only its address */
-#define PAR_VOICE_B         0xE5E3   /* the M4.4 voice B table, not converted; the C writes only its address */
+#define PAR_VOICE_A         0xD46A   /* par_table of voice A: rank row, spare row, five rows per parameter, N = 86 */
+#define PAR_VOICE_B         0xE5E3   /* par_table of voice B */
+#define PAR_PHONEMES        86       /* N, the phoneme count of both voices */
 
 /* Pinned addresses of the prosody data (ghidra740/annotations: phoneme.txt, command.txt, unused.txt; M4.3a spec 3) */
 #define PH_SYMBOL_CLASS     0x9BB4   /* byte[256]: PHC_* bits per symbol code */
@@ -82,6 +104,11 @@ typedef struct { uint8_t count; fw_ph_triple item[3]; bool word_pause; } fw_ph_l
 #define PH_DUR_SHORTEN      0xC77B   /* byte[256]: one shortening step */
 #define PH_LENGTHEN_STEPS   0xD44A   /* byte[31], the base ph_lengthen_count indexes; entry 0 is its own RTS opcode */
 #define PH_WORD_PAUSE       0x5F     /* the word-pause item of a phoneme list (the space's) */
+/* Pinned addresses of the playback data (ghidra740/annotations: command.txt, frame.txt, params.txt; M4.4a spec 3) */
+#define CMD_SOUND_TABLE     0x9F74   /* ptr[17][4]: per @T effect its phoneme, duration, pitch-target and flag arrays */
+#define CMD_SOUND_DATA      0x9FFC   /* the @T segment arrays (395 bytes) */
+#define FRM_SNAPSHOT_MAP    0xB773   /* byte[10]: frame byte offset per snapshot entry */
+#define PAR_TARGET_BIAS     0xB7A7   /* byte[10]: per parameter P1..P10 */
 
 /* lts_char_class bits */
 #define CC_LETTER       0x80   /* also the apostrophe and the underscore */
@@ -110,6 +137,19 @@ typedef struct { uint8_t count; fw_ph_triple item[3]; bool word_pause; } fw_ph_l
 #define PHF_LIQUID      0x04   /* liquid or glide */
 #define PHF_LONG        0x02   /* long vowel, diphthong or syllabic consonant */
 #define PHF_VOICED      0x01
+/* The bytes of a DSP frame (frame20: ghidra740/annotations/types.txt; parent spec 1.4): the values of
+   frm_snapshot_map */
+#define FRAME_ALF       0    /* b0 low-frequency amplitude */
+#define FRAME_FN        1    /* b1 nasal (low) resonance frequency */
+#define FRAME_A1        2
+#define FRAME_F1        3
+#define FRAME_A2        4
+#define FRAME_F2        5
+#define FRAME_A3        6
+#define FRAME_F3        7
+#define FRAME_AHF       8    /* b8 high-frequency amplitude */
+#define FRAME_V         9    /* b9 degree of voicing */
+#define FRAME_PITCH     10   /* b10 pitch code */
 
 extern const fw_rule_table tn_rules_ctrl, tn_rules_punct, tn_rules_digits, tn_rules_punct2, lts_rules_letters,
     tn_rules_symbols3, tn_rules_lower, tn_rules_symbols4, tn_rules_high;
@@ -149,7 +189,11 @@ extern const uint8_t fw_ph_symbol_class[256], fw_ph_symbol_features[256];
 extern const fw_ph_list fw_ph_lists[256];   /* by symbol; $00-$1F have no list */
 extern const uint8_t fw_ph_dur_lengthen[256], fw_ph_dur_shorten[256];
 extern const uint8_t fw_cmd_speed_map_data[9][32];
-extern const uint8_t fw_ph_lengthen_steps[31];
+extern const uint8_t fw_ph_lengthen_steps[31];extern const fw_par_phoneme fw_par_voice_a[PAR_PHONEMES], fw_par_voice_b[PAR_PHONEMES];
+extern const uint8_t fw_par_target_bias[10], fw_frm_snapshot_map[10];
+extern const uint8_t fw_cmd_sound_flags[CMD_SOUND_MAX];
+extern const fw_cmd_sound_effect fw_cmd_sound_effects[CMD_SOUND_EFFECTS];
+extern const fw_cmd_sound fw_cmd_sound_table[CMD_SOUND_EFFECTS];
 
 /* Encodes every table into img at its ROM address. False with a reason in err on any inconsistency. */
 bool fw_image_build(fw_image *img, char *err, size_t errlen);

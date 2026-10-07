@@ -132,6 +132,36 @@ static void check_end(enc *e, const char *what, uint32_t at, uint32_t next)
         fail(e, "%s ends at $%04X, the next table starts at $%04X", what, (unsigned)at, (unsigned)next);
 }
 
+/* A voice table (par_table) from at, in the ROM's row order: the rank row, the spare row, then per parameter
+   P1..P10 its target, fixed, prop, ext_dur and int_dur rows, each PAR_PHONEMES bytes indexed by phoneme. Returns
+   the address after the table. */
+static uint32_t put_par_table(enc *e, uint32_t at, const fw_par_phoneme *t)
+{
+    for (uint32_t ph = 0; ph < PAR_PHONEMES; ph++) {
+        put(e, false, at + ph, t[ph].rank);
+        put(e, false, at + PAR_PHONEMES + ph, t[ph].spare);
+        for (uint32_t k = 0; k < 10; k++) {
+            const fw_par_rule *r = &t[ph].p[k];
+            uint32_t row = at + (2 + 5 * k) * PAR_PHONEMES + ph;
+            put(e, false, row, r->target);
+            put(e, false, row + PAR_PHONEMES, (uint8_t)r->fixed);
+            put(e, false, row + 2 * PAR_PHONEMES, r->prop);
+            put(e, false, row + 3 * PAR_PHONEMES, r->ext_dur);
+            put(e, false, row + 4 * PAR_PHONEMES, r->int_dur);
+        }
+    }
+    return at + 52 * PAR_PHONEMES;
+}
+
+/* One @T array of n bytes at *at; records where it landed (arr/addr, *na entries) for cmd_sound_table. */
+static void put_sound_array(enc *e, uint32_t *at, const uint8_t *v, unsigned n, const uint8_t **arr,
+                            uint16_t *addr, size_t *na)
+{
+    arr[*na] = v;
+    addr[(*na)++] = (uint16_t)*at;
+    for (unsigned i = 0; i < n; i++)
+        put(e, false, (*at)++, v[i]);
+}
 bool fw_image_build(fw_image *img, char *err, size_t errlen)
 {
     static enc e;
@@ -305,6 +335,59 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
         for (int i = 0; i < 31; i++)
             put(&e, false, PH_LENGTHEN_STEPS + (uint32_t)i, fw_ph_lengthen_steps[i]);
         check_end(&e, "ph_lengthen_steps", PH_LENGTHEN_STEPS + 31, PAR_VOICE_A_COUNT);
+    }
+    /* 9. The playback data (M4.4a spec 3): the two voice tables, each after its count byte (step 7) and filling the
+       space up to the next table; par_target_bias and frm_snapshot_map; the @T sound effects end to end in
+       cmd_sound_data, exactly filling it, and cmd_sound_table computed from where their arrays landed. */
+    {
+        if (fw_par_voice_a_count != PAR_PHONEMES || fw_par_voice_b_count != PAR_PHONEMES)
+            fail(&e, "the voice counts are %u and %u, the tables have %u phonemes", (unsigned)fw_par_voice_a_count,
+                 (unsigned)fw_par_voice_b_count, (unsigned)PAR_PHONEMES);
+        check_end(&e, "par_voice_a_count", PAR_VOICE_A_COUNT + 1, PAR_VOICE_A);
+        check_end(&e, "par_voice_a", put_par_table(&e, PAR_VOICE_A, fw_par_voice_a), PAR_VOICE_B_COUNT);
+        check_end(&e, "par_voice_b_count", PAR_VOICE_B_COUNT + 1, PAR_VOICE_B);
+        check_end(&e, "par_voice_b", put_par_table(&e, PAR_VOICE_B, fw_par_voice_b), CMD_VERSION_LANG_TEXT);
+        for (int k = 0; k < 10; k++) {
+            put(&e, false, PAR_TARGET_BIAS + (uint32_t)k, fw_par_target_bias[k]);
+            if (fw_frm_snapshot_map[k] > FRAME_PITCH)
+                fail(&e, "frm_snapshot_map entry %d: frame byte %u", k + 1, (unsigned)fw_frm_snapshot_map[k]);
+            put(&e, false, FRM_SNAPSHOT_MAP + (uint32_t)k, fw_frm_snapshot_map[k]);
+        }
+        const uint8_t *arr[1 + 3 * CMD_SOUND_EFFECTS];
+        uint16_t addr[1 + 3 * CMD_SOUND_EFFECTS];
+        size_t na = 0;
+        uint32_t at = CMD_SOUND_DATA;
+        put_sound_array(&e, &at, fw_cmd_sound_flags, CMD_SOUND_MAX, arr, addr, &na);
+        for (int x = 0; x < CMD_SOUND_EFFECTS; x++) {
+            const fw_cmd_sound_effect *s = &fw_cmd_sound_effects[x];
+            unsigned n = s->count;
+            if (n > CMD_SOUND_MAX) {
+                fail(&e, "@T effect %d: %u phonemes, at most %d", x, n, CMD_SOUND_MAX);
+                n = CMD_SOUND_MAX;
+            }
+            for (unsigned i = 0; i < n; i++)
+                if (s->phoneme[i] == CMD_SOUND_END)
+                    fail(&e, "@T effect %d: phoneme %u is the end $%02X", x, i, CMD_SOUND_END);
+            put_sound_array(&e, &at, s->phoneme, n, arr, addr, &na);
+            put(&e, false, at++, CMD_SOUND_END);
+            put_sound_array(&e, &at, s->duration, n, arr, addr, &na);
+            put_sound_array(&e, &at, s->pitch, n, arr, addr, &na);
+        }
+        check_end(&e, "cmd_sound_data", at, PH_LISTS);
+        for (int x = 0; x < CMD_SOUND_EFFECTS; x++) {
+            const fw_cmd_sound *t = &fw_cmd_sound_table[x];
+            const uint8_t *ref[4] = { t->phoneme, t->duration, t->pitch, t->flags };
+            for (int k = 0; k < 4; k++) {
+                size_t i = 0;
+                while (i < na && arr[i] != ref[k])
+                    i++;
+                if (i == na)
+                    fail(&e, "cmd_sound_table entry %d, pointer %d: not one of the @T arrays", x, k);
+                else
+                    put_word(&e, CMD_SOUND_TABLE + 8u * (uint32_t)x + 2u * (uint32_t)k, addr[i]);
+            }
+        }
+        check_end(&e, "cmd_sound_table", CMD_SOUND_TABLE + 8 * CMD_SOUND_EFFECTS, CMD_SOUND_DATA);
     }
     return e.ok;
 }

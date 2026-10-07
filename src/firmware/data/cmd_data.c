@@ -1,8 +1,10 @@
-/* Converted from the Apollo 2 ROM by tools/extract_tables.py (M4.2 spec section 4), then reviewed.
+/* Converted from the Apollo 2 ROM by tools/extract_tables.py (M4.2 spec section 4), then reviewed. The @T
+   tables at the end (M4.4a spec section 3) were converted without the tool, which does not write them.
    tests/test_firmware_data.c re-encodes it and compares it byte for byte with the ROM. */
 #include <stddef.h>
 #include "fw_data.h"
 #include "../cmd_addr.h"
+#include "../pros_seg.h"   /* PROS_SEG_FLAGS_GEN */
 
 /* cmd_imm_patterns ($989C): the immediate commands, matched at interrupt level by cmd_imm_match.
    The encoder writes the $FF end, then cmd_imm_table ($98A7): each record's address, then the
@@ -159,3 +161,125 @@ const uint8_t fw_cmd_speed_limits[9] = { 7, 7, 7, 7, 4, 2, 0, 0, 0 };
 /* par_voice_a_count ($D469), par_voice_b_count ($E5E2): the phoneme counts at the head of the
    voice tables (M4.4), read by cmd_select_voice_a and cmd_select_voice_b */
 const uint8_t fw_par_voice_a_count = 86, fw_par_voice_b_count = 86;
+/* cmd_sound_data ($9FFC): the segment arrays of the @T sound effects, in the format of the playback arrays.
+   First the flag array that all effects share, one byte per segment of the longest effect (playback never
+   reads it). Then per effect: its phonemes (rows of the voice tables; 59 is the pause), after which the
+   encoder writes the end CMD_SOUND_END; per phoneme its duration in frames; per phoneme its pitch target
+   (128 = the @F centre). The encoder lays them out end to end in this order and checks that they fill
+   $9FFC-$A186 exactly. */
+const uint8_t fw_cmd_sound_flags[CMD_SOUND_MAX] = {
+    PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN,
+    PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN,
+    PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN,
+    PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN, PROS_SEG_FLAGS_GEN,
+};
+const fw_cmd_sound_effect fw_cmd_sound_effects[CMD_SOUND_EFFECTS] = {
+    [ 0] = {  3,   /* @T0: phonemes, durations, pitch targets */
+        { 59, 77, 59 },
+        { 5, 20, 5 },
+        { 208, 208, 208 } },
+    [ 1] = {  3,   /* @T1: phonemes, durations, pitch targets */
+        { 59, 77, 59 },
+        { 5, 40, 5 },
+        { 208, 208, 208 } },
+    [ 2] = {  3,   /* @T2: phonemes, durations, pitch targets */
+        { 59, 77, 59 },
+        { 5, 60, 5 },
+        { 208, 208, 208 } },
+    [ 3] = {  3,   /* @T3: phonemes, durations, pitch targets */
+        { 59, 77, 59 },
+        { 5, 80, 5 },
+        { 208, 208, 208 } },
+    [ 4] = {  3,   /* @T4: phonemes, durations, pitch targets */
+        { 59, 84, 59 },
+        { 5, 3, 5 },
+        { 208, 208, 208 } },
+    [ 5] = {  3,   /* @T5: phonemes, durations, pitch targets */
+        { 59, 84, 59 },
+        { 5, 10, 5 },
+        { 208, 208, 208 } },
+    [ 6] = {  3,   /* @T6: phonemes, durations, pitch targets */
+        { 59, 84, 59 },
+        { 5, 40, 5 },
+        { 208, 208, 208 } },
+    [ 7] = {  3,   /* @T7: phonemes, durations, pitch targets */
+        { 59, 84, 59 },
+        { 5, 80, 5 },
+        { 208, 208, 208 } },
+    [ 8] = {  5,   /* @T8: phonemes, durations, pitch targets */
+        { 59, 83, 83, 83, 59 },
+        { 5, 5, 5, 5, 5 },
+        { 224, 208, 224, 208, 224 } },
+    [ 9] = { 10,   /* @T9: phonemes, durations, pitch targets */
+        { 59, 83, 83, 83, 83, 83, 83, 83, 83, 59 },
+        { 5, 5, 5, 5, 5, 5, 5, 5, 5, 5 },
+        { 224, 208, 224, 208, 224, 208, 224, 208, 224, 208 } },
+    [10] = { 14,   /* @TA: phonemes, durations, pitch targets */
+        { 59, 83, 83, 83, 83, 83, 83, 83, 83, 83, 83, 83, 83, 59 },
+        { 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5 },
+        { 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208 } },
+    [11] = { 18,   /* @TB: phonemes, durations, pitch targets */
+        { 59, 83, 83, 83, 83, 83, 83, 83, 83, 83, 83, 83, 83, 83, 83, 83, 83, 59 },
+        { 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5 },
+        { 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208 } },
+    [12] = {  6,   /* @TC: phonemes, durations, pitch targets */
+        { 59, 83, 82, 83, 82, 59 },
+        { 5, 5, 5, 5, 5, 5 },
+        { 224, 208, 224, 208, 224, 208 } },
+    [13] = { 10,   /* @TD: phonemes, durations, pitch targets */
+        { 59, 83, 82, 83, 82, 83, 82, 83, 82, 59 },
+        { 5, 5, 5, 5, 5, 5, 5, 5, 5, 5 },
+        { 224, 208, 224, 208, 224, 208, 224, 208, 224, 208 } },
+    [14] = { 14,   /* @TE: phonemes, durations, pitch targets */
+        { 59, 83, 82, 83, 82, 83, 82, 83, 82, 83, 82, 83, 82, 59 },
+        { 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5 },
+        { 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208 } },
+    [15] = { 18,   /* @TF: phonemes, durations, pitch targets */
+        { 59, 83, 82, 83, 82, 83, 82, 83, 82, 83, 82, 83, 82, 83, 82, 83, 82, 59 },
+        { 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5 },
+        { 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208, 224, 208 } },
+    [16] = {  1,   /* @TG/@TX: phonemes, durations, pitch targets */
+        { 59 },
+        { 10 },
+        { 128 } },
+};
+
+/* cmd_sound_table ($9F74): per @T effect the four arrays cmd_ev_sound_start points pros_phoneme_ptr,
+   pros_duration_ptr, pros_pitch_ptr and pros_flags_ptr at. The encoder writes the ROM address of each
+   from where it landed in cmd_sound_data. */
+const fw_cmd_sound fw_cmd_sound_table[CMD_SOUND_EFFECTS] = {
+    [ 0] = { fw_cmd_sound_effects[0].phoneme, fw_cmd_sound_effects[0].duration,
+            fw_cmd_sound_effects[0].pitch, fw_cmd_sound_flags },
+    [ 1] = { fw_cmd_sound_effects[1].phoneme, fw_cmd_sound_effects[1].duration,
+            fw_cmd_sound_effects[1].pitch, fw_cmd_sound_flags },
+    [ 2] = { fw_cmd_sound_effects[2].phoneme, fw_cmd_sound_effects[2].duration,
+            fw_cmd_sound_effects[2].pitch, fw_cmd_sound_flags },
+    [ 3] = { fw_cmd_sound_effects[3].phoneme, fw_cmd_sound_effects[3].duration,
+            fw_cmd_sound_effects[3].pitch, fw_cmd_sound_flags },
+    [ 4] = { fw_cmd_sound_effects[4].phoneme, fw_cmd_sound_effects[4].duration,
+            fw_cmd_sound_effects[4].pitch, fw_cmd_sound_flags },
+    [ 5] = { fw_cmd_sound_effects[5].phoneme, fw_cmd_sound_effects[5].duration,
+            fw_cmd_sound_effects[5].pitch, fw_cmd_sound_flags },
+    [ 6] = { fw_cmd_sound_effects[6].phoneme, fw_cmd_sound_effects[6].duration,
+            fw_cmd_sound_effects[6].pitch, fw_cmd_sound_flags },
+    [ 7] = { fw_cmd_sound_effects[7].phoneme, fw_cmd_sound_effects[7].duration,
+            fw_cmd_sound_effects[7].pitch, fw_cmd_sound_flags },
+    [ 8] = { fw_cmd_sound_effects[8].phoneme, fw_cmd_sound_effects[8].duration,
+            fw_cmd_sound_effects[8].pitch, fw_cmd_sound_flags },
+    [ 9] = { fw_cmd_sound_effects[9].phoneme, fw_cmd_sound_effects[9].duration,
+            fw_cmd_sound_effects[9].pitch, fw_cmd_sound_flags },
+    [10] = { fw_cmd_sound_effects[10].phoneme, fw_cmd_sound_effects[10].duration,
+            fw_cmd_sound_effects[10].pitch, fw_cmd_sound_flags },
+    [11] = { fw_cmd_sound_effects[11].phoneme, fw_cmd_sound_effects[11].duration,
+            fw_cmd_sound_effects[11].pitch, fw_cmd_sound_flags },
+    [12] = { fw_cmd_sound_effects[12].phoneme, fw_cmd_sound_effects[12].duration,
+            fw_cmd_sound_effects[12].pitch, fw_cmd_sound_flags },
+    [13] = { fw_cmd_sound_effects[13].phoneme, fw_cmd_sound_effects[13].duration,
+            fw_cmd_sound_effects[13].pitch, fw_cmd_sound_flags },
+    [14] = { fw_cmd_sound_effects[14].phoneme, fw_cmd_sound_effects[14].duration,
+            fw_cmd_sound_effects[14].pitch, fw_cmd_sound_flags },
+    [15] = { fw_cmd_sound_effects[15].phoneme, fw_cmd_sound_effects[15].duration,
+            fw_cmd_sound_effects[15].pitch, fw_cmd_sound_flags },
+    [16] = { fw_cmd_sound_effects[16].phoneme, fw_cmd_sound_effects[16].duration,
+            fw_cmd_sound_effects[16].pitch, fw_cmd_sound_flags },
+};

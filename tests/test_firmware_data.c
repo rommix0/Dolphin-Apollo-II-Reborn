@@ -6,8 +6,8 @@
 #include "firmware/data/fw_data.h"
 
 typedef struct { uint32_t from, to; } range;   /* [from, to) in CPU addresses */
-static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9804, 0x9F74 }, { 0xA187, 0xA397 }, { 0xACC7, 0xACE8 },
-                               { 0xC67B, 0xC9B8 }, { 0xD44A, 0xD46A }, { 0xE5E2, 0xE5E3 }, { 0xF75B, 0xF77B } };
+static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9804, 0xA397 }, { 0xACC7, 0xACE8 }, { 0xB773, 0xB77D },
+                               { 0xB7A7, 0xB7B1 }, { 0xC67B, 0xC9B8 }, { 0xD44A, 0xF77B } };
 static const range k_low[] = { { 0x4010, 0x7832 } };
 
 static bool bit(const uint8_t *ok, uint32_t i) { return (ok[i >> 3] >> (i & 7)) & 1; }
@@ -70,6 +70,40 @@ static void test_counts(void)
     CHECK(fw_ph_lists[' '].word_pause);           /* the space's list is only the word-pause item */
     CHECK_EQ(fw_ph_lengthen_steps[0], 0x60);      /* $D44A: the RTS of ph_lengthen_count */
     CHECK_EQ(fw_cmd_speed_map_data[8][31], 1);    /* speed 9: every duration is 1 frame */
+
+    /* The playback data (M4.4a spec 3) */
+    unsigned bad_target = 0, bad_prop = 0, b_differs = 0;
+    for (int ph = 0; ph < PAR_PHONEMES; ph++) {
+        const fw_par_phoneme *a = &fw_par_voice_a[ph], *b = &fw_par_voice_b[ph];
+        b_differs += a->rank != b->rank || a->spare != b->spare;
+        for (int k = 0; k < 10; k++) {
+            const fw_par_rule *ra = &a->p[k], *rb = &b->p[k];
+            bad_target += ra->target < 1 || ra->target > 63 || rb->target < 1 || rb->target > 63;
+            bad_prop += ra->prop > 8 || rb->prop > 8;
+            b_differs += ra->prop != rb->prop || ra->ext_dur != rb->ext_dur || ra->int_dur != rb->int_dur;
+            if (k >= 4)
+                b_differs += ra->target != rb->target || ra->fixed != rb->fixed;
+        }
+    }
+    CHECK_EQ(bad_target, 0);   /* every target is 1-63, below $80: par_read_segment's BMI at $BD85 is never taken */
+    CHECK_EQ(bad_prop, 0);     /* every proportion is 0-8: par_ofs_weight = 8 - proportion never wraps */
+    CHECK_EQ(b_differs, 0);    /* voice B differs only in the targets and fixed contributions of P1-P4 */
+    CHECK_EQ(fw_par_voice_a[59].rank, 31);   /* the pause */
+    CHECK_EQ(fw_par_target_bias[3], 26);     /* P4 F3 */
+    CHECK_EQ(fw_frm_snapshot_map[0], FRAME_PITCH);
+    unsigned sound_segments = 0, sound_longest = 0, sound_refs = 0;
+    for (int x = 0; x < CMD_SOUND_EFFECTS; x++) {
+        const fw_cmd_sound_effect *s = &fw_cmd_sound_effects[x];
+        const fw_cmd_sound *t = &fw_cmd_sound_table[x];
+        sound_segments += s->count;
+        if (s->count > sound_longest)
+            sound_longest = s->count;
+        sound_refs += t->phoneme == s->phoneme && t->duration == s->duration && t->pitch == s->pitch &&
+                      t->flags == fw_cmd_sound_flags;
+    }
+    CHECK_EQ(sound_segments, 120);             /* 18 flags + 120 * 3 + 17 ends = 395 bytes */
+    CHECK_EQ(sound_longest, CMD_SOUND_MAX);    /* the shared flag array covers the longest effect */
+    CHECK_EQ(sound_refs, CMD_SOUND_EFFECTS);   /* entry x: effect x's arrays and the shared flags */
 }
 
 static void test_against_rom(const fw_image *img, const uint8_t *rom)
@@ -90,8 +124,8 @@ static void test_against_rom(const fw_image *img, const uint8_t *rom)
             fprintf(stderr, "  LOW $%04X: converted %02X, ROM %02X\n", a, img->low[a - 0x4000], rom[a - 0x4000]);
     }
     printf("  %u converted bytes compared with the ROM, %u differ\n", compared, bad);
-    CHECK_EQ(compared, 38197);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567) and
-                                    M4.3a's prosody data (2,319) */
+    CHECK_EQ(compared, 47692);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567),
+                                    M4.3a's prosody data (2,319) and M4.4a's playback data (9,495) */
     CHECK_EQ(bad, 0);
 }
 
