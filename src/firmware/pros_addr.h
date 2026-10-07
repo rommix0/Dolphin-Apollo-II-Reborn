@@ -8,6 +8,7 @@
 #define ROM_PROS_APPEND_SEGMENT     0xCA3B
 #define ROM_PROS_SEG_TAIL           0xCA6D   /* pros_append_segment's PLA / TAY / PLA / RTS (restores Y and A) */
 #define ROM_PROS_RESET_SEG_PTRS     0xCA71   /* also called at playback by par_play_start $BAF5 */
+#define ROM_PROS_MARK_STRESS        0xCABD   /* called by pros_make_segments $CAB3 */
 #define ROM_PROS_MARK_PHRASES_EXIT  0xCEEC   /* pros_mark_phrases' exit block, before its entry (BEQ from $CF26) */
 #define ROM_PROS_MARK_PHRASES       0xCEF6   /* called by pros_make_segments $CAB6 */
 #define ROM_PROS_STORE_PHRASE_LEN   0xD0FD   /* called by pros_mark_phrases $CF97 and $CEEC */

@@ -12,6 +12,7 @@
 #include "firmware/pros_gen.h"
 #include "firmware/pros_phrase.h"
 #include "firmware/pros_seg.h"
+#include "firmware/pros_stress.h"
 #include "firmware/tn_convert.h"
 #include "firmware/data/fw_data.h"
 
@@ -1032,6 +1033,249 @@ static void test_phrases_empty(void)
     CHECK(!g_f.fault);
 }
 
+/* ---- the stress pass (M4.3b Task 3) ---- */
+
+/* setup(); tn_phonetic = text; every count, flag and state byte 0 (the caller adds stale bytes past the text). */
+static void stress_setup(const char *text)
+{
+    setup();
+    size_t n = strlen(text);
+    memcpy(g_ram + TN_PHONETIC, text, n);
+    g_ram[TN_PHON_LEN] = (uint8_t)n;
+}
+
+/* Runs the stress pass with the entry registers a, x, y; returns the registers it leaves. */
+static fw_regs stress_run(uint8_t a, uint8_t x, uint8_t y)
+{
+    fw_regs r = { a, x, y, 0 };
+    pros_mark_stress(&g_f, &r);
+    return r;
+}
+
+static void check_bytes(uint16_t addr, const uint8_t *want, unsigned n)
+{
+    for (unsigned i = 0; i < n; i++)
+        CHECK_EQ(g_ram[addr + i], want[i]);
+}
+
+static void test_stress_row(void)
+{
+    check_row("pros_mark_stress", ROM_PROS_MARK_STRESS, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+}
+
+/* $CABD-$CB1C with tn_phon_len 0 (empty tn_phonetic: one isr_par_ready, then the RTS): the state bytes it clears and
+   sets, the ones it leaves; the event setup without and with events */
+static void test_stress_start(void)
+{
+    static const uint8_t want[32] = {   /* $1C00-$1C1F after the pass; $55 = not written */
+        0x00, 0x55, 0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55, 0x55, 0x00, 0x00, 0xFF, 0x00, 0x00,
+        0x00, 0x01, 0x55, 0x55, 0x00, 0x00, 0x55, 0x55, 0x55, 0x01, 0x00, 0xFF, 0x55, 0x55, 0x00, 0x55,
+    };
+    stress_setup("");
+    memset(g_ram + PROS_POS, 0x55, 32);
+    g_ram[PROS_SYM_FLAGS] = g_ram[PROS_SYM_SHORTEN] = g_ram[PROS_SYM_LENGTHEN] = 0xAA;
+    g_ram[CMD_EV_NEXT] = 9;
+    fw_wr16(&g_f, CMD_EV_POS, 0x7766);
+    fw_wr16(&g_f, CMD_EV_POSITIONS, 0x0304);            /* read only when cmd_ev_count is not 0 */
+    fw_regs r = stress_run(0x11, 0x22, 0x33);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, ROM_ISR_PAR_READY, 0, 0, 0x33);       /* A = cmd_ev_count (BEQ), X = 0 (TAX), Y = the caller's */
+    CHECK_EQ(r.a, 0);
+    CHECK_EQ(r.x, 0);                                   /* pros_pos: $FF + 1 */
+    CHECK_EQ(r.y, 0x33);
+    check_bytes(PROS_POS, want, 32);
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS], 0);
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN], 0);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN], 0);
+    CHECK_EQ(g_ram[CMD_EV_NEXT], 0);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0x77FF);        /* the low byte only */
+    CHECK_EQ(g_ram[FW_UTT_CONTENT], 0);
+    CHECK(!g_f.fault);
+
+    stress_setup("");
+    g_ram[CMD_EV_COUNT] = 2;
+    fw_wr16(&g_f, CMD_EV_POS, 0x7766);
+    fw_wr16(&g_f, CMD_EV_POSITIONS, 0x0304);
+    r = stress_run(0x11, 0x22, 0x33);
+    check_call(0, ROM_ISR_PAR_READY, 0x03, 0, 0x33);    /* A = the high byte, the last one read */
+    CHECK_EQ(r.a, 0x03);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0x0304);        /* both bytes of the first position */
+    CHECK_EQ(g_ram[FW_UTT_CONTENT], 0xFF);              /* LDM #$FF */
+    CHECK_EQ(g_ram[CMD_EV_NEXT], 0);
+    CHECK_EQ(g_ram[CMD_EV_COUNT], 2);
+    CHECK(!g_f.fault);
+}
+
+/* Every way back to isr_par_ready at $CB1F, with its registers, and the three tn_phonetic rewrites */
+static void test_stress_paths(void)
+{
+    static const uint8_t flags[12] = { 0, PSF_FUNC_WORD, 0, 0, 0, 0, 0, 0, 0, 0, PSF_STRESS, 0 };
+    static const uint8_t shorten[12] = { 0, 0, 0, 0, 0, 0, 8, 8, 8, 6, 3, 1 };
+    static const uint8_t lengthen[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 1, 1 };
+    stress_setup(" ~}{`|MMA|E?");
+    fw_regs r = stress_run(0x11, 0x22, 0x33);
+    CHECK_EQ(g_ncalls, 13);
+    check_call(0, ROM_ISR_PAR_READY, 0x00, 0, 0x33);    /* the start */
+    check_call(1, ROM_ISR_PAR_READY, 0xFF, 0, 0x00);    /* ' ': the word end, A = $FF, Y = features 0 */
+    check_call(2, ROM_ISR_PAR_READY, PSF_FUNC_WORD, 1, 0x00);   /* '~' */
+    check_call(3, ROM_ISR_PAR_READY, 0xFF, 2, 0x00);    /* '}' */
+    check_call(4, ROM_ISR_PAR_READY, 0x00, 3, 0x00);    /* '{' */
+    check_call(5, ROM_ISR_PAR_READY, 0x01, 4, 0x00);    /* '`' */
+    check_call(6, ROM_ISR_PAR_READY, 0x49, 5, 0x00);    /* '|' before M: A = M's features ($1C09) */
+    check_call(7, ROM_ISR_PAR_READY, '|', 6, 0x49);     /* M before M: becomes | */
+    check_call(8, ROM_ISR_PAR_READY, 0x49, 7, 0x49);    /* the consonant tail: A = Y = its features */
+    check_call(9, ROM_ISR_PAR_READY, 0x83, 8, 0x83);    /* the vowel tail: Y = the next symbol's features */
+    check_call(10, ROM_ISR_PAR_READY, 0x45, 9, 0x45);   /* '|' before E: R, a consonant */
+    check_call(11, ROM_ISR_PAR_READY, 0x83, 10, 0x00);  /* E before the end: Y = 0 */
+    check_call(12, ROM_ISR_PAR_READY, 0xFF, 11, 0x00);  /* '?': the word end */
+    CHECK_EQ(r.a, 0xFF);
+    CHECK_EQ(r.x, 12);
+    CHECK_EQ(r.y, 0x00);
+    CHECK(memcmp(g_ram + TN_PHONETIC, " ~}{`||MARE.", 12) == 0);   /* MM -> |M, |E -> RE, `...? -> . */
+    check_bytes(PROS_SYM_FLAGS, flags, 12);
+    check_bytes(PROS_SYM_SHORTEN, shorten, 12);
+    check_bytes(PROS_SYM_LENGTHEN, lengthen, 12);
+    CHECK_EQ(g_ram[PROS_POS], 12);
+    CHECK_EQ(g_ram[PROS_SYMBOL], '?');                  /* read before the rewrite */
+    CHECK_EQ(g_ram[PROS_CLASS], 0x0D);
+    CHECK_EQ(g_ram[PROS_PREV_FEATURES], 0x83);
+    CHECK_EQ(g_ram[FW_PROS_BACKQUOTE], 0);
+    CHECK_EQ(g_ram[FW_PROS_ACCENT_PENDING], 1);
+    CHECK_EQ(g_ram[FW_PROS_STRESS_TOGGLE], 0xFF);
+    CHECK_EQ(g_ram[FW_PROS_NEXT_SYM], 0x0D);            /* no next symbol */
+    CHECK_EQ(g_ram[FW_PROS_NEXT_PHON], 0x0D);
+    CHECK(!g_f.fault);
+}
+
+/* A vowel before | and a vowel counts no syllable, so the R gets the toggle's accent state 0 with the syllable count
+   still 0: BEQ $CCBA taken (twice: at R and at the last A). The spec calls it unreachable; syllabic_stress has it. */
+static void test_stress_no_syllable(void)
+{
+    static const uint8_t shorten[3] = { 0, 5 + 3 + 12 + 3, 5 + 3 };   /* R: the $0C at $CCD5 (carry 0) */
+    static const uint8_t lengthen[3] = { 8, 4, 5 };
+    stress_setup("A|A");
+    fw_regs r = stress_run(0, 0, 0);
+    CHECK_EQ(g_ncalls, 4);
+    check_call(1, ROM_ISR_PAR_READY, 0x83, 0, 0x83);
+    check_call(2, ROM_ISR_PAR_READY, 0x45, 1, 0x45);
+    check_call(3, ROM_ISR_PAR_READY, 0x83, 2, 0x00);
+    CHECK_EQ(r.x, 3);
+    CHECK(memcmp(g_ram + TN_PHONETIC, "ARA", 3) == 0);
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 0], PSF_STRESS);
+    check_bytes(PROS_SYM_SHORTEN, shorten, 3);
+    check_bytes(PROS_SYM_LENGTHEN, lengthen, 3);
+    CHECK_EQ(g_ram[FW_PROS_STRESS_TOGGLE], 0);
+    CHECK_EQ(g_ram[PROS_ACCENT_STATE], 0);
+    CHECK_EQ(g_ram[FW_PROS_SYLLABLES], 1);
+    CHECK(!g_f.fault);
+}
+
+/* The block $CC60-$CCD7 alone at pros_pos 5: a liquid before a vowel with the accent state 0 */
+static uint8_t stress_counts(uint8_t shorten)
+{
+    setup();
+    g_ram[PROS_POS] = 5;
+    g_ram[PROS_FEATURES] = 0x45;                        /* R: a consonant, liquid, voiced */
+    g_ram[FW_PROS_STRESS_TOGGLE] = 0xFF;
+    g_ram[FW_PROS_NEXT_FEATURES] = 0x83;                /* a vowel next */
+    g_ram[PROS_SYM_SHORTEN + 5] = shorten;
+    pros_stress_counts(&g_f);
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 5], 0);             /* accent state 0: no stress flag */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 5], 0);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+    return g_ram[PROS_SYM_SHORTEN + 5];
+}
+
+static void test_stress_carry(void)   /* $CCD5: ADC #$0C with no CLC, after the CLC; ADC #3 at $CCB2 */
+{
+    CHECK_EQ(stress_counts(0x10), 0x10 + 3 + 12);
+    CHECK_EQ(stress_counts(0xFC), 0x0B);                /* $FC + 3 = $FF, no carry; + 12 wraps to $0B */
+    CHECK_EQ(stress_counts(0xFE), 0x0E);                /* $FE + 3 = $01, carry; + 12 + 1 = $0E (not $0D) */
+}
+
+/* $CDD9: the consonant scan after a vowel has no bound; X wraps from $FF to 0 inside page $19 */
+static void test_stress_scan_wrap(void)
+{
+    stress_setup(".E");
+    memset(g_ram + TN_PHONETIC + 2, 'M', 254);          /* consonants from position 2 to 255 */
+    stress_run(0, 0, 0);
+    CHECK_EQ(g_ram[FW_PROS_FINAL], 1);                  /* the scan stopped at position 0, '.' (class bit 0) */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 4 + 4);      /* the first word: + 4; before punctuation: + 4 */
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 1], PSF_STRESS);
+    CHECK(!g_f.fault);
+
+    stress_setup(" E");
+    memset(g_ram + TN_PHONETIC + 2, 'M', 254);
+    stress_run(0, 0, 0);
+    CHECK_EQ(g_ram[FW_PROS_FINAL], 0);                  /* position 0 is a space this time */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 4 + 1);
+    CHECK(!g_f.fault);
+}
+
+/* Reads past tn_phon_len: after A, L makes the scan start at position 3 and the next phonetic symbol position 2's
+   ($CDBA, $1C12 = 1); at L, $CC37 reads position 2: a vowel there toggles the stress */
+static void test_stress_past_end(void)
+{
+    stress_setup("AL");
+    g_ram[TN_PHONETIC + 2] = 'E';
+    g_ram[TN_PHONETIC + 3] = '.';
+    g_ram[FW_PROS_WRITE_ONLY_1C12] = 0x55;
+    fw_regs r = stress_run(0, 0, 0);
+    CHECK_EQ(g_ram[FW_PROS_WRITE_ONLY_1C12], 1);
+    CHECK_EQ(g_ram[FW_PROS_FINAL], 1);                  /* position 3, not 2 */
+    CHECK_EQ(g_ram[FW_PROS_STRESS_TOGGLE], 0);          /* toggled at L by the E past the end */
+    CHECK_EQ(g_ram[PROS_ACCENT_STATE], 0);
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 1], 5 + 3 + 3);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 0], 4);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 4);
+    CHECK_EQ(g_ram[FW_PROS_NEXT_PHON], 0x0D);           /* the look-ahead at L overwrote $CDBF's 'E' */
+    check_call(1, ROM_ISR_PAR_READY, 0x83, 0, 0x45);    /* Y = L's features ($1C07) */
+    CHECK_EQ(r.y, 0x45);
+    CHECK(!g_f.fault);
+
+    stress_setup("AL");
+    g_ram[TN_PHONETIC + 2] = 'M';
+    g_ram[TN_PHONETIC + 3] = '.';
+    stress_run(0, 0, 0);
+    CHECK_EQ(g_ram[FW_PROS_STRESS_TOGGLE], 0xFF);       /* no vowel after L */
+    CHECK_EQ(g_ram[PROS_ACCENT_STATE], 0xFF);
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 1], 3);
+
+    stress_setup("AE");                                 /* no L: $1C12 = 0 */
+    g_ram[FW_PROS_WRITE_ONLY_1C12] = 0x55;
+    stress_run(0, 0, 0);
+    CHECK_EQ(g_ram[FW_PROS_WRITE_ONLY_1C12], 0);
+    CHECK(!g_f.fault);
+}
+
+/* $CCFB: the class table read at a position, not at a symbol; the count lengthened is position pos + 1, here
+   tn_phon_len, which no position clears: it wraps mod 256 */
+static void test_stress_count_wrap(void)
+{
+    char text[34];
+    memset(text, ' ', 31);
+    strcpy(text + 31, "EM");                            /* M at position 32: ph_symbol_class[33] = '!' = 1 */
+    stress_setup(text);
+    g_ram[PROS_SYM_LENGTHEN + 33] = 0xFC;
+    stress_run(0, 0, 0);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 33], 0x04);      /* $FC + 8 */
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 32], 3);
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 31], 1);          /* E before a nasal */
+    CHECK_EQ(g_ncalls, 34);
+    CHECK(!g_f.fault);
+
+    memset(text, ' ', 31);
+    text[31] = 'E';
+    text[32] = 'M';
+    text[33] = '\0';
+    stress_setup(text + 1);                             /* M at position 31: ph_symbol_class[32] = ' ' = 0 */
+    g_ram[PROS_SYM_LENGTHEN + 32] = 0xFC;
+    stress_run(0, 0, 0);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 32], 0xFC);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_pros(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -1071,4 +1315,12 @@ void suite_fw_pros(void)
     test_phrases_accent();
     test_phrases_exit_only();
     test_phrases_empty();
+    test_stress_row();
+    test_stress_start();
+    test_stress_paths();
+    test_stress_no_syllable();
+    test_stress_carry();
+    test_stress_scan_wrap();
+    test_stress_past_end();
+    test_stress_count_wrap();
 }
