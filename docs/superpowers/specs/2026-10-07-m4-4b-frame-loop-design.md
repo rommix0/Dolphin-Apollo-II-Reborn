@@ -13,7 +13,7 @@
 - Hooks: all 16 routines, `util_shl3`/`util_shl4` included, as in M4.4a (every routine, so that a mismatch points at one routine). That makes 64 replacements and 65 `golden_hybrid` modes.
 - The two routines that wait on the timer interrupt (`par_play`, `boot_loop_play`) are checked against the ROM by a new live differential test, `diff_play`, with interrupts running (§4.1). `diff_lts` cannot check them, because it holds interrupts. The same test injects the receive interrupt's two effects (abort, reply due) so that the branches no corpus text can reach are compared with the ROM too.
 - The C keeps the conventions of M4.4a: one static helper per ROM block with its address range, the registers flowing through `fw_regs`, C calling C, and the quirks kept (§2.6).
-- No new corpus texts or goldens (§4.6).
+- One new corpus text and its rom-engine golden, for the one reachable branch no text reaches: an event at segment 256 or later ($B88D, §4.6; user decision after the plan's survey). The existing goldens stay unchanged.
 
 ## 1. Goal
 
@@ -100,8 +100,8 @@ Declared outputs: **A, X and Y for all 16**. Each thunk's comment cites what its
 | `par_step_tracks` $C0FF | `par_play` $B8C0, $B90B | Nothing (`frm_finish_frame` pushes and restores them). Alone only. |
 | `par_track_sequential` $C14C, `par_track_overlap` $C1F2 | `par_step_tracks` $C10C, $C106 | **X** (`DEX` at $C10F). Alone only. |
 | `par_track_start` $C24A, `par_track_end` $C26C | `par_track_overlap` $C1F2, $C1F8 | A, X. Alone only. |
-| `util_interp_step` $C1A1 | `par_step_tracks` $C124, `par_track_sequential` $C163/$C195, `par_track_overlap` $C210, `par_track_start` $C265, `par_track_end` $C28E | A, X (the callers index with X after; they load Y themselves). Alone only. |
-| `util_shl3` $C657 | `cmd_ev_sound_start` $BBA7, `isr_set_volume` $ACEC | A. Fires in "all" mode from the ROM `isr_set_volume`. |
+| `util_interp_step` $C1A1 | `par_step_tracks` $C124, `par_track_sequential` $C163/$C195, `par_track_overlap` $C210, `par_track_start` $C265, `par_track_end` $C28E | A, and X at every site but $C124 (the pitch track reads A only); the callers load Y themselves. Alone only. |
+| `util_shl3` $C657 | `cmd_ev_sound_start` $BBA7, `isr_set_volume` $ACEC, and the fall-through from the ROM `util_shl4` | A. Fires in "all" mode from the ROM `isr_set_volume`. In `util_shl4`'s alone mode the ROM `util_shl4` is never reached (its callers are C), so the fall-through only happens on the rom engine. |
 | `util_shl4` $C656 | `cmd_apply_pitch`, `cmd_hex_byte`, `cmd_set_formant`, `cmd_set_mark_space` (ROM) | A. Alone only, as far as the dumps show: in "all" mode these callers are C and inline it (the plan checks each one). |
 
 - Where nothing is read, the thunk still sets A, X and Y to the ROM's exit values.
@@ -115,7 +115,7 @@ All of M4.4a's rules hold: every RAM write, the write-only ones included; 8-bit 
 - **`par_play`'s two loops.**
   - *While segments remain* (`pros_seg_count` ≠ 0, both bytes), each pass: run every due event (`cmd_ev_next` < `cmd_ev_count`, unsigned, and `par_seg_index` = `cmd_ev_pos`, both bytes; one event per `JMP par_play`, so the test repeats after each); then, when `UART_STATUS` bit 1 is set and `ser_status_due` ≠ 0, `ser_tx_service`; then `isr_par_ready`; then, when `ser_abort` bit 0 is set, the end; then, when `isr_frame_flag` bit 0 is clear, a second `isr_par_ready` and the next pass. With the flag set: `DEC par_frames_left`; at 0, `par_next_segment`, and when `par_frames_left` is still 0, back to the `pros_seg_count` test ($B906 → $B8B1); otherwise `isr_par_ready`, `par_step_tracks`, `frm_finish_frame`, `LDM #0,isr_frame_flag`, next pass.
   - *Once `pros_seg_count` is 0* ($B8BB), a tighter loop with no events, no reply service and no abort test: `DEC par_frames_left`; at 0, the end; otherwise `par_step_tracks`, `frm_finish_frame`, clear the flag, then wait (`isr_par_ready` / flag) and loop.
-  - **A zero-frame segment wraps.** When `par_next_segment` leaves `par_frames_left` = 0 and segments remain, the next `DEC` at $B8FB makes it $FF; when none remain, the `DEC` at $B8BB does. The C does the same. The plan establishes on the corpus whether `par_next_segment` can leave 0; the C copies the ROM either way.
+  - **A zero-frame segment wraps.** When `par_next_segment` leaves `par_frames_left` = 0 and segments remain, the next `DEC` at $B8FB makes it $FF; when none remain, the `DEC` at $B8BB does. The C does the same. Unreachable: every duration source is at least 1, and on the corpus the `BEQ` at $B906 is never taken; a unit test pins the wrap.
   - *The end* ($B8D2): `isr_wait_frame`, `par_frames_left` = 3, then three times: `frm_copy_rest_frame`, `frm_snapshot`, `frm_clamp_mark_space`, `frm_transition_flags`, wait for the flag, clear it, `DEC`. Then `cmd_ev_sound_end` and a last `isr_par_ready`.
   - `LDM #0,isr_frame_flag` writes the whole byte. The flag tests read bit 0 only.
 - **`cmd_run_event`.** A = `cmd_ev_next`; `cmd_ev_next` += 1; X = A·2 (`ASL`, 8-bit). `cmd_ev_vector` = `cmd_ev_handlers[X]`. `INX`/`INX` wraps at X = $FE, so `cmd_ev_pos` = `cmd_ev_positions` at (X + 2) & $FF; the @T producer writes its end event at $1208,X without that wrap (M4.2's `cmd_sound`). X = `cmd_ev_next` − 1, A = `cmd_ev_args[X]`. The handler is entered with that A and X, the caller's Y, and the flags of the `LDA`.
@@ -132,7 +132,7 @@ All of M4.4a's rules hold: every RAM write, the write-only ones included; 8-bit 
   - Y = 1: returns A unchanged. Y = 2: `CLC`/`ADC util_interp_cur`/`ROR`, the 9-bit average.
   - A − cur = 0 (`SEC`/`SBC`): returns `util_interp_target`.
   - Otherwise the quotient by repeated `SBC util_interp_steps` (carry set) or `ADC` (carry clear), then `LSR util_interp_steps` — **the halved count stays in RAM** — and the rounding: the remainder plus half the steps, tested with `BPL`/`BMI`/`BEQ` as at $C1C6–$C1EF; `util_interp_quot` is written, and A = cur + quotient. Y out as each path leaves it.
-  - **Zero steps.** Y = 0 with A ≠ cur makes the ROM loop forever (`SBC #0` with the carry set, or `ADC #0` with it clear, never ends). The C faults instead. Unreachable: a track's count reaches 0 only after the step with Y = 1, which leaves the value equal to its target, and the target does not move within a segment; with equal values Y = 0 returns at $C1B2, and the count goes on to $FF (the plan checks on the corpus whether that case is reached).
+  - **Zero steps.** Y = 0 with A ≠ cur makes the ROM loop forever (`SBC #0` with the carry set, or `ADC #0` with it clear, never ends). The C faults instead. Unreachable: a track's count reaches 0 only after the step with Y = 1, which leaves the value equal to its target, and the target does not move within a segment; with equal values Y = 0 returns at $C1B2, and the count goes on to $FF. On the corpus Y is never 0 (it ranges 1–80 for the pitch track, 1–40 and 1–13 for the parameter tracks), so neither Y = 0 case is reached; unit tests pin both.
 - **The tracks.**
   - `par_step_tracks`: X = 10 down to 1, `par_sequential[X]` ≠ 0 → `par_track_sequential`, else `par_track_overlap`; then the pitch track: `util_interp_steps` = `par_frames_left`, `pros_play_pitch` steps to `pros_play_target`, and frame byte b10 = `pros_play_pitch` >> 2.
   - `par_track_sequential`: start transition while `par_start_dur[X]` ≠ 0 (decremented), then hold `par_seg_target[X]` while `par_steady[X]` ≠ 0 (decremented), then the end transition from `par_seg_target[X]` itself to `par_boundary[X]` over `par_end_dur[X]` (decremented, wrapping past 0).
@@ -156,13 +156,13 @@ All of M4.4a's rules hold: every RAM write, the write-only ones included; 8-bit 
 ## 4. Verification
 
 ### 4.1 `diff_play` (new suite, `tests/test_diff_play.c`)
-- Runs every corpus file and the boot run on the ROM engine, with an observer on each replacement marked `waits` (`par_play` $B877, `boot_loop_play` $A7D4). **Every call** is checked (a few per file; no sampling).
+- Runs every corpus file and the boot run on the ROM engine, with an observer on each replacement marked `waits` (`par_play` $B877, `boot_loop_play` $A7D4). **Every call** is checked (a few per file; no sampling). `par_play` re-enters $B877 by its own `JMP par_play` ($B892, $B8AE, $B914) with the same stack, about 27,000 times per call; only a real call counts, recognised by the `JSR par_play` at $B2C7 having just run (a hook there arms the next $B877 entry). `boot_loop_play` has no such re-entry.
 - At each call the machine is cloned twice, **with interrupts live in both**:
   - copy A runs the ROM routine to its return (`machine_finish_routine`, budget 1 G cycles);
   - copy B runs the C thunk.
 - Both copies record, through the machine's frame callback at $B306, every produced frame and at that moment a snapshot of: all RAM except the SFRs ($DA–$FF) and the stack page ($0100–$01FF); the P2 latch; the UART transmit count and last byte. At a swap both main programs are waiting for the flag, so their state must agree.
-- **Pass:** the same number of swaps; every frame and every snapshot equal; and at exit: PC and SP, A, X and Y, the P2 latch, the UART transmit state, and all RAM except the SFRs, the dead stack below the exit SP, and the timer interrupt's per-word counters `isr_tick_div` $59, `isr_word_ofs` $5A, `isr_words_left` $5B and `isr_swap_phase` $5D. Those advance between DSP words, so they depend on how far into a frame each copy returns; every swap has compared them already. The plan confirms the list against the writes in `isr_timer_dsp`'s dump ($B2D9).
-- **Injected receive-interrupt effects.** On the first call of each of the two routines in each corpus file (and in the boot run), two more pairs of copies run, each with one change made to both copies inside the frame callback of the second swap, as the receive interrupt would make it:
+- **Pass:** the same number of swaps; every frame and every snapshot equal; and at exit: PC and SP, A, X and Y, the P2 latch, the UART transmit state, and all RAM except the SFRs, the dead stack below the exit SP, and the timer interrupt's per-word counters `isr_tick_div` $59, `isr_word_ofs` $5A and `isr_words_left` $5B. Those advance between DSP words, so they depend on how far into a frame each copy returns; every swap has compared them already. (The survey checked `isr_timer_dsp`'s writes: `isr_swap_phase` $5D, `isr_play_ptr`, `isr_fill_ptr` and `isr_frame_flag` change only at a swap.) Neither copy is run on past its return: after a `ser_status_due` injection the ROM never reaches idle again (`boot_get_clause` waits for the host at $A6D4).
+- **Injected receive-interrupt effects.** On the first call of each of the two routines in each corpus file (and in the boot run) that plays (in five texts the first `boot_loop_play` call returns at once), two more pairs of copies run, each with one change made to both copies inside the frame callback of the second swap, as the receive interrupt would make it:
   - `ser_abort` bit 0 set (a mute): reaches the end path from $B8A5;
   - `ser_status_due` = 1 (a reply due): reaches `ser_tx_service` from $B89C.
   
@@ -188,22 +188,27 @@ Also runs `hybrid_engine_speak` with all hooks on `hello` at the timer scales 1/
 - `par_track_sequential`: each phase, and `par_end_dur` wrapping past 0.
 - `par_step_tracks`: the slot routing through `par_slot_map` and b10.
 - `cmd_run_event`: `cmd_ev_next` = 127 (X = $FE; `cmd_ev_pos` from `cmd_ev_positions[0]`), the handler registers, and an unknown handler address going to `fw_rom_call` with A, X, Y as the ROM's `JMP` hands them.
+- `cmd_ev_index` with `cmd_index_count` = 0 ($BBA2 taken: nothing written) and with 1.
 - `cmd_ev_sound_start` / `cmd_ev_sound_end`: save, set and restore, with effect 0 and effect 16; `cmd_ev_sound_end` with the flag clear writes nothing.
 - `par_play` with a stub host whose `isr_par_ready` sets the flag every n-th call: the order of ROM calls in a pass, the two loops, the zero-frame wrap, the abort exit and the reply service, the three rest frames.
 - `boot_loop_play`: not playing ($6B = 0; abort set) with X and Y untouched; playing, with its ROM calls in order.
 - `fw_wr_ind_y` faults outside RAM; `fw_sfr8` faults without a host and outside $DA–$FF.
 - `tests/test_fw_tn.c`: the case that checks the flush's `fw_rom_call(ROM_BOOT_LOOP_PLAY, …, FW_ROM_CALL_SPEECH_BUDGET)` instead checks that the C `boot_loop_play` ran (its first ROM calls, `isr_par_hold` then the C `par_play_start`'s work).
 
-### 4.6 Coverage (no new corpus)
-Probed while designing with `apollo2_coverage` on the 44 corpus texts: every instruction of the 16 routines executes except $B89C (reply service), $B8A5 (abort) and $C271–$C274 (negative `par_end_wait`).
+### 4.6 Coverage and the new corpus text
+Probed while designing with `apollo2_coverage` on the 44 corpus texts: every instruction of the 16 routines executes except $B89C (reply service), $B8A5 (abort) and $C271–$C274 (negative `par_end_wait`). The plan's branch probe found these branches one-sided:
+- **$B88D** (`cmd_ev_pos` high byte against `par_seg_index` high byte): never taken, because no event sits at segment 256 or later. **New corpus text** `late_event`: the `seg_256` text with a @B command placed after segment 256, so the event's position has a high byte of 1 and the low bytes meet first on page 0. Its golden is generated once by the rom engine; the plan confirms with the probe that $B88D is taken. The corpus goes from 44 to 45 texts (`golden_hybrid` prints 46 files, boot included).
+- **$A7D8** (abort set when `boot_loop_play` is entered): needs serial input during playback; a unit test pins it.
+- **$B906** (a zero-frame segment): unreachable, since every duration source is at least 1 (the survey found the `BEQ` never taken and neither `DEC` starting from 0); a unit test pins it.
+- **$BBA2** (`cmd_index_count` already 0 when an index mark plays): reachable only through an 8-bit wrap of the count; a unit test pins it.
 - $B89C and $B8A5 need serial input during playback. The machine delivers a host byte only at the idle `WIT` (parent spec §4), never during playback, so no text can reach them; `diff_play`'s injected cases compare them with the ROM (§4.1).
 - $C271 is unreachable (§2.6); the unit test pins it.
-- The plan re-runs the probe for branches taken both ways and lists any other one-sided branch with its reason.
+- With `late_event`, every other conditional branch of the 16 routines is seen both ways on the corpus.
 
 ### 4.7 Done criteria
 1. `diff_lts` checks all 62 non-waiting routines more than 0 times each, with 0 mismatches.
 2. `diff_play` checks `par_play` and `boot_loop_play` more than 0 times each, reaches $B8A5 and $B89C, with 0 mismatches.
-3. `golden_hybrid` reproduces every file × 65 modes byte for byte; every existing golden is unchanged.
+3. `golden_hybrid` reproduces every file (46, boot included) × 65 modes byte for byte; every existing golden is unchanged; the `late_event` golden exists and takes $B88D.
 4. `test_timing_invariance` passes on both engines.
 5. `firmware_data` passes at 47,702 converted bytes.
 6. `apollo2 --engine hybrid` equals `--engine rom` on every corpus text (`-o FILE` only).
@@ -212,7 +217,7 @@ Probed while designing with `apollo2_coverage` on the 44 corpus texts: every ins
 9. The docs are updated: the parent spec gets rev 13 (milestone 4.4b done; M4.4 complete; the new `read_sfr` host capability recorded in §6/§8); this spec's status, with "As built" if anything differs; the README's hybrid section lists the frame loop.
 
 ### 4.8 Task outline (for the plan)
-1. The host capability: `read_sfr`/`fw_sfr8`, `fw_wr_ind_y`, `util_shl3` into `fw_ops.h` (and `util_shl4` moved), the `waits` field, `DIFF_MAX` 64; `par_slot_map` converted.
+1. The host capability: `read_sfr`/`fw_sfr8`, `fw_wr_ind_y`, `util_shl3` into `fw_ops.h` (and `util_shl4` moved), the `waits` field, `DIFF_MAX` 64; `par_slot_map` converted; the `late_event` corpus text and its golden.
 2. The tracks: `util_interp_step`, `par_track_start`, `par_track_end`, `par_track_sequential`, `par_track_overlap`, `par_step_tracks`, with hooks.
 3. The command events: `cmd_run_event` and the five handlers, `util_shl3`/`util_shl4` hooks.
 4. `diff_play` (first against the ROM routines alone: both copies ROM, to prove the comparison itself before any C loop exists).
