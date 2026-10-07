@@ -24,4 +24,20 @@ void par_clamp(fw *f, fw_regs *r);
    @B3 (not for v = 0), @B4, @B6 and @B7. A = the result; X and Y untouched. */
 void par_scale_voicing(fw *f, fw_regs *r);
 
+/* $BD33: the next segment (M4.4a spec 2.2). The playing segment becomes the current one (par_cur_rank,
+   par_cur_phoneme = the next ones). par_seg_index += 1; when its low byte wraps to 0, its high byte and the high
+   bytes of pros_phoneme_ptr, pros_pitch_ptr, pros_duration_ptr and pros_flags_ptr move on one page, in that order.
+   At the index (Y = its low byte, through the pointers, which point into ROM during a @T effect):
+   par_next_phoneme, and pros_play_target, scaled by pros_scale_target and moved by pros_microprosody after
+   pros_play_pitch takes the old target. par_frames_left = par_seg_target[0] = the duration at index - 1 (at a low
+   byte of 0, pros_duration_ptr+1 is decremented for the read and incremented after it, $BD6E/$BD7E).
+   par_seg_target[1..10] = par_cur_phoneme's ten targets from the rows at par_row_ptr (which the caller set to
+   par_params_ptr), each plus its @u offset cmd_formant_ofs unless it is >= $80 or < 3, then par_clamp, and P10
+   scaled by par_scale_voicing; par_row_ptr moves on one parameter block (par_next_param) per target and is then
+   set back to par_params_ptr. For P1..P10, par_start_dur = par_next_start_dur and par_start_val = par_line_val =
+   par_boundary. pros_seg_count -= 1 in 16 bits.
+   r in: not read (X is set to 0 first, A and Y are loaded). r out: A = par_boundary[1], X = 0 (which the boundary
+   pass's stores index with), Y = 0, as the ROM leaves them at its RTS ($BDD2). */
+void par_read_segment(fw *f, fw_regs *r);  /* $BD33 */
+
 #endif

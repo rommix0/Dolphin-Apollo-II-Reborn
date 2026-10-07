@@ -11,8 +11,8 @@ uint8_t cmd_apply_speaker(fw *f, uint8_t *x, uint8_t *y);
    par_table_ptr = the table after it (par_voice_a / par_voice_b), par_spare = 0. */
 void cmd_select_voice_a(fw *f);
 void cmd_select_voice_b(fw *f);
-/* $A832: cmd_source_prosody = cmd_source * 16 | cmd_prosody, pros_pitch_centre = cmd_pitch * 16, then the ROM
-   par_setup_voice (M4.4) rebuilds the voice set-up, with A = pros_pitch_centre, X = *x and Y = *y (it reads
+/* $A832: cmd_source_prosody = cmd_source * 16 | cmd_prosody, pros_pitch_centre = cmd_pitch * 16, then the C
+   par_setup_voice (M4.4a) rebuilds the voice set-up, with A = pros_pitch_centre, X = *x and Y = *y (it reads
    none of them). *x and *y return what it leaves; cmd_apply_pitch restores only A. */
 void cmd_apply_pitch(fw *f, uint8_t *x, uint8_t *y);
 /* $A84A: cmd_speed_limit = cmd_speed_limits[cmd_speed - 1], cmd_speed_map = cmd_speed_maps[cmd_speed - 1]. */

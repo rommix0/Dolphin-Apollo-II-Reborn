@@ -8,6 +8,7 @@
 #include "firmware/cmd_apply.h"
 #include "firmware/cmd_handlers.h"
 #include "firmware/cmd_run.h"
+#include "firmware/par_addr.h"
 #include "firmware/tn_convert.h"
 #include "firmware/data/fw_data.h"
 
@@ -71,10 +72,20 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         memcpy(g_before, g_ram, sizeof g_ram);
         return FW_CALL_RETURNED;   /* X back as it was (cmd_run_done) */
     }
-    if (addr == ROM_PAR_SETUP_VOICE) {
-        /* par_setup_voice reads none of A, X, Y and leaves X = 9 and Y = $0B, as the ROM's does
-           (frm_build_rest_frame's loop ends at X = 9, frm_clamp_mark_space's at Y = $0B) */
+    /* the frame routines the C par_setup_voice calls (M4.5) return the registers the ROM ones leave */
+    if (addr == ROM_FRM_BUILD_REST_FRAME) {     /* $B428-$B444: Y = $3B, X = 9 (its INX loop), A = par_params_ptr+1 */
+        r->a = g_ram[PAR_PARAMS_PTR + 1];
         r->x = 9;
+        r->y = 0x3B;
+        return FW_CALL_RETURNED;
+    }
+    if (addr == ROM_FRM_COPY_REST_FRAME) {      /* $B445-$B44F: Y = $FF, A = frm_rest_frame[0]; X untouched */
+        r->a = g_ram[FRM_REST_FRAME];
+        r->y = 0xFF;
+        return FW_CALL_RETURNED;
+    }
+    if (addr == ROM_FRM_CLAMP_MARK_SPACE) {     /* $B930-$B95C: A = Y = $0B; X untouched */
+        r->a = 0x0B;
         r->y = 0x0B;
         return FW_CALL_RETURNED;
     }
@@ -706,6 +717,26 @@ static void check_call(unsigned i, uint16_t addr, uint8_t a, uint8_t x, uint8_t 
     CHECK_EQ(g_calls[i].budget, FW_ROM_CALL_BUDGET);
 }
 
+/* Calls i..i+4 are the C par_setup_voice's (M4.4a): frm_build_rest_frame with A = par_param_stride's high byte, X = 0
+   and Y = y (the Y handed to par_setup_voice), then frm_copy_rest_frame, frm_clamp_mark_space, frm_copy_rest_frame
+   and frm_clamp_mark_space, each with the registers the one before left; and the voice pointers and the stride it
+   set from par_count (N) and par_table_ptr. */
+static void check_setup_voice(unsigned i, uint8_t y)
+{
+    uint8_t n = g_ram[PAR_COUNT];
+    uint16_t table = fw_rd16(&g_f, PAR_TABLE_PTR), params = (uint16_t)(table + 2 * n), stride = (uint16_t)(5 * n);
+    uint8_t rest0 = g_ram[FRM_REST_FRAME];
+    check_call(i, ROM_FRM_BUILD_REST_FRAME, (uint8_t)(stride >> 8), 0, y);
+    check_call(i + 1, ROM_FRM_COPY_REST_FRAME, (uint8_t)(params >> 8), 9, 0x3B);
+    check_call(i + 2, ROM_FRM_CLAMP_MARK_SPACE, rest0, 9, 0xFF);
+    check_call(i + 3, ROM_FRM_COPY_REST_FRAME, 0x0B, 9, 0x0B);
+    check_call(i + 4, ROM_FRM_CLAMP_MARK_SPACE, rest0, 9, 0xFF);
+    CHECK_EQ(g_ram[PAR_ROW_LEN], n);
+    CHECK_EQ(fw_rd16(&g_f, PAR_RANK_PTR), table);
+    CHECK_EQ(fw_rd16(&g_f, PAR_PARAMS_PTR), params);
+    CHECK_EQ(fw_rd16(&g_f, PAR_PARAM_STRIDE), stride);
+}
+
 static void test_apply_pitch(void)
 {
     setup();
@@ -716,8 +747,8 @@ static void test_apply_pitch(void)
     cmd_apply_pitch(&g_f, &x, &y);
     CHECK_EQ(g_ram[CMD_SOURCE_PROSODY], 0x72);
     CHECK_EQ(g_ram[PROS_PITCH_CENTRE], 0x90);
-    CHECK_EQ(g_ncalls, 1);
-    check_call(0, ROM_PAR_SETUP_VOICE, 0x90, 0x31, 0x42);   /* A = pros_pitch_centre, as at $A845 */
+    CHECK_EQ(g_ncalls, 5);
+    check_setup_voice(0, 0x42);                 /* the C par_setup_voice: A (pros_pitch_centre) and X are not read */
     CHECK_EQ(x, 9);                             /* as par_setup_voice leaves them */
     CHECK_EQ(y, 0x0B);
     CHECK(!g_f.fault);
@@ -749,8 +780,8 @@ static void test_apply_speaker(void)
     CHECK_EQ(fw_rd16(&g_f, PAR_TABLE_PTR), 0xD46A);    /* par_voice_a */
     CHECK_EQ(fw_rd16(&g_f, PAR_SPARE), 0);
     CHECK_EQ(g_ram[CMD_SPEED_LIMIT], 7);
-    CHECK_EQ(count(ROM_PAR_SETUP_VOICE), 1);
-    check_call(0, ROM_PAR_SETUP_VOICE, 0, 1, 2);
+    CHECK_EQ(count(ROM_FRM_BUILD_REST_FRAME), 1);
+    check_setup_voice(0, 2);                    /* voice A: N = 86, stride 430 */
     CHECK_EQ(x, 9);
     CHECK_EQ(y, 0x0B);
 
@@ -789,8 +820,9 @@ static void test_set_pitch(void)
     cmd_set_pitch(&g_f, 7, 'b');
     CHECK_EQ(g_ram[CMD_PITCH], 0x0B);
     CHECK_EQ(g_ram[CMD_PITCH_STEP], 8);
-    CHECK_EQ(g_ncalls, 1);
-    check_call(0, ROM_PAR_SETUP_VOICE, 0xB0, 7, 2);
+    CHECK_EQ(g_ncalls, 5);
+    CHECK_EQ(g_ram[PROS_PITCH_CENTRE], 0xB0);   /* the A that cmd_apply_pitch hands to par_setup_voice */
+    check_setup_voice(0, 2);
     CHECK(!g_f.fault);
 }
 
@@ -822,8 +854,8 @@ static void test_set_source(void)
     cmd_set_source(&g_f, 4, '7');
     CHECK_EQ(g_ram[CMD_SOURCE], 7);
     CHECK_EQ(g_ram[CMD_SOURCE_PROSODY], 0x73);
-    CHECK_EQ(g_ncalls, 1);
-    check_call(0, ROM_PAR_SETUP_VOICE, 0, 4, 0);
+    CHECK_EQ(g_ncalls, 5);
+    check_setup_voice(0, 0);
     CHECK(!g_f.fault);
 }
 
@@ -838,8 +870,8 @@ static void test_set_speaker(void)
     cmd_set_speaker(&g_f, 4, '1');
     CHECK_EQ(g_ram[CMD_SPEAKER], 1);
     CHECK_EQ(fw_rd16(&g_f, PAR_TABLE_PTR), 0xE5E3);
-    CHECK_EQ(g_ncalls, 1);
-    check_call(0, ROM_PAR_SETUP_VOICE, 0, 4, 0);
+    CHECK_EQ(g_ncalls, 5);
+    check_setup_voice(0, 0);
     CHECK(!g_f.fault);
 }
 
@@ -862,8 +894,9 @@ static void test_set_voice(void)
         CHECK_EQ(g_ram[CMD_SOURCE], k_want[v - 1].source);
         CHECK_EQ(g_ram[CMD_FORMANT_OFS + 4], 0);
         CHECK_EQ(fw_rd16(&g_f, PAR_TABLE_PTR), v <= 3 ? 0xD46A : 0xE5E3);
-        CHECK_EQ(g_ncalls, 1);
-        check_call(0, ROM_PAR_SETUP_VOICE, (uint8_t)(k_want[v - 1].pitch << 4), 2, 0xFF);
+        CHECK_EQ(g_ncalls, 5);
+        CHECK_EQ(g_ram[PROS_PITCH_CENTRE], (uint8_t)(k_want[v - 1].pitch << 4));
+        check_setup_voice(0, 0xFF);
         CHECK(!g_f.fault);
     }
 
@@ -894,14 +927,14 @@ static void test_set_prosody(void)
     g_ram[CMD_NEXT] = 1;
     cmd_set_prosody(&g_f, 3, '3');
     CHECK_EQ(g_ram[CMD_PROSODY], 3);
-    CHECK_EQ(g_ncalls, 1);
-    check_call(0, ROM_PAR_SETUP_VOICE, 0, 3, 0);   /* X = cmd_find_back's */
+    CHECK_EQ(g_ncalls, 5);
+    check_setup_voice(0, 0);
 
     setup();
     put_clause(" @RR12");                       /* R***: re-anchors on the second R, so the digit path */
     cmd_set_prosody(&g_f, 5, '2');
     CHECK_EQ(g_ram[CMD_PROSODY], 1);
-    CHECK_EQ(g_ncalls, 1);
+    CHECK_EQ(g_ncalls, 5);
 
     setup();
     put_clause(" @RA80");                       /* R***: letter A, hex $80 */

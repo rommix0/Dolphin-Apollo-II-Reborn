@@ -17,6 +17,7 @@
 #include "firmware/par_segment.h"
 #include "firmware/pros_play.h"
 #include "firmware/par_boundary.h"
+#include "firmware/par_start.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -228,6 +229,23 @@ static void tn_convert_clause_regs(fw *f, cpu740 *c)
     tn_convert_clause(f);
 }
 
+/* par_setup_voice $B3A4: A, X, Y in; none is read (Y reaches frm_build_rest_frame, whose first instruction is
+   LDY #$14 at $B41D). A = $0B, X = 9 and Y = $0B out, as its ROM calls leave them: frm_build_rest_frame's loop ends
+   at X = 9 ($B436 CPX #8), frm_clamp_mark_space ends with LDA #$0B and Y = $0A + 1 ($B930-$B954). The C's ROM calls
+   overwrite the machine's registers, so all three are set from the C. Its one ROM caller, cmd_apply_pitch ($A845),
+   restores A (PLA at $A848) and returns; X and Y reach RAM: cmd_apply_speaker ($A798) calls cmd_apply_speed, which
+   keeps A and Y and does not touch X, and after boot_reset's second call ($A675) bank_load_ramcode stores them
+   (STY $78, STX $76 at $A601/$A603). No caller reads a flag. The C cmd_apply_pitch calls the C directly, so the
+   hook fires only while the ROM cmd_apply_pitch runs (its "alone" mode). Declared: A, X, Y. */
+static void par_setup_voice_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_setup_voice(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
 /* pros_microprosody $B983: no register input (it loads A first). A = par_next_phoneme, or pros_play_target plus or
    minus 5 (stored or not), out; X and Y untouched. The only caller, par_read_segment ($BD67), reads Y next ($BD6A
    CPY #0, $BD70 DEY, $BD71 LDA ($24),Y) and X ($BD76 STA $17BF,X), and loads A first ($BD71). No caller reads a
@@ -236,6 +254,48 @@ static void pros_microprosody_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
     pros_microprosody(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_play_start $BAF2: A, X, Y in; none is read (X passes through untouched, A and Y are loaded). A = 0
+   ($BB2C), X = the entry X, Y = pros_seg_phoneme[0] ($BB0A TAY) out. Its one ROM caller, boot_play_body ($B2B6),
+   calls isr_speech_start next, which writes X ($B323 LDX #0) and A ($B32B LDA) before reading them; Y is not read
+   before par_play's LDY pros_seg_count ($B8B1). No caller reads a flag. It fires in "all" mode (boot_loop_play
+   stays ROM until M4.4b). Declared: A, X, Y. */
+static void par_play_start_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_play_start(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_reset_tracks $BB35: A, X and Y preserved (PHA / TXA / PHA / TYA / PHA, then PLA / TAY / PLA / TAX / PLA at
+   $BB6E-$BB72); no ROM call in the C, so the thunk leaves all three. Its one ROM caller, par_play_start ($BAF2),
+   calls pros_reset_seg_ptrs next (A = $0E, X and Y untouched); then pros_scale_target pushes and restores X and Y
+   ($BDD3-$BDD6, $BE48-$BE4B), and X leaves par_play_start as its exit X while Y is replaced at $BB0A (TAY). No
+   caller reads a flag (JSR follows). Declared: A, X, Y. */
+static void par_reset_tracks_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_reset_tracks(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_next_segment $BCF3: A, X, Y in; none is read (A is loaded first, X is set to 0 by par_read_segment, Y is
+   loaded). A, X and Y out as par_plan_tracks leaves them (A = its last result or 1, X = what the boundary pass
+   left, Y = 0). Its one ROM caller, par_play ($B900), loads A next ($B903 LDA par_frames_left); then either
+   $B8B1 LDY, or isr_par_ready (which preserves A, X and Y) and par_step_tracks, which loads X and Y before reading
+   them. No caller reads a flag. It fires in "all" mode (par_play stays ROM until M4.4b). Declared: A, X, Y. */
+static void par_next_segment_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_next_segment(f, &r);
     c->a = r.a;
     c->x = r.x;
     c->y = r.y;
@@ -281,6 +341,20 @@ static void par_clamp_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
     par_clamp(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_read_segment $BD33: A, X, Y in; none is read (LDX #0 first). A = par_boundary[1] (the copy loop's last LDA),
+   X = 0 ($BDD0 LDX #0) and Y = 0 out. Its one ROM caller, par_next_segment ($BCFD), calls par_boundary_pass next,
+   which loads A and Y first ($BE6A LDY, $BE6D LDA) and passes X on: the stores of par_boundary_jump
+   (par_store_boundary, STA $16ED,X) and the TXA / PHA of the dominance loops ($BEF3, $BF38) read it. No caller
+   reads a flag. Declared: A, X, Y. */
+static void par_read_segment_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_read_segment(f, &r);
     c->a = r.a;
     c->x = r.x;
     c->y = r.y;
@@ -402,6 +476,19 @@ static void par_boundary_value_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
     par_boundary_value(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_plan_tracks $C0D2: A, X, Y in; none is read (LDY #$0A first, A loaded, X untouched). A = the last
+   difference or 1, X = the entry X, Y = 0 out. Its one ROM caller, par_next_segment ($BD03), returns at once
+   ($BD06 RTS), so what par_next_segment's caller reads applies: nothing. No caller reads a flag. Declared:
+   A, X, Y. */
+static void par_plan_tracks_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_plan_tracks(f, &r);
     c->a = r.a;
     c->x = r.x;
     c->y = r.y;
@@ -603,10 +690,15 @@ THUNK(tn_rule_skip_field)
 THUNK(tn_append_phonetic)
 THUNK(lts_convert_char)
 THUNK(tn_convert_clause)
+THUNK(par_setup_voice)
 THUNK(pros_microprosody)
+THUNK(par_play_start)
+THUNK(par_reset_tracks)
+THUNK(par_next_segment)
 THUNK(par_next_row)
 THUNK(par_next_param)
 THUNK(par_clamp)
+THUNK(par_read_segment)
 THUNK(pros_scale_target)
 THUNK(par_boundary_pass)
 THUNK(par_boundary_jump)
@@ -616,6 +708,7 @@ THUNK(par_boundary_next_dom)
 THUNK(par_read_dominance)
 THUNK(par_scale_voicing)
 THUNK(par_boundary_value)
+THUNK(par_plan_tracks)
 THUNK(par_scale_duration)
 THUNK(cmd_hex_value)
 THUNK(ph_append_phrase_pause)
@@ -648,10 +741,15 @@ const fw_replacement fw_replacements[] = {
     { "tn_append_phonetic", 0xB154, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_tn_append_phonetic },
     { "lts_convert_char",   0xB172, 0,                   t_lts_convert_char },
     { "tn_convert_clause",  0xB1E6, 0,                   t_tn_convert_clause },
+    { "par_setup_voice",    0xB3A4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_setup_voice },
     { "pros_microprosody",  0xB983, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_microprosody },
+    { "par_play_start",     0xBAF2, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_play_start },
+    { "par_reset_tracks",   0xBB35, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_reset_tracks },
+    { "par_next_segment",   0xBCF3, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_next_segment },
     { "par_next_row",       0xBD07, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_next_row },
     { "par_next_param",     0xBD14, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_next_param },
     { "par_clamp",          0xBD24, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_clamp },
+    { "par_read_segment",   0xBD33, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_read_segment },
     { "pros_scale_target",  0xBDD3, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_scale_target },
     { "par_boundary_pass",  0xBE6A, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_boundary_pass },
     { "par_boundary_jump",  0xBE94, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_boundary_jump },
@@ -661,6 +759,7 @@ const fw_replacement fw_replacements[] = {
     { "par_read_dominance", 0xBF6C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_read_dominance },
     { "par_scale_voicing",  0xBFC3, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_voicing },
     { "par_boundary_value", 0xC039, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_boundary_value },
+    { "par_plan_tracks",    0xC0D2, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_plan_tracks },
     { "par_scale_duration", 0xC29C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_duration },
     { "cmd_hex_value",      0xC520, FW_OUT_A | FW_OUT_X | FW_OUT_Y | FW_OUT_Z, t_cmd_hex_value },
     { "ph_append_phrase_pause", 0xC9B8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_phrase_pause },

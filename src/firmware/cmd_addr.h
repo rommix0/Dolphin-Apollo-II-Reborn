@@ -46,7 +46,6 @@
 
 /* ROM routines the C calls through fw_rom_call (isr_par_ready: ROM_ISR_PAR_READY in tn_convert.h) */
 #define ROM_CMD_RUN_NEXT          0xA893   /* dispatch cmd_handlers[cmd_next] (the dispatcher's fallback); X kept */
-#define ROM_PAR_SETUP_VOICE       0xB3A4   /* rebuild the voice set-up and both DSP frames (M4.4/M4.5) */
 #define ROM_SER_TX_PUT            0xC4DD   /* queue A as a reply byte; A, X, Y preserved */
 #define ROM_SER_TX_HEX            0xC571   /* queue A as two ASCII hex digits, low nibble first; A preserved */
 #define ROM_SER_TX_RECORDS        0xC5A4   /* queue the record reply ser_reply_id/_count/_size/_ptr describe */

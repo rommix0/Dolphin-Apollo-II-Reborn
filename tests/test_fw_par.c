@@ -10,12 +10,20 @@
 #include "firmware/par_addr.h"
 #include "firmware/par_boundary.h"
 #include "firmware/par_segment.h"
+#include "firmware/par_start.h"
 #include "firmware/pros_play.h"
 #include "firmware/data/fw_data.h"
 
 #define MAX_CALLS 64
 
-typedef struct { uint16_t addr; uint8_t a, x, y; uint64_t budget; } rom_call_record;
+/* One ROM call: its address, registers and budget, and the frame buffer pointers as the C left them at the call. */
+typedef struct {
+    uint16_t addr;
+    uint8_t a, x, y;
+    uint64_t budget;
+    uint16_t play, fill;
+    uint8_t phase;
+} rom_call_record;
 
 static uint8_t g_ram[0x10000];   /* the firmware's RAM is $0000-$3FFF; 64 KiB so no index can run off the array */
 static uint8_t g_before[FW_RAM_SIZE];
@@ -24,7 +32,8 @@ static fw_host g_host;
 static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
 
-/* Records every ROM call, and fails it: none of the leaves makes one. */
+/* Records every ROM call. The three frame routines par_setup_voice calls (M4.5) return the registers the ROM ones
+   leave; any other call fails (no other routine of the playback set-up makes one). */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     (void)ctx;
@@ -35,9 +44,28 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         c->x = r->x;
         c->y = r->y;
         c->budget = budget;
+        c->play = fw_rd16(&g_f, ISR_PLAY_PTR);
+        c->fill = fw_rd16(&g_f, ISR_FILL_PTR);
+        c->phase = g_ram[ISR_SWAP_PHASE];
     }
     g_ncalls++;
-    return FW_CALL_FAILED;
+    switch (addr) {
+    case ROM_FRM_BUILD_REST_FRAME:   /* $B428-$B444: LDY #$3B; LDX #1, INX / INX until X >= 8 (9); LDA par_params_ptr+1 */
+        r->a = g_ram[PAR_PARAMS_PTR + 1];
+        r->x = 9;
+        r->y = 0x3B;
+        return FW_CALL_RETURNED;
+    case ROM_FRM_COPY_REST_FRAME:    /* $B445-$B44F: LDA $2000,Y for Y = $13..0, DEY / BPL: Y = $FF; X untouched */
+        r->a = g_ram[FRM_REST_FRAME];
+        r->y = 0xFF;
+        return FW_CALL_RETURNED;
+    case ROM_FRM_CLAMP_MARK_SPACE:   /* $B930-$B95C: LDY #$0A, INY; LDA #$0B at $B954; X untouched */
+        r->a = 0x0B;
+        r->y = 0x0B;
+        return FW_CALL_RETURNED;
+    default:
+        return FW_CALL_FAILED;
+    }
 }
 
 /* Zeroed RAM, the mock host, the converted image, no calls recorded. */
@@ -821,6 +849,365 @@ static void test_jump_end_marker(void)
     }
 }
 
+/* ---- the top of the playback set-up (M4.4a Task 6) ---- */
+
+#define T6_TABLE   0x3000   /* a voice table built in RAM: one parameter block every T6_STRIDE bytes */
+#define T6_STRIDE  0x10
+#define T6_RANKS   0x3800   /* its rank row */
+#define T6_CUR     5        /* the phoneme that becomes the current one */
+#define T6_NEXT    0x2A     /* the phoneme at the next index: in no microprosody list */
+
+static void test_top_rows(void)
+{
+    check_row("par_setup_voice", ROM_PAR_SETUP_VOICE, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_play_start", ROM_PAR_PLAY_START, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_reset_tracks", ROM_PAR_RESET_TRACKS, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_next_segment", ROM_PAR_NEXT_SEGMENT, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_read_segment", ROM_PAR_READ_SEGMENT, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_plan_tracks", ROM_PAR_PLAN_TRACKS, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+}
+
+/* The pitch settings under which pros_scale_target keeps a target below $80: R = cmd_source_prosody & 7 = 4 (below
+   cmd_speed_limit 7) adds the whole deviation d = |target - $80| back to the centre $80 ($BE08 BPL taken, k = 0:
+   A = Y = d at $BE58), and $80 - d >= 4 gets no ORA #4. */
+static void pitch_identity(void)
+{
+    g_ram[CMD_SOURCE_PROSODY] = 4;
+    g_ram[CMD_SPEED_LIMIT] = 7;
+    g_ram[PROS_PITCH_CENTRE] = 0x80;
+}
+
+/* par_cur_phoneme-to-be T6_CUR's ten targets in the RAM table, with their @u offsets, one per case of $BD83-$BD99,
+   and the segment arrays at index 4 with the duration at index 3; the tracks' boundaries and next start durations
+   to copy; pros_seg_count = $0100. */
+static void read_setup(void)
+{
+    setup();
+    pitch_identity();
+    fw_wr16(&g_f, PAR_PARAMS_PTR, T6_TABLE);
+    fw_wr16(&g_f, PAR_ROW_PTR, T6_TABLE);           /* par_next_segment's job ($BCF3) */
+    fw_wr16(&g_f, PAR_PARAM_STRIDE, T6_STRIDE);
+    static const uint8_t target[10] = { 0x85, 2, 3, 0x30, 0x7F, 0x70, 0x20, 4, 0x3F, 0x10 };
+    static const uint8_t ofs[10] = { 0xC0, 5, 5, 0x20, 1, 0x20, 0xFE, 0xFC, 0, 0 };
+    for (unsigned p = 0; p < 10; p++) {
+        g_ram[T6_TABLE + T6_CUR + T6_STRIDE * p] = target[p];
+        g_ram[CMD_FORMANT_OFS + p] = ofs[p];
+    }
+    g_ram[CMD_VOICING] = 3;
+    g_ram[PAR_NEXT_PHONEME] = T6_CUR;
+    g_ram[PAR_NEXT_RANK] = 0x21;
+    g_ram[PROS_PLAY_TARGET] = 0x55;
+    fw_wr16(&g_f, PAR_SEG_INDEX, 3);
+    fw_wr16(&g_f, PROS_PHONEME_PTR, PROS_SEG_PHONEME);
+    fw_wr16(&g_f, PROS_DURATION_PTR, PROS_SEG_DURATION);
+    fw_wr16(&g_f, PROS_PITCH_PTR, PROS_SEG_PITCH);
+    fw_wr16(&g_f, PROS_FLAGS_PTR, PROS_SEG_FLAGS);
+    g_ram[PROS_SEG_PHONEME + 4] = T6_NEXT;
+    g_ram[PROS_SEG_PITCH + 4] = 0x70;
+    g_ram[PROS_SEG_DURATION + 3] = 9;
+    g_ram[PROS_SEG_DURATION + 4] = 0xEE;              /* the duration at the index itself, not read */
+    for (unsigned y = 0; y <= 10; y++) {
+        g_ram[PAR_BOUNDARY + y] = (uint8_t)(0x10 + y);
+        g_ram[PAR_NEXT_START_DUR + y] = (uint8_t)(0x20 + y);
+        g_ram[PAR_START_DUR + y] = g_ram[PAR_START_VAL + y] = g_ram[PAR_LINE_VAL + y] = 0x5A;
+        g_ram[PAR_SEG_TARGET + y] = 0x5A;
+    }
+    fw_wr16(&g_f, PROS_SEG_COUNT, 0x0100);
+}
+
+/* par_read_segment: the index moves on (no wrap); the next phoneme and its scaled target; the duration at index - 1;
+   the ten targets: P1 $85 >= $80 gets no @u ($BD85 BMI taken: with the offset $C0 it would be $45 -> $3F) and is
+   clamped to 1; P2 2 < 3 gets none (2, not 7); P3 3 + 5 = 8; P4 $30 + $20 = $50 -> $3F; P5 $7F + 1 = $80 -> $3F
+   (N of $80 - $40 clear); P6 $70 + $20 = $90 -> 1 (N of $90 - 1 set); P7 $20 + $FE = $1E (8 bits); P8 4 + $FC = 0
+   -> 1; P9 $3F; P10 $10 clamped, then @B3: $10 / 4 = 4 into $76, + 4 / 2 = 6. The tracks start from the
+   boundaries; pros_seg_count $0100 -> $00FF (the DEC of the high byte). A = par_boundary[1], X = Y = 0. */
+static void test_read_segment(void)
+{
+    read_setup();
+    fw_regs r = { 0x12, 0x34, 0x56, 0 };
+    par_read_segment(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_CUR_RANK], 0x21);
+    CHECK_EQ(g_ram[PAR_CUR_PHONEME], T6_CUR);
+    CHECK_EQ(fw_rd16(&g_f, PAR_SEG_INDEX), 4);
+    CHECK_EQ(fw_rd16(&g_f, PROS_PHONEME_PTR), PROS_SEG_PHONEME);   /* no wrap: the pointers stay */
+    CHECK_EQ(fw_rd16(&g_f, PROS_DURATION_PTR), PROS_SEG_DURATION);
+    CHECK_EQ(fw_rd16(&g_f, PROS_PITCH_PTR), PROS_SEG_PITCH);
+    CHECK_EQ(fw_rd16(&g_f, PROS_FLAGS_PTR), PROS_SEG_FLAGS);
+    CHECK_EQ(g_ram[PAR_NEXT_PHONEME], T6_NEXT);
+    CHECK_EQ(g_ram[PROS_PLAY_PITCH], 0x55);                        /* the old target */
+    CHECK_EQ(g_ram[PROS_PLAY_TARGET], 0x70);
+    CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 9);
+    static const uint8_t want[11] = { 9, 1, 2, 8, 0x3F, 0x3F, 1, 0x1E, 1, 0x3F, 6 };
+    for (unsigned x = 0; x <= 10; x++)
+        CHECK_EQ(g_ram[PAR_SEG_TARGET + x], want[x]);
+    CHECK_EQ(g_ram[FW_TMP_76], 4);
+    CHECK_EQ(fw_rd16(&g_f, PAR_ROW_PTR), T6_TABLE);                 /* back on P1's target row */
+    for (unsigned y = 1; y <= 10; y++) {
+        CHECK_EQ(g_ram[PAR_START_DUR + y], 0x20 + y);
+        CHECK_EQ(g_ram[PAR_START_VAL + y], 0x10 + y);
+        CHECK_EQ(g_ram[PAR_LINE_VAL + y], 0x10 + y);
+    }
+    CHECK_EQ(g_ram[PAR_START_DUR], 0x5A);                          /* entry 0 is not written */
+    CHECK_EQ(g_ram[PAR_START_VAL], 0x5A);
+    CHECK_EQ(g_ram[PAR_LINE_VAL], 0x5A);
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 0x00FF);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+/* The 16-bit index wrap: $01FF -> $0200 moves the index's high byte and the four pointers on a page (from one page
+   on to two). At index low byte 0, the duration is read at index - 1 through the DEC / INC of pros_duration_ptr+1:
+   ($0800 - $100) + $FF = $07FF, not $08FF; the pointer is back at $0800 afterwards. */
+static void test_read_segment_wrap(void)
+{
+    read_setup();
+    fw_wr16(&g_f, PAR_SEG_INDEX, 0x01FF);
+    fw_wr16(&g_f, PROS_PHONEME_PTR, PROS_SEG_PHONEME + 0x100);
+    fw_wr16(&g_f, PROS_DURATION_PTR, PROS_SEG_DURATION + 0x100);
+    fw_wr16(&g_f, PROS_PITCH_PTR, PROS_SEG_PITCH + 0x100);
+    fw_wr16(&g_f, PROS_FLAGS_PTR, PROS_SEG_FLAGS + 0x100);
+    g_ram[PROS_SEG_PHONEME + 0x200] = T6_NEXT;
+    g_ram[PROS_SEG_PITCH + 0x200] = 0x70;
+    g_ram[PROS_SEG_DURATION + 0x1FF] = 7;
+    g_ram[PROS_SEG_DURATION + 0x2FF] = 0xEE;          /* what Y = $FF without the DEC would read */
+    fw_wr16(&g_f, PROS_SEG_COUNT, 5);
+    fw_regs r = { 0x12, 0x34, 0x56, 0 };
+    par_read_segment(&g_f, &r);
+    CHECK_EQ(fw_rd16(&g_f, PAR_SEG_INDEX), 0x0200);
+    CHECK_EQ(fw_rd16(&g_f, PROS_PHONEME_PTR), PROS_SEG_PHONEME + 0x200);
+    CHECK_EQ(fw_rd16(&g_f, PROS_DURATION_PTR), PROS_SEG_DURATION + 0x200);
+    CHECK_EQ(fw_rd16(&g_f, PROS_PITCH_PTR), PROS_SEG_PITCH + 0x200);
+    CHECK_EQ(fw_rd16(&g_f, PROS_FLAGS_PTR), PROS_SEG_FLAGS + 0x200);
+    CHECK_EQ(g_ram[PAR_NEXT_PHONEME], T6_NEXT);
+    CHECK_EQ(g_ram[PROS_PLAY_TARGET], 0x70);
+    CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 7);
+    CHECK_EQ(g_ram[PAR_SEG_TARGET], 7);
+    CHECK_EQ(g_ram[PAR_SEG_TARGET + 10], 6);
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 4);       /* no borrow: the high byte stays */
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0);
+    CHECK(!g_f.fault);
+}
+
+/* par_next_segment on the jump path: par_row_ptr is set to par_params_ptr first; par_read_segment's X = 0 is the
+   running index of par_boundary_jump's stores, so the next phoneme's ten raw targets (P1 $85: no clamp) land in
+   par_boundary[1..10]; with par_trans_dur 0 each par_start_dur ($21..$2A, from par_next_start_dur) is cut to
+   par_frames_left 9 and par_end_dur = 0; then par_plan_tracks: par_end_wait = 9 - 0, 9 - 9 = 0 is not negative,
+   so par_steady = 0 and par_sequential = 1. Both ranks are >= 29 ($21 and $1E). Out: A = 1 (par_plan_tracks' last
+   LDA #1), X = 10 (ten INX in par_store_boundary), Y = 0; par_row_ptr ten strides on. */
+static void test_next_segment(void)
+{
+    read_setup();
+    fw_wr16(&g_f, PAR_ROW_PTR, 0x1234);
+    fw_wr16(&g_f, PAR_RANK_PTR, T6_RANKS);
+    g_ram[T6_RANKS + T6_NEXT] = 0x1E;
+    for (unsigned p = 0; p < 10; p++)
+        g_ram[T6_TABLE + T6_NEXT + T6_STRIDE * p] = (uint8_t)(p == 0 ? 0x85 : 0x30 + p);
+    fw_regs r = { 0x12, 0x34, 0x56, 0 };
+    par_next_segment(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_NEXT_RANK], 0x1E);
+    for (unsigned y = 1; y <= 10; y++) {
+        CHECK_EQ(g_ram[PAR_BOUNDARY + y], y == 1 ? 0x85 : 0x30 + y - 1);
+        CHECK_EQ(g_ram[PAR_NEXT_START_DUR + y], 0);
+        CHECK_EQ(g_ram[PAR_START_DUR + y], 9);
+        CHECK_EQ(g_ram[PAR_END_DUR + y], 0);
+        CHECK_EQ(g_ram[PAR_END_WAIT + y], 9);
+        CHECK_EQ(g_ram[PAR_STEADY + y], 0);
+        CHECK_EQ(g_ram[PAR_SEQUENTIAL + y], 1);
+        CHECK_EQ(g_ram[PAR_END_VAL + y], g_ram[PAR_SEG_TARGET + y]);
+    }
+    CHECK_EQ(g_ram[PAR_BOUNDARY], 0x10);             /* entry 0 is not written */
+    CHECK_EQ(g_ram[PAR_TRANS_DUR], 0);
+    CHECK_EQ(fw_rd16(&g_f, PAR_ROW_PTR), T6_TABLE + 10 * T6_STRIDE);
+    CHECK_EQ(r.a, 1);
+    CHECK_EQ(r.x, 10);
+    CHECK_EQ(r.y, 0);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+/* par_plan_tracks with par_frames_left = 200: for each parameter, par_end_dur and par_start_dur, and what follows
+   from $C0DF-$C0F8 (SEC / SBC, BPL and BMI on bit 7 of the 8-bit difference). */
+static void test_plan_tracks(void)
+{
+    static const struct { uint8_t end_dur, start_dur, end_wait, steady, sequential; } k[11] = {
+        { 0 },
+        { 5, 1, 0, 0x5A, 0 },          /* 195 = $C3 is negative: 0; 0 - 1 = $FF: overlap, par_steady stale */
+        { 0xC8, 5, 0, 0x5A, 0 },       /* 0; 0 - 5 = $FB: overlap */
+        { 0x49, 0xFF, 0x7F, 0x5A, 0 }, /* $7F; $7F - $FF = $80 (bit 7): overlap */
+        { 0xC0, 3, 8, 5, 1 },
+        { 0xD0, 0, 0, 0, 1 },          /* 200 - 208 = $F8: 0 */
+        { 0x50, 0x78, 0x78, 0, 1 },
+        { 0x48, 0, 0, 0, 1 },          /* 200 - 72 = 128 = $80, a difference >= $80: 0 */
+        { 0xC7, 0, 1, 1, 1 },
+        { 0x4A, 0x7E, 0x7E, 0, 1 },
+        { 0x4A, 0, 0x7E, 0x7E, 1 },
+    };
+    setup();
+    g_ram[PAR_FRAMES_LEFT] = 200;
+    for (unsigned y = 0; y <= 10; y++) {
+        g_ram[PAR_END_DUR + y] = k[y].end_dur;
+        g_ram[PAR_START_DUR + y] = k[y].start_dur;
+        g_ram[PAR_SEG_TARGET + y] = (uint8_t)(0x30 + y);
+        g_ram[PAR_STEADY + y] = 0x5A;
+        g_ram[PAR_SEQUENTIAL + y] = g_ram[PAR_END_VAL + y] = g_ram[PAR_END_WAIT + y] = 0xA5;
+    }
+    fw_regs r = { 0x12, 0x34, 0x56, 0 };
+    par_plan_tracks(&g_f, &r);
+    for (unsigned y = 1; y <= 10; y++) {
+        CHECK_EQ(g_ram[PAR_END_VAL + y], 0x30 + y);
+        CHECK_EQ(g_ram[PAR_END_WAIT + y], k[y].end_wait);
+        CHECK_EQ(g_ram[PAR_STEADY + y], k[y].steady);
+        CHECK_EQ(g_ram[PAR_SEQUENTIAL + y], k[y].sequential);
+    }
+    CHECK_EQ(g_ram[PAR_SEQUENTIAL], 0xA5);           /* entry 0 is not written */
+    CHECK_EQ(g_ram[PAR_END_VAL], 0xA5);
+    CHECK_EQ(g_ram[PAR_END_WAIT], 0xA5);
+    CHECK_EQ(g_ram[PAR_STEADY], 0x5A);
+    CHECK_EQ(r.a, 0xFF);                             /* P1's overlap difference, the last one computed */
+    CHECK_EQ(r.x, 0x34);
+    CHECK_EQ(r.y, 0);
+    CHECK_EQ(g_ncalls, 0);
+}
+
+/* par_reset_tracks: frm_snap[i] = frm_rest_frame[frm_snapshot_map[i]], the map being 10 8 6 4 2 0 1 3 5 7 (b10, AHF,
+   A3, A2, A1, ALF, FN, F1, F2, F3); every entry 0 and the byte before frm_snap (isr_frame_b's last) untouched;
+   A, X and Y kept. */
+static void test_reset_tracks(void)
+{
+    static const uint8_t map[10] = { 10, 8, 6, 4, 2, 0, 1, 3, 5, 7 };
+    setup();
+    fw_wr16(&g_f, PAR_SEG_INDEX, 0x1234);
+    g_ram[PAR_FRAMES_LEFT] = 0x77;
+    memset(g_ram + FRM_SNAP - 1, 0x5A, 12);
+    for (unsigned i = 0; i <= 10; i++)
+        g_ram[PAR_NEXT_START_DUR + i] = g_ram[PAR_BOUNDARY + i] = 0x5A;
+    for (unsigned i = 0; i < 20; i++)
+        g_ram[FRM_REST_FRAME + i] = (uint8_t)(0x40 + i);
+    fw_regs r = { 0x12, 0x34, 0x56, 0 };
+    par_reset_tracks(&g_f, &r);
+    CHECK_EQ(fw_rd16(&g_f, PAR_SEG_INDEX), 0);
+    CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 1);
+    for (unsigned i = 0; i < 10; i++)
+        CHECK_EQ(g_ram[FRM_SNAP + i], 0x40 + map[i]);
+    CHECK_EQ(g_ram[FRM_SNAP - 1], 0x5A);
+    CHECK_EQ(g_ram[FRM_SNAP + 10], 0x5A);
+    for (unsigned y = 1; y <= 10; y++) {
+        CHECK_EQ(g_ram[PAR_NEXT_START_DUR + y], 0);
+        CHECK_EQ(g_ram[PAR_BOUNDARY + y], y <= 4 ? 0x20 : 1);
+    }
+    CHECK_EQ(g_ram[PAR_NEXT_START_DUR], 0x5A);
+    CHECK_EQ(g_ram[PAR_BOUNDARY], 0x5A);
+    CHECK_EQ(r.a, 0x12);
+    CHECK_EQ(r.x, 0x34);
+    CHECK_EQ(r.y, 0x56);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+/* par_play_start on voice A: the pause phoneme $3B first, whose rank (par_voice_a's rank row, $D46A + $3B) is 31;
+   pitch[0] $70 scaled by pros_scale_target (identity here), no microprosody; stale pointers reset; the first event's
+   position, or $FFFF without events. Out: A = 0, X = the entry X, Y = the phoneme. */
+static void test_play_start(void)
+{
+    for (int events = 0; events <= 1; events++) {
+        setup();
+        pitch_identity();
+        fw_wr16(&g_f, PAR_RANK_PTR, PAR_VOICE_A);
+        memset(g_ram + PROS_PHONEME_PTR, 0x5A, 8);
+        g_ram[PROS_SEG_PHONEME] = 0x3B;
+        g_ram[PROS_SEG_PITCH] = 0x70;
+        g_ram[PROS_PLAY_PITCH] = 0x5A;
+        g_ram[CMD_EV_COUNT] = (uint8_t)(events ? 2 : 0);
+        fw_wr16(&g_f, CMD_EV_POSITIONS, 0x1234);
+        g_ram[CMD_EV_NEXT] = 7;
+        g_ram[PROS_PITCH_ERR] = 0x33;
+        fw_regs r = { 0x12, 0x34, 0x56, 0 };
+        par_play_start(&g_f, &r);
+        CHECK_EQ(fw_rd16(&g_f, PROS_PHONEME_PTR), PROS_SEG_PHONEME);
+        CHECK_EQ(fw_rd16(&g_f, PROS_DURATION_PTR), PROS_SEG_DURATION);
+        CHECK_EQ(fw_rd16(&g_f, PROS_PITCH_PTR), PROS_SEG_PITCH);
+        CHECK_EQ(fw_rd16(&g_f, PROS_FLAGS_PTR), PROS_SEG_FLAGS);
+        CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 1);                    /* par_reset_tracks ran */
+        CHECK_EQ(g_ram[PAR_BOUNDARY + 1], 0x20);
+        CHECK_EQ(g_ram[PROS_PLAY_TARGET], 0x70);
+        CHECK_EQ(g_ram[PROS_PLAY_PITCH], 0x5A);                 /* stale until the first par_read_segment */
+        CHECK_EQ(g_ram[PAR_NEXT_PHONEME], 0x3B);
+        CHECK_EQ(g_ram[PAR_CUR_PHONEME], 0x3B);
+        CHECK_EQ(g_ram[PAR_NEXT_RANK], 31);
+        CHECK_EQ(g_ram[PAR_CUR_RANK], 31);
+        CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), events ? 0x1234 : 0xFFFF);
+        CHECK_EQ(g_ram[CMD_EV_NEXT], 0);
+        CHECK_EQ(g_ram[PROS_PITCH_ERR], 0);
+        CHECK_EQ(r.a, 0);
+        CHECK_EQ(r.x, 0x34);
+        CHECK_EQ(r.y, 0x3B);
+        CHECK_EQ(g_ncalls, 0);
+        CHECK(!g_f.fault);
+    }
+}
+
+/* Record i's frame buffer pointers: isr_play_ptr, isr_fill_ptr and isr_swap_phase as the C set them (LDM) before
+   the call. */
+static void check_buffers(unsigned i, uint16_t play, uint16_t fill, uint8_t phase)
+{
+    CHECK(i < g_ncalls && i < MAX_CALLS);
+    if (i >= g_ncalls || i >= MAX_CALLS)
+        return;
+    CHECK_EQ(g_calls[i].play, play);
+    CHECK_EQ(g_calls[i].fill, fill);
+    CHECK_EQ(g_calls[i].phase, phase);
+}
+
+/* par_setup_voice on a table at `table` with n phonemes: the pointers and the stride, then the five ROM calls in
+   order with the registers the ROM has at each JSR and the buffers set before each; out, the last call's A and Y and
+   frm_build_rest_frame's X. The entry A and X are not read; the entry Y reaches frm_build_rest_frame. */
+static void setup_voice_case(uint16_t table, uint8_t n)
+{
+    setup();
+    g_ram[PAR_COUNT] = n;
+    fw_wr16(&g_f, PAR_TABLE_PTR, table);
+    fw_wr16(&g_f, PAR_PARAM_STRIDE, 0x5A5A);
+    g_ram[FRM_REST_FRAME] = 0x77;                     /* frm_rest_frame[0]: frm_copy_rest_frame's exit A */
+    fw_regs r = { 0x90, 0x31, 0x42, 0 };
+    par_setup_voice(&g_f, &r);
+    uint16_t params = (uint16_t)(table + 2 * n), stride = (uint16_t)(5 * n);
+    CHECK_EQ(g_ram[PAR_ROW_LEN], n);
+    CHECK_EQ(fw_rd16(&g_f, PAR_TABLE_COPY), table);
+    CHECK_EQ(fw_rd16(&g_f, PAR_RANK_PTR), table);
+    CHECK_EQ(fw_rd16(&g_f, PAR_ROW2_PTR), table + n);
+    CHECK_EQ(fw_rd16(&g_f, PAR_PARAMS_PTR), params);
+    CHECK_EQ(fw_rd16(&g_f, PAR_ROW_PTR), params);     /* left on P1's target row, as frm_build_rest_frame needs */
+    CHECK_EQ(fw_rd16(&g_f, PAR_PARAM_STRIDE), stride);
+    CHECK_EQ(g_ncalls, 5);
+    check_call(0, ROM_FRM_BUILD_REST_FRAME, (uint8_t)(stride >> 8), 0, 0x42);   /* A = the stride's high byte
+                                                                                   ($B3F2), X = 0 (the shift loop) */
+    check_buffers(0, ISR_FRAME_A, ISR_FRAME_B, 2);
+    check_call(1, ROM_FRM_COPY_REST_FRAME, (uint8_t)(params >> 8), 9, 0x3B);    /* frm_build_rest_frame's exit */
+    check_buffers(1, ISR_FRAME_A, ISR_FRAME_B, 2);
+    check_call(2, ROM_FRM_CLAMP_MARK_SPACE, 0x77, 9, 0xFF);                     /* frm_copy_rest_frame's exit */
+    check_buffers(2, ISR_FRAME_A, ISR_FRAME_B, 2);
+    check_call(3, ROM_FRM_COPY_REST_FRAME, 0x0B, 9, 0x0B);                      /* frm_clamp_mark_space's exit */
+    check_buffers(3, ISR_FRAME_B, ISR_FRAME_A, 1);
+    check_call(4, ROM_FRM_CLAMP_MARK_SPACE, 0x77, 9, 0xFF);
+    check_buffers(4, ISR_FRAME_B, ISR_FRAME_A, 1);
+    CHECK_EQ(r.a, 0x0B);
+    CHECK_EQ(r.x, 9);
+    CHECK_EQ(r.y, 0x0B);
+    CHECK(!g_f.fault);
+}
+
+/* Voice A (N = 86: stride 430 = $01AE, 4N = 344 sets the high byte through ROL) and a RAM table of 255 phonemes
+   ($10F0: both par_next_row calls carry into the high byte; 4N = $3FC, + N carries: stride $04FB). */
+static void test_setup_voice(void)
+{
+    setup_voice_case(PAR_VOICE_A, PAR_PHONEMES);
+    setup_voice_case(0x10F0, 0xFF);
+}
+
 void suite_fw_par(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -840,4 +1227,12 @@ void suite_fw_par(void)
     test_jump_running_x();
     test_dominance_running_x();
     test_jump_end_marker();
+    test_top_rows();
+    test_read_segment();
+    test_read_segment_wrap();
+    test_next_segment();
+    test_plan_tracks();
+    test_reset_tracks();
+    test_play_start();
+    test_setup_voice();
 }

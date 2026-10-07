@@ -1,6 +1,6 @@
 #include "cmd_apply.h"
-#include "cmd_addr.h"
 #include "cmd_match.h"
+#include "par_start.h"
 #include "data/fw_data.h"
 
 /* $A7FE / $A814: the count byte is data (converted); the table address is an immediate (LDA #$6A / #$D4,
@@ -22,7 +22,7 @@ void cmd_apply_pitch(fw *f, uint8_t *x, uint8_t *y)
     uint8_t a = util_shl4(fw_rd8(f, CMD_PITCH));
     fw_wr8(f, PROS_PITCH_CENTRE, a);
     fw_regs r = { a, *x, *y, 0 };
-    fw_rom_call(f, ROM_PAR_SETUP_VOICE, &r, FW_ROM_CALL_BUDGET);
+    par_setup_voice(f, &r);                     /* $A845: the C (M4.4a); it leaves X = 9 and Y = $0B */
     *x = r.x;
     *y = r.y;
 }

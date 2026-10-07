@@ -2,6 +2,7 @@
 #define FW_PAR_ADDR_H
 /* ROM code addresses of the playback set-up (M4.4a spec 2.2) and of the three frame-builder routines that
    par_setup_voice calls (2.4), checked against build/ghidra740/dump and the JSR/JMP operands in the ROM image. */
+#define ROM_PAR_SETUP_VOICE        0xB3A4   /* called by cmd_apply_pitch $A845; the C cmd_apply_pitch calls the C */
 #define ROM_FRM_BUILD_REST_FRAME   0xB41D   /* M4.5; called by par_setup_voice $B404 */
 #define ROM_FRM_COPY_REST_FRAME    0xB445   /* M4.5; called by par_setup_voice $B407, $B416 (and par_play $B8DA) */
 #define ROM_FRM_CLAMP_MARK_SPACE   0xB930   /* M4.5; called by par_setup_voice $B40A, $B419 (and par_play $B8E0,
