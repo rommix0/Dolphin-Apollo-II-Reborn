@@ -38,7 +38,7 @@ typedef enum { MFAULT_NONE, MFAULT_CPU, MFAULT_DME, MFAULT_ESCAPED_PC, MFAULT_IN
 
 typedef struct { uint16_t addr, pc; bool write; } machine_access;
 
-#define MACHINE_MAX_HOOKS          32
+#define MACHINE_MAX_HOOKS          256
 #define MACHINE_ROM_CALL_SENTINEL  0x0000   /* machine_rom_call's return address: the ROM never runs code at $0000 */
 
 struct machine;

@@ -3,6 +3,7 @@
 #include "pros_decl.h"
 #include "pros_flags.h"
 #include "ph_expand.h"
+#include "fw_ops.h"
 #include "tn_convert.h"
 #include "data/fw_data.h"
 
@@ -14,9 +15,6 @@
 #define PROS_PARAM_Z  (PROS_PARAMS + 25)   /* pros_term_stress of a word's later symbols */
 /* the end of a phoneme list (its other items: the triples, and PH_WORD_PAUSE, the space's word pause of @Q frames) */
 #define PH_LIST_END    0xFF
-
-/* isr_par_ready with the registers the ROM has at the JSR (it preserves A, X and Y). */
-static void par_ready(fw *f, fw_regs r) { fw_rom_call(f, ROM_ISR_PAR_READY, &r, FW_ROM_CALL_BUDGET); }
 
 /* $D158: the command events due at pros_pos (low bytes compared) get the segment index pros_seg_count in their
    cmd_ev_positions entry; cmd_ev_pos becomes the next entry's low byte (read even past cmd_ev_count). */
@@ -97,24 +95,16 @@ static void symbol_terms(fw *f)
         fw_wr8(f, PROS_TERM_TAIL, (uint8_t)(fw_rd8(f, PROS_TERM_TAIL) + fw_rd8(f, PROS_PARAM_V)));
 }
 
-/* ADC #m: a + m + the carry in *c; the carry out back in *c. */
-static uint8_t adc(uint8_t a, uint8_t m, uint8_t *c)
-{
-    unsigned s = (unsigned)a + m + *c;
-    *c = (uint8_t)(s >> 8);
-    return (uint8_t)s;
-}
-
 /* $D2DF: pros_target, then the consonant's stress reset and the declination of pros_baseline. */
 static void pitch_target(fw *f)
 {
     uint8_t b = fw_rd8(f, PROS_BASELINE);
     uint8_t c = (b >> 2) & 1;                           /* LSR x3: the carry is the last bit shifted out */
     uint8_t a = (uint8_t)(b >> 3);
-    a = adc(a, fw_rd8(f, PROS_TERM_ACCENT), &c);        /* no CLC between: each carry feeds the next ADC */
-    a = adc(a, fw_rd8(f, PROS_TERM_STRESS), &c);
-    a = adc(a, fw_rd8(f, PROS_TERM_TAIL), &c);
-    a = adc(a, 105, &c);
+    a = fw_adc(a, fw_rd8(f, PROS_TERM_ACCENT), &c);     /* no CLC between: each carry feeds the next ADC */
+    a = fw_adc(a, fw_rd8(f, PROS_TERM_STRESS), &c);
+    a = fw_adc(a, fw_rd8(f, PROS_TERM_TAIL), &c);
+    a = fw_adc(a, 105, &c);
     fw_wr8(f, PROS_TARGET, a);
     if (fw_rd8(f, PROS_FEATURES) & PHF_CONSONANT)      /* a consonant clears pros_term_stress after its target */
         fw_wr8(f, PROS_TERM_STRESS, 0);
@@ -217,7 +207,7 @@ uint8_t pros_phrase_gen(fw *f, uint8_t *x, uint8_t *y)
     fw_wr8(f, PROS_POS, r.a);
     for (;;) {
         fw_wr8(f, PROS_POS, (uint8_t)(fw_rd8(f, PROS_POS) + 1));   /* $D152 */
-        par_ready(f, r);
+        fw_par_ready(f, r);
         rewrite_events(f);
         r.x = fw_rd8(f, PROS_POS);
         if (r.x >= fw_rd8(f, TN_PHON_LEN))

@@ -1,6 +1,7 @@
 #include "pros_phrase.h"
 #include "pros_decl.h"
 #include "pros_flags.h"
+#include "fw_ops.h"
 #include "tn_convert.h"
 #include "data/fw_data.h"
 
@@ -11,17 +12,6 @@
 #define PROS_PARAM_SET_K  (PROS_PARAMS + 10)   /* '?' */
 #define PROS_PARAM_SET_P  (PROS_PARAMS + 15)   /* '!' */
 #define PROS_LONG_WORD    5                    /* CMP #5: a word of 5 syllables or more is shortened */
-
-/* isr_par_ready with the registers the ROM has at the JSR (it preserves A, X and Y). */
-static void par_ready(fw *f, fw_regs r) { fw_rom_call(f, ROM_ISR_PAR_READY, &r, FW_ROM_CALL_BUDGET); }
-
-/* LDA arr,X; CLC; ADC #n; STA arr,X: an add to a position's count, mod 256. */
-static void count_add(fw *f, uint16_t arr, uint8_t x, uint8_t n)
-{
-    fw_wr8(f, (uint16_t)(arr + x), (uint8_t)(fw_rd8(f, (uint16_t)(arr + x)) + n));
-}
-
-static void inc8(fw *f, uint16_t addr) { fw_wr8(f, addr, (uint8_t)(fw_rd8(f, addr) + 1)); }
 
 /* $CEF6-$CF17: the pass's state, in the ROM's order. */
 static void init_state(fw *f)
@@ -111,23 +101,23 @@ static void phrase_end(fw *f, fw_regs *r)
    and the shortening of vowels outside them and of long words. */
 static void symbol_counts(fw *f, uint8_t x)
 {
-    inc8(f, PROS_PHRASE_LEN);
-    inc8(f, PROS_WORD_POS);
+    fw_inc8(f, PROS_PHRASE_LEN);
+    fw_inc8(f, PROS_WORD_POS);
     uint8_t features = fw_rd8(f, PROS_FEATURES);             /* LDY pros_features; TYA */
     if ((features & PHF_CONSONANT) && (fw_rd8(f, PROS_PREV_FEATURES) & (PHF_VOWEL | PHF_LONG))) {
         fw_wr8(f, FW_PROS_FINAL, 0);                         /* a consonant before a vowel or long symbol */
         fw_wr8(f, FW_PROS_FINAL_LENGTHEN, 0);
     }
     if (fw_rd8(f, FW_PROS_FINAL_LENGTHEN))
-        count_add(f, PROS_SYM_LENGTHEN, x, 8);
+        fw_add8(f, PROS_SYM_LENGTHEN, x, 8);
     if (features & (PHF_VOWEL | PHF_LONG)) {                 /* TYA; AND #$82 */
         if (fw_rd8(f, FW_PROS_FINAL) == 0)
-            count_add(f, PROS_SYM_SHORTEN, x, 3);
+            fw_add8(f, PROS_SYM_SHORTEN, x, 3);
         if (fw_rd8(f, FW_PROS_FINAL_LENGTHEN) == 0)
-            count_add(f, PROS_SYM_SHORTEN, x, 7);
+            fw_add8(f, PROS_SYM_SHORTEN, x, 7);
     }
     if (fw_rd8(f, FW_PROS_SYLLABLES) >= PROS_LONG_WORD)     /* CMP #5; BCC */
-        count_add(f, PROS_SYM_SHORTEN, x, 4);
+        fw_add8(f, PROS_SYM_SHORTEN, x, 4);
 }
 
 /* $D0BE-$D0F7: the accent on the first stressed vowel or long symbol walked while one is pending (BRA $D0CF: a
@@ -137,7 +127,7 @@ static void accent_and_nucleus(fw *f, uint8_t x)
 {
     if (fw_rd8(f, FW_PROS_ACCENT_PENDING) && (fw_rd8(f, PROS_SYM_FLAG) & PSF_STRESS)
         && (fw_rd8(f, PROS_FEATURES) & (PHF_VOWEL | PHF_LONG))) {   /* BBS7; BBS1; BRA */
-        count_add(f, PROS_SYM_LENGTHEN, x, 8);
+        fw_add8(f, PROS_SYM_LENGTHEN, x, 8);
         fw_wr8(f, (uint16_t)(PROS_SYM_FLAGS + x), PSF_ACCENT | PSF_STRESS);
         fw_wr8(f, FW_PROS_ACCENT_PENDING, 0);
     }
@@ -187,7 +177,7 @@ void pros_mark_phrases(fw *f, fw_regs *r)
         fw_wr8(f, PROS_POS, r->x);
         if (r->x == 0)
             break;                                           /* BEQ $CEEC */
-        par_ready(f, *r);
+        fw_par_ready(f, *r);
         r->y = load_symbol(f, r->x);
         uint8_t sym = r->y, cls = fw_rd8(f, PROS_CLASS);
         if (sym == '{') {                                    /* $CF4B: nothing else at a '{' */

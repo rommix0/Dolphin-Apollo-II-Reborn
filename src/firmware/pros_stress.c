@@ -1,26 +1,10 @@
 #include "pros_stress.h"
 #include "pros_flags.h"
+#include "fw_ops.h"
 #include "tn_convert.h"
 #include "data/fw_data.h"
 
 #define SYM_NONE  0x0D   /* $CB9D: the look-ahead ran into tn_phon_len: no next symbol (a carriage return) */
-
-/* isr_par_ready with the registers the ROM has at the JSR (it preserves A, X and Y). */
-static void par_ready(fw *f, fw_regs r) { fw_rom_call(f, ROM_ISR_PAR_READY, &r, FW_ROM_CALL_BUDGET); }
-
-/* LDA array,X; CLC; ADC #n; STA array,X: an 8-bit count. */
-static void add(fw *f, uint16_t array, uint8_t x, uint8_t n)
-{
-    fw_wr8(f, (uint16_t)(array + x), (uint8_t)(fw_rd8(f, (uint16_t)(array + x)) + n));
-}
-
-/* ADC #m: a + m + the carry in *c; the carry out back in *c. */
-static uint8_t adc(uint8_t a, uint8_t m, uint8_t *c)
-{
-    unsigned s = (unsigned)a + m + *c;
-    *c = (uint8_t)(s >> 8);
-    return (uint8_t)s;
-}
 
 static uint8_t sym_class(fw *f, uint8_t sym) { return fw_rom8(f, (uint16_t)(PH_SYMBOL_CLASS + sym)); }
 static uint8_t sym_features(fw *f, uint8_t sym) { return fw_rom8(f, (uint16_t)(PH_SYMBOL_FEATURES + sym)); }
@@ -172,21 +156,21 @@ void pros_stress_counts(fw *f)
         fw_wr8(f, (uint16_t)(PROS_SYM_FLAGS + x), PSF_STRESS);   /* STA, not ORA */
     if (fw_rd8(f, FW_PROS_ACCENT_PENDING)) {            /* $CC7A */
         fw_wr8(f, FW_PROS_TILDE_SHORTEN, 0);
-        add(f, PROS_SYM_LENGTHEN, x, 4);
+        fw_add8(f, PROS_SYM_LENGTHEN, x, 4);
     }
     if (fw_rd8(f, FW_PROS_TILDE_SHORTEN))               /* $CC8D */
-        add(f, PROS_SYM_SHORTEN, x, 3);
+        fw_add8(f, PROS_SYM_SHORTEN, x, 3);
     if (fw_rd8(f, FW_PROS_STRESS_TOGGLE) == 0)          /* $CC9B */
-        add(f, PROS_SYM_SHORTEN, x, 5);
+        fw_add8(f, PROS_SYM_SHORTEN, x, 5);
     if (fw_rd8(f, PROS_ACCENT_STATE) != 0)              /* $CCA9 */
         return;
     uint16_t at = (uint16_t)(PROS_SYM_SHORTEN + x);
     uint8_t c = 0;                                      /* CLC */
-    fw_wr8(f, at, adc(fw_rd8(f, at), 3, &c));           /* $CCB2: its carry reaches $CCD5 (LDA, BBC keep it) */
+    fw_wr8(f, at, fw_adc(fw_rd8(f, at), 3, &c));        /* $CCB2: its carry reaches $CCD5 (LDA, BBC keep it) */
     if (fw_rd8(f, FW_PROS_SYLLABLES) != 0 && (y & PHF_VOWEL)) {
-        add(f, PROS_SYM_SHORTEN, x, 3);                 /* $CCBF, then BRA $CCDA */
+        fw_add8(f, PROS_SYM_SHORTEN, x, 3);             /* $CCBF, then BRA $CCDA */
     } else if ((y & PHF_LIQUID) && (fw_rd8(f, FW_PROS_NEXT_FEATURES) & PHF_VOWEL)) {   /* $CCCA */
-        fw_wr8(f, at, adc(fw_rd8(f, at), 0x0C, &c));    /* $CCD5: no CLC */
+        fw_wr8(f, at, fw_adc(fw_rd8(f, at), 0x0C, &c)); /* $CCD5: no CLC */
     }
 }
 
@@ -203,7 +187,7 @@ static bool consonant(fw *f, fw_regs *r)
            is the next position's, which that position clears again (it stays only at pos + 1 = tn_phon_len) */
         uint8_t x1 = (uint8_t)(x + 1);
         if (sym_class(f, x1) & (PHC_KIND_2 | PHC_KIND_1 | PHC_PUNCT))
-            add(f, PROS_SYM_LENGTHEN, x1, 8);
+            fw_add8(f, PROS_SYM_LENGTHEN, x1, 8);
     }
     x = fw_rd8(f, PROS_POS);                            /* $CD0B */
     if (fw_rd8(f, PROS_SYMBOL) == fw_rd8(f, FW_PROS_NEXT_SYM)) {
@@ -212,11 +196,11 @@ static bool consonant(fw *f, fw_regs *r)
         return true;
     }
     if ((fw_rd8(f, PROS_PREV_FEATURES) & PHF_CONSONANT) && !(fw_rd8(f, PROS_FEATURES) & PHF_LONG))   /* $CD1E */
-        add(f, PROS_SYM_SHORTEN, x, 6);
+        fw_add8(f, PROS_SYM_SHORTEN, x, 6);
     if ((fw_rd8(f, FW_PROS_NEXT_PHON_FEATURES) & PHF_CONSONANT) && !(fw_rd8(f, PROS_FEATURES) & PHF_LONG))
-        add(f, PROS_SYM_SHORTEN, x, 6);
+        fw_add8(f, PROS_SYM_SHORTEN, x, 6);
     if (fw_rd8(f, FW_PROS_VOWEL_SEEN))                  /* $CD44 */
-        add(f, PROS_SYM_SHORTEN, x, 3);
+        fw_add8(f, PROS_SYM_SHORTEN, x, 3);
     return false;
 }
 
@@ -234,12 +218,12 @@ static void vowel(fw *f, fw_regs *r)
     if (fw_rd8(f, FW_PROS_STRESS_TOGGLE) != 0) {        /* $CD81: stressed after an unvoiced stop */
         uint8_t p = fw_rd8(f, FW_PROS_PREV_FEATURES_COPY) & (PHF_STOP | PHF_VOICED);
         if (!(p & PHF_VOICED) && (p & PHF_STOP))
-            add(f, PROS_SYM_LENGTHEN, x, 5);
+            fw_add8(f, PROS_SYM_LENGTHEN, x, 5);
     }
     if (fw_rd8(f, PROS_PREV_FEATURES) & PHF_VOWEL)      /* $CD93 */
-        add(f, PROS_SYM_SHORTEN, x, 6);
+        fw_add8(f, PROS_SYM_SHORTEN, x, 6);
     if (fw_rd8(f, FW_PROS_NEXT_PHON_FEATURES) & PHF_VOWEL)
-        add(f, PROS_SYM_LENGTHEN, x, 4);
+        fw_add8(f, PROS_SYM_LENGTHEN, x, 4);
     uint8_t s = fw_rd8(f, FW_PROS_NEXT_PHON);           /* $CDAF */
     if (s == '1' || s == 'L') {                         /* the symbol after it becomes the next phonetic one */
         x = (uint8_t)(x + 2);
@@ -267,15 +251,15 @@ static void vowel(fw *f, fw_regs *r)
     y = r->y;
     if (y & PHF_STOP) {
         if (y & PHF_VOICED)
-            add(f, PROS_SYM_LENGTHEN, x, final ? 4 : 1);
+            fw_add8(f, PROS_SYM_LENGTHEN, x, final ? 4 : 1);
         else
-            add(f, PROS_SYM_SHORTEN, x, final ? 6 : 2);   /* $CE15 */
+            fw_add8(f, PROS_SYM_SHORTEN, x, final ? 6 : 2);   /* $CE15 */
     } else if ((y & (PHF_FRICATIVE | PHF_VOICED)) == (PHF_FRICATIVE | PHF_VOICED)) {   /* $CE32 */
-        add(f, PROS_SYM_LENGTHEN, x, final ? 10 : 4);
+        fw_add8(f, PROS_SYM_LENGTHEN, x, final ? 10 : 4);
     } else if (y & PHF_NASAL) {                         /* $CE56 */
-        add(f, PROS_SYM_SHORTEN, x, final ? 6 : 1);
+        fw_add8(f, PROS_SYM_SHORTEN, x, final ? 6 : 1);
     } else if (fw_rd8(f, FW_PROS_NEXT_FEATURES) == 0) { /* $CE76: the end of the word or text */
-        add(f, PROS_SYM_LENGTHEN, x, final ? 4 : 1);
+        fw_add8(f, PROS_SYM_LENGTHEN, x, final ? 4 : 1);
     }
 }
 
@@ -359,7 +343,7 @@ void pros_mark_stress(fw *f, fw_regs *r)
 {
     start(f, r);
     for (;;) {
-        par_ready(f, *r);                               /* $CB1F */
+        fw_par_ready(f, *r);                            /* $CB1F */
         fw_wr8(f, PROS_POS, (uint8_t)(fw_rd8(f, PROS_POS) + 1));
         r->x = fw_rd8(f, PROS_POS);
         if (r->x >= fw_rd8(f, TN_PHON_LEN))

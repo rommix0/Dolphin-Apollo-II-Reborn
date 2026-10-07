@@ -1,4 +1,5 @@
 #include "pros_seg.h"
+#include "fw_ops.h"
 #include "tn_convert.h"
 
 /* STA (ptr),Y: the 16-bit pointer plus y. The pointers start at the arrays ($0200, $0600, $0A00, $0E00) and only
@@ -6,20 +7,18 @@
    plus the pauses), so the address stays in RAM below $1300. */
 static void seg_store(fw *f, uint16_t ptr, uint8_t y, uint8_t v) { fw_wr8(f, (uint16_t)(fw_rd16(f, ptr) + y), v); }
 
-static void inc8(fw *f, uint16_t addr) { fw_wr8(f, addr, (uint8_t)(fw_rd8(f, addr) + 1)); }
-
 /* INC pros_seg_count / BNE; on the wrap to 0: INC pros_seg_count+1, then the pointers' high bytes in the ROM's
    order, phoneme, pitch, duration, flags ($CA02-$CA11, $CA2A-$CA39, $CA5D-$CA6C are the same code). */
 static void seg_advance(fw *f)
 {
-    inc8(f, PROS_SEG_COUNT);
+    fw_inc8(f, PROS_SEG_COUNT);
     if (fw_rd8(f, PROS_SEG_COUNT) != 0)
         return;
-    inc8(f, PROS_SEG_COUNT + 1);
-    inc8(f, PROS_PHONEME_PTR + 1);
-    inc8(f, PROS_PITCH_PTR + 1);
-    inc8(f, PROS_DURATION_PTR + 1);
-    inc8(f, PROS_FLAGS_PTR + 1);
+    fw_inc8(f, PROS_SEG_COUNT + 1);
+    fw_inc8(f, PROS_PHONEME_PTR + 1);
+    fw_inc8(f, PROS_PITCH_PTR + 1);
+    fw_inc8(f, PROS_DURATION_PTR + 1);
+    fw_inc8(f, PROS_FLAGS_PTR + 1);
 }
 
 /* The pause segment of both pause routines ($C9ED-$CA11 is the same code as $CA15-$CA39): duration d, phoneme

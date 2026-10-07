@@ -74,6 +74,25 @@ static void test_observer_lets_rom_run(void)
     CHECK_EQ(g_m.hook_count, 0);
 }
 
+/* The hook table holds exactly MACHINE_MAX_HOOKS hooks (M4.4a spec 2.3: 256, enough for every routine left through
+   M4.6; diff_lts installs one observer per replacement plus its boot_loop_play stop). MACHINE_MAX_HOOKS - 1
+   observers at $8000 up (never executed here) and a replacement at $C100 fill it: the next distinct address is
+   refused, and the last entry still fires. */
+static void test_hook_table_full(void)
+{
+    CHECK_EQ(MACHINE_MAX_HOOKS, 256);
+    load_main(0xC100);
+    for (unsigned i = 0; i < MACHINE_MAX_HOOKS - 1; i++)
+        CHECK(machine_hook(&g_m, (uint16_t)(0x8000 + i), hook_observe, NULL));
+    CHECK(machine_hook(&g_m, 0xC100, hook_replace, NULL));
+    CHECK_EQ(g_m.hook_count, MACHINE_MAX_HOOKS);
+    CHECK(!machine_hook(&g_m, 0xC200, hook_replace, NULL));   /* the table is full */
+    CHECK_EQ(g_m.hook_count, MACHINE_MAX_HOOKS);
+    run_to(&g_m, 0x9007);
+    CHECK_EQ(g_m.ram[0x10], 0x77);   /* the last entry replaced $C100 */
+    CHECK_EQ(g_calls, 1);            /* and no observer fired */
+}
+
 static bool hook_stuck(machine *m, void *user)
 {
     (void)m;
@@ -365,6 +384,7 @@ void suite_machine_hooks(void)
     test_mapper();
     test_hook_replaces_routine();
     test_observer_lets_rom_run();
+    test_hook_table_full();
     test_stuck_hook_faults();
     test_hook_only_in_main_rom(0x70, 0x77, 1);   /* window off: $4100 is main ROM, the hook fires */
     test_hook_only_in_main_rom(0xF0, 0x14, 0);   /* window on: $4100 is file 0x0100, no hook */
