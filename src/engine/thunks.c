@@ -11,6 +11,7 @@
 #include "firmware/pros_decl.h"
 #include "firmware/ph_expand.h"
 #include "firmware/pros_gen.h"
+#include "firmware/pros_phrase.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -279,6 +280,34 @@ static void pros_reset_seg_ptrs_regs(fw *f, cpu740 *c)
     c->a = (uint8_t)(PROS_SEG_FLAGS >> 8);
 }
 
+/* pros_mark_phrases $CEF6: A, X, Y in; only Y is read, by its first isr_par_ready ($CF28; A and X are loaded first,
+   $CF1A-$CF23). A = pros_word_pos, X = pros_pos (0, pros_store_phrase_len's LDX) and Y as the last position left it
+   (the entry Y if none), out: its RTS at $CEF5. The C's ROM calls overwrite the machine's registers, so all three are
+   set from the C. The only caller, pros_make_segments ($CAB6), calls pros_phrase_gen next, whose first instruction
+   JSR pros_declination ($D129) writes A, X and Y before reading them (LDA pros_baseline_end; LDX pros_pos and LDY #0
+   in pros_declination_step): no reader was found. No caller reads a flag. They are defined, so all three are
+   declared. */
+static void pros_mark_phrases_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    pros_mark_phrases(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* pros_store_phrase_len $D0FD: no register input. A (1, or pros_class when its bit 3 is set) and X = pros_pos (its
+   LDX) out, Y untouched (no ROM call in the C). Both callers are in pros_mark_phrases: after $CF97 it loads A (LDA
+   pros_symbol) and reads no X or Y before JSR pros_declination ($D04D), which writes X and Y first (LDX pros_pos,
+   LDY #0); after $CEEC it loads A (LDA pros_word_pos) and returns, and X and Y go on to pros_make_segments, where
+   pros_phrase_gen's JSR pros_declination writes them first. No reader was found; no caller reads a flag. They are
+   defined, so A, X and Y are declared. */
+static void pros_store_phrase_len_regs(fw *f, cpu740 *c)
+{
+    c->a = pros_store_phrase_len(f);
+    c->x = fw_rd8(f, PROS_POS);
+}
+
 /* pros_phrase_gen $D129: no register input. A, X and Y out as the ROM leaves them: A = pros_seg_count's low byte
    before the final DEC, X = pros_pos (= tn_phon_len), Y = the second end pause's LDY pros_seg_count. Its one ROM
    caller, pros_make_segments, returns at once ($CABC RTS); its callers (boot_reset $A687, boot_selftest_sound $A7BA
@@ -350,6 +379,8 @@ THUNK(ph_append_phrase_pause)
 THUNK(ph_append_pause)
 THUNK(pros_append_segment)
 THUNK(pros_reset_seg_ptrs)
+THUNK(pros_mark_phrases)
+THUNK(pros_store_phrase_len)
 THUNK(pros_phrase_gen)
 THUNK(pros_declination)
 THUNK(pros_declination_step)
@@ -377,6 +408,8 @@ const fw_replacement fw_replacements[] = {
     { "ph_append_pause",    0xCA15, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_pause },
     { "pros_append_segment", 0xCA3B, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_append_segment },
     { "pros_reset_seg_ptrs", 0xCA71, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_reset_seg_ptrs },
+    { "pros_mark_phrases",  0xCEF6, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_mark_phrases },
+    { "pros_store_phrase_len", 0xD0FD, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_store_phrase_len },
     { "pros_phrase_gen",    0xD129, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_phrase_gen },
     { "pros_declination",   0xD3DD, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_declination },
     { "pros_declination_step", 0xD40D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_declination_step },

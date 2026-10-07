@@ -8,7 +8,9 @@
 #include "firmware/ph_expand.h"
 #include "firmware/pros_addr.h"
 #include "firmware/pros_decl.h"
+#include "firmware/pros_flags.h"
 #include "firmware/pros_gen.h"
+#include "firmware/pros_phrase.h"
 #include "firmware/pros_seg.h"
 #include "firmware/tn_convert.h"
 #include "firmware/data/fw_data.h"
@@ -738,6 +740,298 @@ static void test_gen_closure_and_hyper(void)
     CHECK(!g_f.fault);
 }
 
+/* ---- the phrase pass (M4.3b) ---- */
+
+/* tn_phonetic = text, and pros_pos = tn_phon_len = its length, as pros_mark_stress leaves them; every flag, count,
+   parameter and state byte 0 unless the test sets it. */
+static void phrase_setup(const char *text)
+{
+    setup();
+    size_t n = strlen(text);
+    memcpy(g_ram + TN_PHONETIC, text, n);
+    g_ram[TN_PHON_LEN] = (uint8_t)n;
+    g_ram[PROS_POS] = (uint8_t)n;
+}
+
+/* Runs the phrase pass with the entry Y = y (A and X are not read); *r = the registers it leaves. */
+static void phrase_run(uint8_t y, fw_regs *r)
+{
+    r->a = 0xA5;
+    r->x = 0xB6;
+    r->y = y;
+    r->p = 0;
+    pros_mark_phrases(&g_f, r);
+}
+
+static void test_phrase_rows(void)
+{
+    check_row("pros_mark_phrases", ROM_PROS_MARK_PHRASES, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("pros_store_phrase_len", ROM_PROS_STORE_PHRASE_LEN, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+}
+
+/* $D0FD: bit 7 unless the punctuation stored before had no class bit 3; the ORA is in A only */
+static void test_store_phrase_len(void)
+{
+    setup();
+    g_ram[PROS_POS] = 7;
+    g_ram[PROS_PHRASE_LEN] = 5;
+    g_ram[PROS_CLASS] = 0x0B;                           /* '.': class bit 3 */
+    CHECK_EQ(pros_store_phrase_len(&g_f), 0x0B);        /* BBS3 taken: A = pros_class */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 7], 0x85);
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 7], 0x85);
+    CHECK_EQ(g_ram[PROS_PHRASE_LEN], 0);
+    CHECK_EQ(g_ram[FW_PROS_PUNCT_NOT_KIND3], 0);
+
+    g_ram[PROS_POS] = 3;
+    g_ram[PROS_PHRASE_LEN] = 4;
+    g_ram[PROS_CLASS] = 0x05;                           /* ',': no class bit 3 */
+    CHECK_EQ(pros_store_phrase_len(&g_f), 1);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 3], 0x84);       /* this store still gets bit 7 ... */
+    CHECK_EQ(g_ram[FW_PROS_PUNCT_NOT_KIND3], 1);
+
+    g_ram[PROS_POS] = 1;
+    g_ram[PROS_PHRASE_LEN] = 6;
+    g_ram[PROS_CLASS] = 0x0D;                           /* '?' */
+    CHECK_EQ(pros_store_phrase_len(&g_f), 0x0D);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 0x06);       /* ... the next one does not */
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 1], 0x06);
+    CHECK_EQ(g_ram[FW_PROS_PUNCT_NOT_KIND3], 0);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 2], 0);          /* only pros_pos is written */
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 1], 0);
+    CHECK_EQ(g_ram[PROS_POS], 1);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+/* " ME, ~TO{." walked from position 9 down to 1, then the exit block at 0: the registers at isr_par_ready ($CF28) on
+   each path, the counts, the accent, the nucleus marks and the state left */
+static void test_phrases_clause(void)
+{
+    fw_regs r;
+    phrase_setup(" ME, ~TO{.");
+    g_ram[PROS_SYM_FLAGS + 2] = PSF_STRESS;            /* E and O stressed (by pros_mark_stress) */
+    g_ram[PROS_SYM_FLAGS + 7] = PSF_STRESS;
+    g_ram[PROS_SYM_LENGTHEN + 3] = 5;                   /* the syllable counts pros_mark_stress stored: 5 for "ME" */
+    g_ram[PROS_SYM_LENGTHEN + 9] = 4;                   /* (a long word from 5 on), 4 for "TO" */
+    for (unsigned i = 0; i < 10; i++)
+        g_ram[PROS_PARAMS + i] = (uint8_t)(0x10 + i);
+    g_ram[PROS_PARAMS + 0] = 0x90;                      /* A, B: '.' falls by 16 over its count of 1 */
+    g_ram[PROS_PARAMS + 1] = 0x80;
+    g_ram[PROS_PARAMS + 5] = 0x70;                      /* F, G: ',' rises by 12 over its count of 3 */
+    g_ram[PROS_PARAMS + 6] = 0x7C;
+    g_ram[FW_PROS_WRITE_ONLY_1C1C] = 0x5A;              /* stale state, set at entry */
+    g_ram[FW_PROS_NUCLEUS_MASK] = 0x5A;
+    g_ram[FW_PROS_ACCENT_PENDING] = 0x5A;
+    g_ram[FW_PROS_FINAL] = 0x5A;
+    g_ram[PROS_ACCENT_STATE] = 0x5A;
+    g_ram[PROS_FEATURES] = 0x5A;
+    phrase_run(0x33, &r);
+    CHECK_EQ(g_ncalls, 9);
+    check_call(0, ROM_ISR_PAR_READY, 0, 9, 0x33);       /* the first: A = pros_features (0 at entry), the entry Y */
+    check_call(1, ROM_ISR_PAR_READY, 0, 8, 16);         /* after '.': Y = pros_declination's (falling: the step) */
+    check_call(2, ROM_ISR_PAR_READY, 0, 7, '{');        /* after '{': Y = the symbol */
+    check_call(3, ROM_ISR_PAR_READY, 0x83, 6, 0x83);    /* after O: Y = its features (LDY at $D068) */
+    check_call(4, ROM_ISR_PAR_READY, 0x60, 5, 0x60);    /* after T */
+    check_call(5, ROM_ISR_PAR_READY, 0, 4, '~');        /* after '~', a marker: Y = the symbol */
+    check_call(6, ROM_ISR_PAR_READY, 0, 3, ' ');        /* after the space */
+    check_call(7, ROM_ISR_PAR_READY, 0, 2, 4);          /* after ',': rising, Y = the step before its negation */
+    check_call(8, ROM_ISR_PAR_READY, 0x83, 1, 0x83);    /* after E */
+    CHECK_EQ(r.a, 2);                                   /* the exit block: A = pros_word_pos, X = pros_pos */
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0x49);                                /* M's features */
+    /* pros_sym_flags: each word's phonetic-symbol count at the space or punctuation before it, the accents with
+       the nucleus marks */
+    static const uint8_t flags[10] = { 2, 0, 0x67, 0, 2, 0, 0, 0x67, 0, 0 };
+    /* the counts: each phrase's at the punctuation before it and at 0 (bit 7: the punctuation after the phrase has
+       class bit 3; the first phrase's count goes on from the second's 3, which pros_declination_step stores back),
+       the accents (+8), the phrase-final lengthening before '.' (+8), a vowel outside it (+7) and a long word (+4) */
+    static const uint8_t lengthen[10] = { 5, 0, 8, 0x83, 0, 0, 0, 16, 0, 0x81 };
+    static const uint8_t shorten[10] = { 5, 4, 11, 0x83, 0, 0, 0, 0, 0, 0x81 };
+    for (unsigned i = 0; i < 10; i++) {
+        CHECK_EQ(g_ram[PROS_SYM_FLAGS + i], flags[i]);
+        CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + i], lengthen[i]);
+        CHECK_EQ(g_ram[PROS_SYM_SHORTEN + i], shorten[i]);
+    }
+    CHECK_EQ(g_ram[PROS_STRESS_PARAM], 0x17);           /* the ',' set (F-J), the last loaded */
+    CHECK_EQ(g_ram[PROS_NUCLEUS_PARAM], 0x18);
+    CHECK_EQ(g_ram[PROS_FINAL_PARAM], 0x19);
+    CHECK_EQ(g_ram[PROS_BASELINE], 0x70);
+    CHECK_EQ(g_ram[PROS_BASELINE_END], 0x7C);
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 0xFC);              /* 0 - 4 */
+    CHECK_EQ(g_ram[PROS_POS], 0);
+    CHECK_EQ(g_ram[PROS_PHRASE_LEN], 0);
+    CHECK_EQ(g_ram[PROS_WORD_POS], 2);
+    CHECK_EQ(g_ram[PROS_ACCENT_STATE], 1);
+    CHECK_EQ(g_ram[PROS_SYMBOL], 'M');
+    CHECK_EQ(g_ram[PROS_CLASS], 0x80);
+    CHECK_EQ(g_ram[PROS_FEATURES], 0x49);
+    CHECK_EQ(g_ram[PROS_PREV_FEATURES], 0x49);
+    CHECK_EQ(g_ram[PROS_SYM_FLAG], 0);
+    CHECK_EQ(g_ram[FW_PROS_SYLLABLES], 5);
+    CHECK_EQ(g_ram[FW_PROS_STRESS_TOGGLE], 0);          /* 1 at '{', 0 at the space */
+    CHECK_EQ(g_ram[FW_PROS_FINAL], 0);                  /* 0 at M, a consonant before a vowel */
+    CHECK_EQ(g_ram[FW_PROS_FINAL_LENGTHEN], 0);
+    CHECK_EQ(g_ram[FW_PROS_ACCENT_PENDING], 0);
+    CHECK_EQ(g_ram[FW_PROS_WRITE_ONLY_1C1C], 1);
+    CHECK_EQ(g_ram[FW_PROS_NUCLEUS_MASK], 0);
+    CHECK_EQ(g_ram[FW_PROS_PUNCT_NOT_KIND3], 1);        /* the exit block's store: pros_class $80 */
+    CHECK(!g_f.fault);
+}
+
+/* The five pros_params of each punctuation's phrase type ($CF9A-$D04A); other punctuation loads none */
+static void test_phrases_params(void)
+{
+    static const struct { char p; uint8_t first; } k[] = {
+        { '?', 10 }, { '!', 15 }, { ',', 5 }, { ':', 5 }, { '.', 0 }, { ';', 0 },
+    };
+    fw_regs r;
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) {
+        char text[3] = { ' ', k[i].p, '\0' };
+        phrase_setup(text);
+        for (unsigned j = 0; j < 20; j++)
+            g_ram[PROS_PARAMS + j] = (uint8_t)(0xC0 - j);   /* every set falls by 1 */
+        phrase_run(0, &r);
+        uint8_t s = k[i].first;
+        CHECK_EQ(g_ram[PROS_BASELINE], 0xC0 - s);
+        CHECK_EQ(g_ram[PROS_BASELINE_END], 0xC0 - s - 1);
+        CHECK_EQ(g_ram[PROS_STRESS_PARAM], 0xC0 - s - 2);
+        CHECK_EQ(g_ram[PROS_NUCLEUS_PARAM], 0xC0 - s - 3);
+        CHECK_EQ(g_ram[PROS_FINAL_PARAM], 0xC0 - s - 4);
+        CHECK_EQ(g_ram[PROS_DECL_STEP], 1);             /* 1 over the count 1 */
+        CHECK_EQ(g_ncalls, 1);
+        check_call(0, ROM_ISR_PAR_READY, 0, 1, 0);
+        CHECK(!g_f.fault);
+    }
+    phrase_setup(" -");                                 /* '-' (class 1) keeps the current set */
+    g_ram[PROS_BASELINE] = 0x66;
+    g_ram[PROS_BASELINE_END] = 0x44;
+    g_ram[PROS_STRESS_PARAM] = 0xE1;
+    g_ram[PROS_NUCLEUS_PARAM] = 0xE2;
+    g_ram[PROS_FINAL_PARAM] = 0xE3;
+    phrase_run(0, &r);
+    CHECK_EQ(g_ram[PROS_BASELINE], 0x66);
+    CHECK_EQ(g_ram[PROS_BASELINE_END], 0x44);
+    CHECK_EQ(g_ram[PROS_STRESS_PARAM], 0xE1);
+    CHECK_EQ(g_ram[PROS_NUCLEUS_PARAM], 0xE2);
+    CHECK_EQ(g_ram[PROS_FINAL_PARAM], 0xE3);
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 25);                /* still computed: $22 over 1, capped */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 0x81);       /* still stored; '-' has no class bit 3 ... */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 0], 0x01);       /* ... so the count before it gets no bit 7 */
+
+    /* ... and keeps the nucleus mask: the E before '-' gets no nucleus marks, the one before '.' does */
+    phrase_setup(" E-E");
+    g_ram[PROS_SYM_FLAGS + 1] = PSF_STRESS;
+    g_ram[PROS_SYM_FLAGS + 3] = PSF_STRESS;
+    phrase_run(0, &r);
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 3], 0x67);          /* the accent and the nucleus marks */
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 1], PSF_STRESS);    /* the mask is still 0 */
+    phrase_setup(" E.E");
+    g_ram[PROS_SYM_FLAGS + 1] = PSF_STRESS;
+    g_ram[PROS_SYM_FLAGS + 3] = PSF_STRESS;
+    phrase_run(0, &r);
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 1], PSF_STRESS | PSF_NUCLEUS);
+    CHECK(!g_f.fault);
+}
+
+/* $D0C8-$D0CF: a pending accent goes to a stressed vowel ($D0CB BBS7) or long symbol ($D0CD BBS1). BRA $D0CF (a
+   stressed symbol with neither: no accent) is unreachable from pros_mark_stress, which sets the stress flag only
+   with features bit 7 or 1. */
+static void test_phrases_accent(void)
+{
+    fw_regs r;
+    phrase_setup(" AME");
+    g_ram[PROS_SYM_FLAGS + 1] = PSF_STRESS;
+    g_ram[PROS_SYM_FLAGS + 2] = PSF_STRESS;             /* M (features $49) stressed: BRA $D0CF */
+    g_ram[PROS_SYM_LENGTHEN + 1] = 0xFA;                /* the accent's +8 wraps mod 256 */
+    g_ram[PROS_SYM_LENGTHEN + 2] = 0x30;
+    phrase_run(0, &r);
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 3], PSF_NUCLEUS);   /* E, unstressed after the last stress: nucleus marks */
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 2], PSF_STRESS | PSF_NUCLEUS);   /* no accent, but it ends the nucleus marks */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 2], 0x30);
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 1], 0x60);          /* the accent still pending reaches A; the mask is 0 */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 0x02);
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 3], 7);           /* E in the word's last syllable */
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 1], 7 + 3);       /* A outside it (M, a consonant before a vowel, ends it) */
+    CHECK_EQ(g_ram[PROS_ACCENT_STATE], 3);              /* A's word position */
+    CHECK_EQ(g_ram[FW_PROS_ACCENT_PENDING], 0);
+    CHECK_EQ(g_ram[FW_PROS_FINAL], 0);
+    CHECK_EQ(g_ncalls, 3);
+    check_call(1, ROM_ISR_PAR_READY, 0x83, 2, 0x83);
+    check_call(2, ROM_ISR_PAR_READY, 0x49, 1, 0x49);
+
+    phrase_setup(" 7");                                 /* a syllabic consonant (features $4B: bit 1, not bit 7) */
+    g_ram[PROS_SYM_FLAGS + 1] = PSF_STRESS;
+    phrase_run(0, &r);
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 1], 0x67);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 8);
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 1], 7);           /* long: shortened as a vowel */
+    CHECK(!g_f.fault);
+}
+
+/* pros_pos 1 on entry: DEC to 0 and straight to the exit block: no isr_par_ready, the entry Y kept, and the state
+   as the entry ($CEF6-$CF17) sets it */
+static void test_phrases_exit_only(void)
+{
+    static const uint16_t state[] = {
+        FW_PROS_FINAL_LENGTHEN, PROS_ACCENT_STATE, FW_PROS_STRESS_TOGGLE, PROS_WORD_POS, PROS_FEATURES,
+        FW_PROS_ACCENT_PENDING, PROS_PHRASE_LEN, FW_PROS_WRITE_ONLY_1C1C, FW_PROS_FINAL, FW_PROS_NUCLEUS_MASK,
+    };
+    fw_regs r;
+    phrase_setup(" ");
+    for (size_t i = 0; i < sizeof state / sizeof state[0]; i++)
+        g_ram[state[i]] = 0x5A;                         /* stale */
+    g_ram[PROS_SYM_FLAGS + 0] = 0x5A;
+    phrase_run(0x77, &r);
+    CHECK_EQ(g_ram[FW_PROS_FINAL_LENGTHEN], 0);
+    CHECK_EQ(g_ram[PROS_ACCENT_STATE], 0);
+    CHECK_EQ(g_ram[FW_PROS_STRESS_TOGGLE], 0);
+    CHECK_EQ(g_ram[PROS_FEATURES], 0);
+    CHECK_EQ(g_ram[FW_PROS_ACCENT_PENDING], 1);
+    CHECK_EQ(g_ram[FW_PROS_WRITE_ONLY_1C1C], 1);        /* the dead store at $CF0F */
+    CHECK_EQ(g_ram[FW_PROS_FINAL], 1);
+    CHECK_EQ(g_ram[FW_PROS_NUCLEUS_MASK], PSF_NUCLEUS);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK_EQ(r.a, 0);
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0x77);
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 0], 0);             /* pros_word_pos */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 0], 0x81);       /* pros_phrase_len 1 from the entry, with bit 7 */
+    CHECK_EQ(g_ram[PROS_SYM_SHORTEN + 0], 0x81);
+    CHECK_EQ(g_ram[PROS_PHRASE_LEN], 0);
+    CHECK_EQ(g_ram[FW_PROS_PUNCT_NOT_KIND3], 1);        /* pros_class 0: no bit 3 */
+    CHECK_EQ(g_ram[PROS_PREV_FEATURES], 0);
+    CHECK(!g_f.fault);
+}
+
+/* Empty tn_phonetic (latent): pros_mark_stress leaves pros_pos 0, so the pass walks positions 255 down to 1 of stale
+   RAM. Here '.' at 255, a stressed E at 254, M at 1, and symbol 0 (class 0, a marker) between. */
+static void test_phrases_empty(void)
+{
+    fw_regs r;
+    setup();
+    g_ram[TN_PHONETIC + 255] = '.';
+    g_ram[TN_PHONETIC + 254] = 'E';
+    g_ram[TN_PHONETIC + 1] = 'M';
+    g_ram[PROS_SYM_FLAGS + 254] = PSF_STRESS;
+    phrase_run(0x5A, &r);
+    CHECK_EQ(g_ncalls, 255);
+    check_call(0, ROM_ISR_PAR_READY, 0, 255, 0x5A);
+    check_call(1, ROM_ISR_PAR_READY, 0, 254, 0);        /* after '.': a level baseline (0 to 0), step 0 */
+    check_call(2, ROM_ISR_PAR_READY, 0x83, 253, 0x83);
+    check_call(3, ROM_ISR_PAR_READY, 0, 252, 0);        /* after symbol 0 */
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 254], 0x67);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 254], 16);       /* the accent, and the lengthening before '.' */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 8);          /* still before '.': symbol 0 has no features */
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 255], 0x81);
+    CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 0], 0x83);       /* 1 (stored back by the step) + E + M, bit 7 ('.') */
+    CHECK_EQ(g_ram[PROS_SYM_FLAGS + 0], 2);
+    CHECK_EQ(g_ram[PROS_POS], 0);
+    CHECK_EQ(r.a, 2);
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0x49);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_pros(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -770,4 +1064,11 @@ void suite_fw_pros(void)
     test_gen_content_flag();
     test_gen_final_count();
     test_gen_closure_and_hyper();
+    test_phrase_rows();
+    test_store_phrase_len();
+    test_phrases_clause();
+    test_phrases_params();
+    test_phrases_accent();
+    test_phrases_exit_only();
+    test_phrases_empty();
 }

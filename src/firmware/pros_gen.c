@@ -1,15 +1,11 @@
 #include "pros_gen.h"
 #include "pros_seg.h"
 #include "pros_decl.h"
+#include "pros_flags.h"
 #include "ph_expand.h"
 #include "tn_convert.h"
 #include "data/fw_data.h"
 
-/* pros_sym_flags bits, set by pros_mark_stress and pros_mark_phrases */
-#define FLAG_NUCLEUS    0x07   /* nucleus and tail marks */
-#define FLAG_UNRELEASED 0x10   /* a stop before another stop: only its first triple, the closure */
-#define FLAG_ACCENT     0x20
-#define FLAG_STRESS     0x40
 /* pros_params read here, by @R letter (index = letter - 'A') */
 #define PROS_PARAM_U  (PROS_PARAMS + 20)   /* pros_term_stress of a word's first symbol */
 #define PROS_PARAM_V  (PROS_PARAMS + 21)   /* added to pros_term_tail at a word's last symbol */
@@ -63,7 +59,7 @@ static void symbol_terms(fw *f)
     fw_wr8(f, PROS_TERM_ACCENT, 0);
     uint8_t flag = fw_rd8(f, PROS_SYM_FLAG);
     if (fw_rd8(f, PROS_FUNC_WORD) == 0) {
-        if (flag & FLAG_ACCENT) {                       /* $D243 */
+        if (flag & PSF_ACCENT) {                        /* $D243 */
             fw_wr8(f, PROS_TERM_ACCENT, fw_rd8(f, PROS_PARAM_W));
             fw_wr8(f, PROS_TERM_TAIL, 0);
             if (fw_rd8(f, PROS_ACCENT_STATE)) {
@@ -72,7 +68,7 @@ static void symbol_terms(fw *f)
                 fw_wr8(f, FW_PROS_STRESS_TOGGLE, 1);
                 fw_wr8(f, PROS_ACCENT_STATE, 1);
             }
-        } else if (flag & FLAG_STRESS) {                /* $D269 */
+        } else if (flag & PSF_STRESS) {                 /* $D269 */
             if (fw_rd8(f, FW_PROS_STRESS_TOGGLE)) {
                 fw_wr8(f, PROS_TERM_STRESS, fw_rd8(f, PROS_PARAM_Y));
             } else {
@@ -89,8 +85,8 @@ static void symbol_terms(fw *f)
             fw_wr8(f, PROS_TERM_TAIL, (uint8_t)(0 - fw_rd8(f, PROS_PARAM_W)));         /* LDA tail (0); SEC; SBC W */
         }
     }
-    if (flag & FLAG_NUCLEUS) {                          /* $D2A8 */
-        if (flag & FLAG_STRESS) {
+    if (flag & PSF_NUCLEUS) {                           /* $D2A8 */
+        if (flag & PSF_STRESS) {
             fw_wr8(f, PROS_TERM_STRESS, fw_rd8(f, PROS_NUCLEUS_PARAM));
         } else if (fw_rd8(f, PROS_WORD_LEN) == fw_rd8(f, PROS_WORD_POS)) {
             fw_wr8(f, PROS_TERM_TAIL, fw_rd8(f, PROS_FINAL_PARAM));
@@ -197,7 +193,7 @@ static void decode_symbol(fw *f, fw_regs *r)
         fw_wr8(f, FW_UTT_CONTENT, 0xFF);                /* $D360 LDM #$FF */
         append_triple(f, r);
         r->a = fw_rd8(f, PROS_SYM_FLAG);
-        if (r->a & FLAG_UNRELEASED)
+        if (r->a & PSF_UNRELEASED)
             return;                                     /* the closure only */
         r->y = (uint8_t)(fw_rd8(f, FW_TMP_78) + 1);
     }
