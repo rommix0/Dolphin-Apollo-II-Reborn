@@ -9,13 +9,26 @@
 #include "fw_ram.h"
 
 #define FW_RAM_SIZE  0x4000
-#define FW_TMP_78    0x0078   /* zero-page scratch, unnamed in the annotations: a saved Y, byte counters */
-#define FW_TMP_75    0x0075   /* zero-page scratch, unnamed in the annotations: tn_convert_clause's saved X */
+#define FW_TMP_78    0x0078   /* zero-page scratch, unnamed in the annotations: a saved Y, byte counters;
+                                 par_scale_duration's saved Y ($C2A0; not written for a duration of 0) */
+#define FW_TMP_75    0x0075   /* zero-page scratch, unnamed in the annotations: tn_convert_clause's saved X;
+                                 frm_clamp_mark_space's 2 x b10 ($B936; called by par_setup_voice at $B40A and
+                                 $B419) and frm_raise_formants' (b10 - 32) / 4 ($B969) */
 #define FW_TMP_76    0x0076   /* zero-page scratch, unnamed in the annotations: cmd_scan_clause's resume index,
-                                 cmd_set_prosody's parameter index */
+                                 cmd_set_prosody's parameter index; par_scale_voicing's first term at @B2, @B3, @B4,
+                                 @B6 and @B7 ($BFE7, $BFF8, $C006/$C00D, $C022, $C030) */
 #define FW_TMP_34    0x0034   /* zero-page scratch, unnamed in the annotations: cmd_hex_byte's high digit */
 #define FW_TMP_35    0x0035   /* zero-page scratch, unnamed in the annotations: cmd_hex_byte's low digit */
 #define FW_TMP_1809  0x1809   /* scratch, unnamed in the annotations: cmd_hex_byte's high nibble */
+/* The scratch bytes of pros_scale_target $BDD3, unnamed in the annotations; no other routine uses them (M4.4a spec
+   2.6). d = |pros_play_target - $80|. */
+#define FW_PROS_SCALE_DEV    0x1811  /* the scaled deviation s added to (target >= $80) or subtracted from
+                                        pros_pitch_centre ($BE13, $BE26, $BE31); not written when the limited R is 0
+                                        ($BE52), written 0 for R = 0 below cmd_speed_limit */
+#define FW_PROS_SCALE_FRAC   0x1812  /* the fraction accumulator of the R & 3 adds (0 at $BDE9); its bit 7 rounds s
+                                        ($BE2C ASL) */
+#define FW_PROS_DEV_FRAC     0x1813  /* d bits 1-0, in bits 7-6 (0 at $BDE6, rotated in at $BDF0) */
+#define FW_PROS_DEV_QUARTER  0x1814  /* d >> 2 ($BDF6) */
 #define FW_UTT_CONTENT         0x006B   /* unnamed in the annotations: "the utterance has content", $FF (LDM) at each
                                            word pause and each phoneme triple; boot_loop_play tests it */
 #define FW_PROS_STRESS_TOGGLE  0x1C0D   /* unnamed in the annotations: pros_phrase_gen's "a stress or an accent seen

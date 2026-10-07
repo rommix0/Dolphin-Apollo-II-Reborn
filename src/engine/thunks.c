@@ -14,6 +14,9 @@
 #include "firmware/pros_make.h"
 #include "firmware/pros_stress.h"
 #include "firmware/pros_phrase.h"
+#include "firmware/par_segment.h"
+#include "firmware/pros_play.h"
+#include "firmware/par_boundary.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -225,6 +228,103 @@ static void tn_convert_clause_regs(fw *f, cpu740 *c)
     tn_convert_clause(f);
 }
 
+/* pros_microprosody $B983: no register input (it loads A first). A = par_next_phoneme, or pros_play_target plus or
+   minus 5 (stored or not), out; X and Y untouched. The only caller, par_read_segment ($BD67), reads Y next ($BD6A
+   CPY #0, $BD70 DEY, $BD71 LDA ($24),Y) and X ($BD76 STA $17BF,X), and loads A first ($BD71). No caller reads a
+   flag (CPY follows). Declared: A, X, Y. */
+static void pros_microprosody_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    pros_microprosody(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_next_row $BD07: no register input. A = par_row_ptr's new low byte out; X and Y untouched. par_setup_voice
+   reads A ($B3C1 STA par_row2_ptr, $B3CA STA par_params_ptr); par_boundary_cur_dom and par_boundary_next_dom read
+   Y ($BF0C, $BF51 LDA ($32),Y; at $BF17/$BF5C PLA / TAX write A and X); par_read_dominance reads X ($BF83 CPX #9
+   after $BF7B, $BF9D TXA after $BF8D) and Y ($BF90 LDA ($32),Y), and its last call ($BFBF) hands A, X and Y to its
+   callers, which read Y ($BF01, $BF46) and X ($BF06, $BF56 STA $171D,X). No caller reads a flag (STA, LDA, LDY,
+   PLA or RTS follow). Declared: A, X, Y. */
+static void par_next_row_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_next_row(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_next_param $BD14: no register input. A = par_row_ptr's new high byte out; X and Y untouched. Callers read X
+   (frm_build_rest_frame $B434 INX; par_read_segment $BDA0 CPX #$0B; par_boundary_jump's next par_store_boundary,
+   $BEB5 STA $16ED,X) and Y (the (par_row_ptr),Y loads at $B42C, $BD83, $BEA7); each loads A before reading it
+   ($B43A, $BD83/$BDA4, $BEA7 LDA; or RTS at $BEB4 into par_boundary_pass's RTS and par_plan_tracks, which loads
+   it first). No caller reads a flag (INX, CPX, DEC follow). Reached from ROM in every mode through
+   frm_build_rest_frame (M4.5). Declared: A, X, Y. */
+static void par_next_param_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_next_param(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_clamp $BD24: A in; A clamped out, X and Y untouched. frm_raise_formants reads A and Y ($B973, $B980 STA
+   ($2C),Y); par_read_segment reads X ($BD92 CPX #$0A, $BD99 STA $17BF,X) and A (there, or through
+   par_scale_voicing), and Y at the next $BD83; par_read_dominance reads A ($BF78 STA par_dominated_target) and X
+   ($BF83 CPX #9); par_boundary_value hands A and X to par_store_boundary ($C0C2 JMP $C0AE; $BEB5 STA $16ED,X). No
+   caller reads a flag (STA, CPX or JMP follow). Reached from ROM in every mode through frm_raise_formants (M4.5).
+   Declared: A, X, Y. */
+static void par_clamp_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_clamp(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* pros_scale_target $BDD3: Y in (A and X are written first; TYA / PHA, TXA / PHA). X and Y restored, A = the entry
+   Y (the last PLA), out. par_play_start ($BAFE) loads A and Y next ($BB01 LDA, $BB0A TAY) and leaves X to its own
+   exit; par_read_segment ($BD64) calls pros_microprosody, which loads A first and leaves X and Y, then reads Y
+   ($BD6A CPY #0, $BD70 DEY) and X ($BD76 STA $17BF,X). No caller reads a flag (LDA or JSR follow). Declared: A, X,
+   Y. */
+static void pros_scale_target_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    pros_scale_target(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_scale_voicing $BFC3: A in; A scaled out, X and Y untouched. par_read_segment ($BD96) reads A and X ($BD99
+   STA $17BF,X, $BD9C INX) and Y at the next $BD83; par_read_dominance ($BF87) reads A ($BF8A STA par_fixed), Y
+   ($BF90 LDA ($32),Y) and X ($BF9D TXA). No caller reads a flag (STA follows). Declared: A, X, Y. */
+static void par_scale_voicing_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_scale_voicing(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_scale_duration $C29C: A and Y in (Y is saved in $78 and restored). A out; X untouched; Y as it came in.
+   par_boundary_cur_dom reads A and X at $BF06 (STA $171D,X), Y at $BF0C (LDA ($32),Y) and A at $BF11 (STA
+   par_trans_dur); par_boundary_next_dom reads A at $BF4B, Y at $BF51, A and X at $BF56. No caller reads a flag
+   (STA follows). Declared: A, X, Y. */
+static void par_scale_duration_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_scale_duration(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
 /* cmd_hex_value $C520: A in; A and Z out, X and Y preserved (cmd_upcase keeps X). bank_cmd_select passes A on to
    bank_enter, and bank_load_ramcode saves X and Y in $76 and $78; the ROM handlers read A; cmd_set_voice
    branches on Z ($AA7A BNE). No caller reads N or C. */
@@ -408,6 +508,13 @@ THUNK(tn_rule_skip_field)
 THUNK(tn_append_phonetic)
 THUNK(lts_convert_char)
 THUNK(tn_convert_clause)
+THUNK(pros_microprosody)
+THUNK(par_next_row)
+THUNK(par_next_param)
+THUNK(par_clamp)
+THUNK(pros_scale_target)
+THUNK(par_scale_voicing)
+THUNK(par_scale_duration)
 THUNK(cmd_hex_value)
 THUNK(ph_append_phrase_pause)
 THUNK(ph_append_pause)
@@ -439,6 +546,13 @@ const fw_replacement fw_replacements[] = {
     { "tn_append_phonetic", 0xB154, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_tn_append_phonetic },
     { "lts_convert_char",   0xB172, 0,                   t_lts_convert_char },
     { "tn_convert_clause",  0xB1E6, 0,                   t_tn_convert_clause },
+    { "pros_microprosody",  0xB983, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_microprosody },
+    { "par_next_row",       0xBD07, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_next_row },
+    { "par_next_param",     0xBD14, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_next_param },
+    { "par_clamp",          0xBD24, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_clamp },
+    { "pros_scale_target",  0xBDD3, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_scale_target },
+    { "par_scale_voicing",  0xBFC3, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_voicing },
+    { "par_scale_duration", 0xC29C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_duration },
     { "cmd_hex_value",      0xC520, FW_OUT_A | FW_OUT_X | FW_OUT_Y | FW_OUT_Z, t_cmd_hex_value },
     { "ph_append_phrase_pause", 0xC9B8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_phrase_pause },
     { "ph_append_pause",    0xCA15, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_pause },
