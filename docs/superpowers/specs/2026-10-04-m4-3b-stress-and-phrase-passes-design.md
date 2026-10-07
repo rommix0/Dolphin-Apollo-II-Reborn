@@ -1,6 +1,6 @@
 # M4.3b — The stress and phrase passes in C (pros_make_segments) — Design
 
-**Status:** design, awaiting user review
+**Status:** implemented (plan docs/superpowers/plans/2026-10-04-m4-3b-stress-and-phrase-passes.md)
 **Parent specs:**
 - `docs/superpowers/specs/2026-09-30-software-apollo2-design.md` (rev 10): §6 step 3, §8 milestone 4.
 - `docs/superpowers/specs/2026-10-03-m4-0-replacement-foundation-design.md`: hooks, thunks, `rom_call`, the tests (§3–§5, §8 "As built").
@@ -202,3 +202,54 @@ None. The passes read only `ph_symbol_class` and `ph_symbol_features` (M4.3a), a
 - `isr_par_ready` (M4.6).
 - Raising `MACHINE_MAX_HOOKS`.
 - `cmd_say_phonetic`, which stays ROM and unreachable.
+
+## 6. As built
+
+Where the ROM is more precise than, or differs from, the sections above. The ROM wins; `ghidra740/` is not edited.
+
+- **`BEQ $CCBA` taken is reachable** (§4.4 says unreachable). In `A|A` the first `A`'s look-ahead skips the class-0 `|` and sees a vowel, so $CD61/$CD63 count no syllable while `$1C0C` is set. The `|` becomes `R` (a consonant before a vowel), $CC42 toggles the stress to 0 and clears the accent state, and $CCB7 finds `$1C0B` still 0: the branch is taken at the `R` and again at the last `A`. `test_stress_no_syllable` runs `A|A` through `pros_mark_stress` and checks the counts it leaves.
+- **`syllabic_stress` ends with ` A|A.`** before its ` @X0` (§4.1): the committed text is `@X1. Bx7 BxM Bx7Z. BIA DIO BEA. A|A. @X0`, so diff_lts and golden_hybrid also compare the C on $CCBA taken. A branch probe (a scratch tool, not committed) gave $CCBA taken twice for this text alone, and the text still reaches $CC59 taken and $D0CD. `long_words` and `linking_r` are as in §4.1 (the probe confirmed the linking R four times in `linking_r` and once in `long_words`). `apollo2_coverage` cannot show $CC59 taken or $CCBA taken, whose targets ($CC60, $CCCA) other paths reach too; it shows $CBDB, $D0B5 and $D0CD, which were `MISSING` before the three texts.
+- **The carry into $CCD5 cannot come from `pros_mark_stress`** (§4.4 says the count is at most 11 at $CCB2). $CB35 clears the position's shortening count, and only +3 ($CC96) and +5 ($CCA4) come before the `ADC #3` at $CCB2, which so sees at most 8 and never carries. To test the missing `CLC`, `pros_stress.h` declares `pros_stress_counts` (the block $CC60–$CCD7), a public function beyond the routines' own; `pros_mark_stress` is its only caller in `src/`. `test_stress_carry` runs it on RAM set up directly: after $FE + 3, $CCD5 adds 12 and the carry.
+- **$CD02 lengthens position pos + 1**: after the `INX` at $CCFA both the class read at $CCFB (`ph_symbol_class[pos + 1]`, §2.7) and the `ADC #8` go to pos + 1. The next position clears that byte at its start ($CB32), so the add survives only when pos + 1 = `tn_phon_len`, on a stale byte past the text, mod 256. `test_stress_count_wrap` pins both (class 1 of `!` at index 33; $FC + 8 = $04).
+- **`pros_store_phrase_len`'s `ORA #$80` is in A only** ($D105): both stores get bit 7, but RAM `pros_phrase_len` is then set to 0; the decompiler's `pros_phrase_len | 0x80` is wrong (`test_store_phrase_len`). A phrase's count then goes on from the next phrase's, because `pros_declination_step` stores `pros_sym_lengthen[pros_pos] & $7F` (at least 1) back into `pros_phrase_len` ($D40D–$D41A); `test_phrases_clause` has the first phrase's two symbols stored as 5.
+- **Registers that §2.3 says flow on have no reader.** `pros_mark_phrases`' exit registers do not reach `pros_phrase_gen`'s first `isr_par_ready` ($D155): its first instruction, `JSR pros_declination` at $D129, writes A (`LDA pros_baseline_end`), X and Y (`LDX pros_pos` at $D40D and `LDY #0` at $D41D in `pros_declination_step`) before any read, so $D155 gets `pros_declination`'s X and Y. Likewise `pros_store_phrase_len`'s X = `pros_pos` is not what `pros_declination` sees: `pros_declination_step` loads X itself.
+- **Thunk outputs as finally declared** (`src/engine/thunks.c`): A, X and Y for all four, as in §2.3, because the ROM leaves them defined; no caller reads a flag. The thunks of `pros_make_segments`, `pros_mark_stress` and `pros_mark_phrases` set all three from the C's `fw_regs`, because the C's `isr_par_ready` calls overwrite the machine's registers. `pros_store_phrase_len` makes no ROM call and never touches Y: its thunk sets A (1, or `pros_class` when its bit 3 is set) and X = `pros_pos`, and leaves Y. Of the entry registers, `pros_make_segments`, `pros_mark_stress` and `pros_mark_phrases` read only Y, at their first `isr_par_ready` (`pros_make_segments` through `pros_mark_stress`'s).
+- **The C flush's entry Y** (§2.4): the C `tn_convert_clause` passes `pros_make_segments` Y = 0, the M4.1 convention it already used for the ROM call, where the ROM's Y at $B201 is what the last character's conversion left. That Y reaches only `pros_mark_stress`'s first `isr_par_ready` ($CB1F, before position 0; each position reloads Y at $CBAD), which preserves it, so no RAM differs. It is a known register difference; diff_lts skips the mid-clause flush and golden_hybrid covers it.
+- **The registers at `isr_par_ready` $CB1F** (§2.4 says about a dozen paths). X = `pros_pos` on every path but the first, and Y = `pros_features` unless stated:
+  - the start: A = `cmd_ev_count` (0), or with events the first position's high byte (`LDM` at $CB1C leaves A); X = 0 (`TAX` at $CAEC); Y = the caller's;
+  - `~`: A = 8; `|` before a non-vowel: A = `$1C09`; `}`: A = $FF; `{`: A = 0; `` ` ``: A = 1;
+  - the first of two equal consonants ($CD1B): A = `'|'`;
+  - the common tail ($CD5B): A = `pros_features`; after a vowel Y = `$1C07`, the next symbol's features (`LDY` at $CDF0);
+  - a word end ($CEE9): A = $FF, Y = `pros_features` = 0.
+
+  The look-ahead's registers never reach $CB1F: $CBAD–$CBB3 and $CC60/$CC63 reload them. `test_stress_paths` checks one of each path, `test_stress_start` the start with and without events. The pass leaves ($CB2C) A and Y as at the last call and X = `pros_pos` (= `tn_phon_len`).
+- **The registers at `isr_par_ready` $CF28**: A = `pros_features` as loaded at $CF1A, the previously walked position's (0 at the first, from $CF04), and X = `pros_pos`. Y:
+  - at the first position: the entry Y (what `pros_mark_stress` left);
+  - after `{`, a space, or a marker or other symbol with class bit 7 clear: the symbol (`TAY` at $CF37);
+  - after a punctuation: `pros_declination`'s Y (the step, or on a rising baseline the step before its negation), through `pros_declination_y`;
+  - after a phonetic symbol: its features (`LDY` at $D068).
+
+  `test_phrases_clause` checks each path. The pass leaves ($CEF5) A = `pros_word_pos`, X = 0 (`pros_store_phrase_len`'s `LDX`) and that Y.
+- **How often `isr_par_ready` is called**: `tn_phon_len` + 1 times by `pros_mark_stress`, because $CB1F comes before the end test (an empty text gets one call, so the pass does not return "at once" as §2.7 says; `test_stress_start`), and `tn_phon_len` − 1 times by `pros_mark_phrases` (for `tn_phon_len` ≥ 1), none at position 0, where $CF26 branches to the exit block first (`test_phrases_exit_only`: none for `pros_pos` 1).
+- **RAM names** (§2.6): the 16 bytes §2.6 lists are exactly the ones the passes use (no other routine's dump uses them, but `pros_phrase_gen` also uses $1C0D; $1C0A is unused). `fw.h` names them `FW_PROS_NEXT_SYM` $1C06, `FW_PROS_NEXT_FEATURES` $1C07, `FW_PROS_NEXT_PHON` $1C08, `FW_PROS_NEXT_PHON_FEATURES` $1C09, `FW_PROS_SYLLABLES` $1C0B, `FW_PROS_VOWEL_SEEN` $1C0C, `FW_PROS_TILDE_SHORTEN` $1C11, `FW_PROS_WRITE_ONLY_1C12`, `FW_PROS_FINAL` $1C13, `FW_PROS_BACKQUOTE` $1C14, `FW_PROS_PUNCT_NOT_KIND3` $1C15, `FW_PROS_FINAL_LENGTHEN` $1C16, `FW_PROS_ACCENT_PENDING` $1C19, `FW_PROS_PREV_FEATURES_COPY` $1C1A, `FW_PROS_WRITE_ONLY_1C1C` and `FW_PROS_NUCLEUS_MASK` $1C1E. Meanings sharper than or different from §2.6:
+  - $1C15: the punctuation `pros_store_phrase_len` stored last, which is the next one in the text, had no class bit 3; bit 3 (`PHC_KIND_3`) is set for `.` `:` `;` `?` only;
+  - $1C0B in `pros_mark_phrases`: the syllable count of the word before the space or punctuation in the text, the one the backward walk enters next ($CF6B reads what `pros_mark_stress` stored there), not the following word's;
+  - $1C13: in `pros_mark_stress` "the vowel's syllable ends a phrase" (class bit 0 of the first non-consonant from pos + 2 on, $CDEA; a space has class 0); in `pros_mark_phrases` "in the word's last syllable" (1 at its start and at each space and punctuation, 0 at a consonant before a vowel or long symbol); not "next is punctuation / phrase-final";
+  - $1C19: in `pros_mark_stress` it lengthens each symbol by 4 (1 at the start and at word ends but a space, 0 at `~`, and a space copies $1C11 into it); in `pros_mark_phrases` it is the pending accent (1 at the start and at each `~`);
+  - $1C06 becomes $0D when the look-ahead reaches `tn_phon_len`, even after it stored a space ($CB9D);
+  - `pros_mark_phrases` writes $1C0D but never reads it; $1C1A is cleared at each word end ($CEDE), unlike `pros_prev_features`.
+- **The `pros_sym_flags` bits** are `PSF_NUCLEUS` 7, `PSF_FUNC_WORD` $08, `PSF_UNRELEASED` $10, `PSF_ACCENT` $20 and `PSF_STRESS` $40 in `pros_flags.h`, which replace `pros_gen.c`'s own names. §2.6 says `pros_phrase_gen` reads the function word $08: it does not (it tests the symbol `~`). The function word $08 ($CBC9), the stress flag $40 ($CC77) and the accent $60 ($D0DC) are stored as the whole byte; only the unreleased stop (`ORA #$10`, $CCEB) and the nucleus mask ($D0E7) are ORed in. At a space or punctuation, and at position 0, the byte is not bits but the phonetic-symbol count of the word after it ($CF74, $CEF2).
+- **`DIFF_MAX`** in `tests/test_diff_lts.c` was raised from 24 to 28: with more rows than it, diff_lts fails `fw_replacement_count <= DIFF_MAX` before checking anything. §2.3's hook budget names only `MACHINE_MAX_HOOKS` (29 of 32 used).
+- **The C layout**:
+  - `pros_addr.h` gained `ROM_PROS_MAKE_SEGMENTS` (moved from `tn_convert.h`), `ROM_PROS_MARK_STRESS`, `ROM_PROS_MARK_PHRASES_EXIT` ($CEEC), `ROM_PROS_MARK_PHRASES` and `ROM_PROS_STORE_PHRASE_LEN`;
+  - `pros_make.c`: `void pros_make_segments(fw *f, fw_regs *r)`, with one static helper, `copy_params` (the copies in the ROM's order C, D, E, A, B);
+  - `pros_stress.c`: `void pros_mark_stress(fw *f, fw_regs *r)` and the public `pros_stress_counts`; static helpers `start`, `look_ahead`, `marker`, `stress_toggle`, `consonant`, `vowel`, `save_features`, `word_end` and `position`;
+  - `pros_phrase.c`: `void pros_mark_phrases(fw *f, fw_regs *r)` and `uint8_t pros_store_phrase_len(fw *f)` (returning A); static helpers `init_state`, `load_symbol`, `word_end`, `phrase_params`, `phrase_end`, `symbol_counts`, `accent_and_nucleus` and `exit_block`;
+  - each pass file has its own one-line `par_ready` and 8-bit add helpers.
+- **Smaller sharpenings**:
+  - the "first of two equal symbols" rewrite ($CD18) happens only to consonants, and it skips the common tail (`JMP $CB1F` at $CD1B), so `pros_prev_features` and $1C1A keep the previous symbol's features (`test_stress_paths` has `MM` become `|M`);
+  - `pros_mark_stress`'s look-ahead overwrites `pros_class` with the next symbol's class ($CB5D, $CB8B), so the `BBC1` at $CEBB tests the next symbol's class (the current one's only at the text's end);
+  - `pros_mark_phrases` never sets `pros_pos` or $1C15: it starts from the `pros_pos` that `pros_mark_stress` leaves, and only `pros_mark_stress` clears $1C15 ($CAE0);
+  - the dead stores to $1C12 are at $CDCB and $CDD4 (§2.7's $CDD2 is the `LDA`);
+  - `tests/test_fw_tn.c`'s flush test now checks that `boot_loop_play` gets `pros_phrase_gen`'s exit registers (A = $71, X = $FA, Y = $70 for 250 symbols) and 1374 `isr_par_ready` calls; its mock no longer answers $CA92, and its `MAX_CALLS` went from 1024 to 2048 because the C passes' `isr_par_ready` calls are recorded;
+  - the CLI check of criterion 5 also covered `long_clause`, whose mid-clause flush now runs the C.
