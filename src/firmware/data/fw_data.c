@@ -162,6 +162,7 @@ static void put_sound_array(enc *e, uint32_t *at, const uint8_t *v, unsigned n, 
     for (unsigned i = 0; i < n; i++)
         put(e, false, (*at)++, v[i]);
 }
+
 bool fw_image_build(fw_image *img, char *err, size_t errlen)
 {
     static enc e;

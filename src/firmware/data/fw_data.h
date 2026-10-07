@@ -40,6 +40,7 @@ typedef struct { uint8_t phoneme, max, min; } fw_ph_triple;
 /* The phoneme list of one symbol: count triples (at most 3), then the $FF end; word_pause: the list starts with the
    word-pause item PH_WORD_PAUSE (the space's, with no triples). */
 typedef struct { uint8_t count; fw_ph_triple item[3]; bool word_pause; } fw_ph_list;
+
 /* One parameter of a phoneme in a voice table (M4.4a spec 3), its five rows in the ROM's order: the target; the
    signed fixed contribution and the proportion 0-8 (eighths of the other phoneme's target) of the boundary value;
    the transition durations in frames in the dominated neighbour (ext_dur) and in this phoneme (int_dur), both
@@ -104,6 +105,7 @@ typedef struct { const uint8_t *phoneme, *duration, *pitch, *flags; } fw_cmd_sou
 #define PH_DUR_SHORTEN      0xC77B   /* byte[256]: one shortening step */
 #define PH_LENGTHEN_STEPS   0xD44A   /* byte[31], the base ph_lengthen_count indexes; entry 0 is its own RTS opcode */
 #define PH_WORD_PAUSE       0x5F     /* the word-pause item of a phoneme list (the space's) */
+
 /* Pinned addresses of the playback data (ghidra740/annotations: command.txt, frame.txt, params.txt; M4.4a spec 3) */
 #define CMD_SOUND_TABLE     0x9F74   /* ptr[17][4]: per @T effect its phoneme, duration, pitch-target and flag arrays */
 #define CMD_SOUND_DATA      0x9FFC   /* the @T segment arrays (395 bytes) */
@@ -137,6 +139,7 @@ typedef struct { const uint8_t *phoneme, *duration, *pitch, *flags; } fw_cmd_sou
 #define PHF_LIQUID      0x04   /* liquid or glide */
 #define PHF_LONG        0x02   /* long vowel, diphthong or syllabic consonant */
 #define PHF_VOICED      0x01
+
 /* The bytes of a DSP frame (frame20: ghidra740/annotations/types.txt; parent spec 1.4): the values of
    frm_snapshot_map */
 #define FRAME_ALF       0    /* b0 low-frequency amplitude */
@@ -189,7 +192,8 @@ extern const uint8_t fw_ph_symbol_class[256], fw_ph_symbol_features[256];
 extern const fw_ph_list fw_ph_lists[256];   /* by symbol; $00-$1F have no list */
 extern const uint8_t fw_ph_dur_lengthen[256], fw_ph_dur_shorten[256];
 extern const uint8_t fw_cmd_speed_map_data[9][32];
-extern const uint8_t fw_ph_lengthen_steps[31];extern const fw_par_phoneme fw_par_voice_a[PAR_PHONEMES], fw_par_voice_b[PAR_PHONEMES];
+extern const uint8_t fw_ph_lengthen_steps[31];
+extern const fw_par_phoneme fw_par_voice_a[PAR_PHONEMES], fw_par_voice_b[PAR_PHONEMES];
 extern const uint8_t fw_par_target_bias[10], fw_frm_snapshot_map[10];
 extern const uint8_t fw_cmd_sound_flags[CMD_SOUND_MAX];
 extern const fw_cmd_sound_effect fw_cmd_sound_effects[CMD_SOUND_EFFECTS];

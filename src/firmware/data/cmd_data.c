@@ -161,6 +161,7 @@ const uint8_t fw_cmd_speed_limits[9] = { 7, 7, 7, 7, 4, 2, 0, 0, 0 };
 /* par_voice_a_count ($D469), par_voice_b_count ($E5E2): the phoneme counts at the head of the
    voice tables (M4.4), read by cmd_select_voice_a and cmd_select_voice_b */
 const uint8_t fw_par_voice_a_count = 86, fw_par_voice_b_count = 86;
+
 /* cmd_sound_data ($9FFC): the segment arrays of the @T sound effects, in the format of the playback arrays.
    First the flag array that all effects share, one byte per segment of the longest effect (playback never
    reads it). Then per effect: its phonemes (rows of the voice tables; 59 is the pause), after which the
