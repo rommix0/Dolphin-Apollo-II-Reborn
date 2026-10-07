@@ -5,11 +5,12 @@
 #include <string.h>
 #include "test.h"
 #include "firmware/cmd_addr.h"
+#include "firmware/pros_addr.h"
 #include "firmware/tn_convert.h"
 #include "firmware/tn_rules.h"
 #include "firmware/data/fw_data.h"
 
-#define MAX_CALLS 1024
+#define MAX_CALLS 2048
 
 typedef struct { uint16_t addr; uint8_t a, x, y, phon_len; uint64_t budget; } rom_call_record;
 
@@ -41,7 +42,7 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         fw_wr8(f, CMD_NEXT_POS, fw_rd8(f, (uint16_t)(CMD_POSITIONS + n)));
         return FW_CALL_RETURNED;
     }
-    if (addr == ROM_ISR_PAR_READY || addr == ROM_PROS_MAKE_SEGMENTS || addr == ROM_BOOT_LOOP_PLAY)
+    if (addr == ROM_ISR_PAR_READY || addr == ROM_BOOT_LOOP_PLAY)
         return FW_CALL_RETURNED;
     return FW_CALL_FAILED;
 }
@@ -200,6 +201,9 @@ static void test_digit_to_rules(void)
     CHECK(!g_f.fault);
 }
 
+/* The mid-clause flush ($B1FF): the C pros_make_segments (M4.3b) turns the 250 symbols into segments, with its
+   isr_par_ready calls (the strict budget), and the ROM boot_loop_play gets the registers it leaves, as the ROM's
+   would; then the conversion goes on from tn_resume_pos with an empty buffer. */
 static void test_flush(void)
 {
     char text[255];
@@ -213,16 +217,25 @@ static void test_flush(void)
     CHECK_EQ(g_ram[TN_PHON_LEN], 5);            /* the second pass converted text[250..254] */
     CHECK(memcmp(g_ram + TN_PHONETIC, text + 250, 5) == 0);
     CHECK_EQ(g_ram[TN_POS], 255);
-    CHECK_EQ(count(ROM_PROS_MAKE_SEGMENTS), 1);
+    CHECK_EQ(count(ROM_PROS_MAKE_SEGMENTS), 0);           /* the C pros_make_segments, not the ROM's */
     CHECK_EQ(count(ROM_BOOT_LOOP_PLAY), 1);
-    for (unsigned i = 0; i + 1 < g_ncalls && i + 1 < MAX_CALLS; i++) {
-        if (g_calls[i].addr != ROM_PROS_MAKE_SEGMENTS)
+    CHECK_EQ(g_ram[PROS_POS], TN_PHONETIC_FLUSH);         /* pros_phrase_gen walked the 250 symbols ... */
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 368);         /* ... into 369 segments (the index of the last) */
+    /* the conversion 251 + 5 (one per character, the flush's included), pros_mark_stress 251 (the start and one per
+       position), pros_mark_phrases 249 (positions 249 to 1), pros_phrase_gen 251 (positions 0 to 250) + 367 (one per
+       segment but the two end pauses) */
+    CHECK_EQ(count(ROM_ISR_PAR_READY), 1374);
+    CHECK(g_ncalls <= MAX_CALLS);
+    for (unsigned i = 0; i < g_ncalls && i < MAX_CALLS; i++) {
+        if (g_calls[i].addr != ROM_BOOT_LOOP_PLAY)
             continue;
-        CHECK_EQ(g_calls[i].a, TN_PHONETIC_FLUSH);   /* A = tn_phon_len, X = tn_pos, as at $B201 */
-        CHECK_EQ(g_calls[i].x, 250);
+        CHECK_EQ(g_calls[i].a, 0x71);                     /* pros_phrase_gen's A: pros_seg_count's low byte before
+                                                             its DEC, */
+        CHECK_EQ(g_calls[i].x, TN_PHONETIC_FLUSH);        /* X = pros_pos (tn_phon_len), */
+        CHECK_EQ(g_calls[i].y, 0x70);                     /* Y = the second end pause's: as the ROM leaves them */
+        CHECK_EQ(g_calls[i].phon_len, TN_PHONETIC_FLUSH);
         CHECK_EQ(g_calls[i].budget, FW_ROM_CALL_SPEECH_BUDGET);
-        CHECK_EQ(g_calls[i + 1].addr, ROM_BOOT_LOOP_PLAY);
-        CHECK_EQ(g_calls[i + 1].budget, FW_ROM_CALL_SPEECH_BUDGET);
+        CHECK_EQ(g_ncalls - i, 6);                        /* then isr_par_ready at text[250..254] */
     }
     check_helper_budgets();
     CHECK(!g_f.fault);

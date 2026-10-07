@@ -10,6 +10,7 @@
 #include "firmware/pros_decl.h"
 #include "firmware/pros_flags.h"
 #include "firmware/pros_gen.h"
+#include "firmware/pros_make.h"
 #include "firmware/pros_phrase.h"
 #include "firmware/pros_seg.h"
 #include "firmware/pros_stress.h"
@@ -1276,6 +1277,80 @@ static void test_stress_count_wrap(void)
     CHECK(!g_f.fault);
 }
 
+/* ---- pros_make_segments (M4.3b Task 4) ---- */
+
+static void test_make_row(void)
+{
+    check_row("pros_make_segments", ROM_PROS_MAKE_SEGMENTS, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+}
+
+/* " EM" (no punctuation, so no pass loads another parameter set): stale state that the copies and
+   pros_reset_seg_ptrs replace; the statement's parameters @R A-E falling from $90 to $80 */
+static void make_setup(void)
+{
+    setup();
+    memcpy(g_ram + TN_PHONETIC, " EM", 3);
+    g_ram[TN_PHON_LEN] = 3;
+    for (unsigned i = 0; i < 32; i++)
+        g_ram[GEN_SPEED_MAP + i] = (uint8_t)i;
+    fw_wr16(&g_f, CMD_SPEED_MAP, GEN_SPEED_MAP);
+    static const uint8_t params[5] = { 0x90, 0x80, 7, 9, 6 };   /* A, B: the baseline and its end; C, D, E */
+    memcpy(g_ram + PROS_PARAMS, params, sizeof params);
+    g_ram[PROS_BASELINE] = g_ram[PROS_BASELINE_END] = 0x5A;
+    g_ram[PROS_STRESS_PARAM] = g_ram[PROS_NUCLEUS_PARAM] = g_ram[PROS_FINAL_PARAM] = 0x5A;
+    seg_state(0x5A5A, 3);
+}
+
+/* The parameter copies, then pros_reset_seg_ptrs, pros_mark_stress, pros_mark_phrases and pros_phrase_gen in that
+   order, each pass's first isr_par_ready with the Y the step before left; the registers out are pros_phrase_gen's */
+static void test_make_segments(void)
+{
+    make_setup();
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    pros_make_segments(&g_f, &r);
+    CHECK_EQ(g_ncalls, 12);
+    check_call(0, ROM_ISR_PAR_READY, 0, 0, 0x33);       /* pros_mark_stress, the start: Y = the entry Y */
+    check_call(1, ROM_ISR_PAR_READY, 0xFF, 0, 0);       /* after the space */
+    check_call(2, ROM_ISR_PAR_READY, 0x83, 1, 0x49);    /* after E: Y = the next symbol's features */
+    check_call(3, ROM_ISR_PAR_READY, 0x49, 2, 0x49);    /* after M; it leaves A = Y = $49, X = 3 */
+    check_call(4, ROM_ISR_PAR_READY, 0, 2, 0x49);       /* pros_mark_phrases, the first: Y = pros_mark_stress's */
+    check_call(5, ROM_ISR_PAR_READY, 0x49, 1, 0x49);    /* after M; it leaves A = 2, X = 0, Y = E's features */
+    check_call(6, ROM_ISR_PAR_READY, 0xFF, 0, 5);       /* pros_phrase_gen, the first: X and Y as its
+                                                           pros_declination leaves them ($10 over the count 3) */
+    check_call(7, ROM_ISR_PAR_READY, 0, 0, 0);
+    check_call(8, ROM_ISR_PAR_READY, 0x13, 0x61, 0x13); /* E's segment */
+    check_call(9, ROM_ISR_PAR_READY, 0xFF, 0x61, 3);
+    check_call(10, ROM_ISR_PAR_READY, 0x0A, 0x12, 0x0A);   /* M's segment */
+    check_call(11, ROM_ISR_PAR_READY, 0xFF, 0x12, 3);   /* the end */
+    CHECK_EQ(r.a, 4);                                   /* pros_phrase_gen's A, X and Y */
+    CHECK_EQ(r.x, 3);
+    CHECK_EQ(r.y, 3);
+    CHECK_EQ(g_ram[PROS_STRESS_PARAM], 7);              /* the copies of C, D and E (no punctuation reloads them) */
+    CHECK_EQ(g_ram[PROS_NUCLEUS_PARAM], 9);
+    CHECK_EQ(g_ram[PROS_FINAL_PARAM], 6);
+    CHECK_EQ(g_ram[PROS_BASELINE_END], 0x80);           /* of B (falling: no swap) */
+    CHECK_EQ(g_ram[PROS_BASELINE], 0x90 - 2 * 5);       /* of A, less the step at E and at M */
+    CHECK_EQ(g_ram[PROS_DECL_STEP], 5);
+    /* pros_mark_stress: E stressed ($40), E and M lengthened by 4, E shortened by 1 (before a nasal), M by 3 (after a
+       vowel in the word); pros_mark_phrases: the word's count 2 at the space, E's accent ($60, + 8) and the nucleus
+       marks (7), E shortened by 7, the phrase's count 3 at 0 with bit 7 */
+    static const uint8_t flags[3] = { 2, 0x67, 0x07 };
+    static const uint8_t lengthen[3] = { 0x83, 4 + 8, 4 };
+    static const uint8_t shorten[3] = { 0x83, 1 + 7, 3 };
+    for (unsigned i = 0; i < 3; i++) {
+        CHECK_EQ(g_ram[PROS_SYM_FLAGS + i], flags[i]);
+        CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + i], lengthen[i]);
+        CHECK_EQ(g_ram[PROS_SYM_SHORTEN + i], shorten[i]);
+    }
+    check_pages(0);                                     /* pros_reset_seg_ptrs replaced the stale pointers */
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 3);
+    check_segment(0, 0x10, 0x13, 0x84);                 /* E */
+    check_segment(1, 0x2A, 0x0A, 0x80);                 /* M */
+    check_segment(2, 0x3B, 4, 0x80);                    /* the end pauses */
+    check_segment(3, 0x3B, 0x80, 0x80);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_pros(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -1323,4 +1398,6 @@ void suite_fw_pros(void)
     test_stress_scan_wrap();
     test_stress_past_end();
     test_stress_count_wrap();
+    test_make_row();
+    test_make_segments();
 }

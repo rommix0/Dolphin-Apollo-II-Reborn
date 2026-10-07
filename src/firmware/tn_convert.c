@@ -1,6 +1,7 @@
 #include "tn_convert.h"
 #include "cmd_run.h"
 #include "lts.h"
+#include "pros_make.h"
 #include "tn_rules.h"
 #include "data/fw_data.h"
 
@@ -104,10 +105,11 @@ void tn_convert_clause(fw *f)
                 return;
             }
         }
-        /* $B1FF: speak tn_phonetic, then convert on from here with an empty buffer */
+        /* $B1FF: speak tn_phonetic, then convert on from here with an empty buffer. The C pros_make_segments
+           (M4.3b) leaves in r what the ROM's leaves (pros_phrase_gen's A, X and Y) for boot_loop_play. */
         fw_wr8(f, TN_RESUME_POS, x);
         fw_regs r = { fw_rd8(f, TN_PHON_LEN), x, 0, 0 };
-        fw_rom_call(f, ROM_PROS_MAKE_SEGMENTS, &r, FW_ROM_CALL_SPEECH_BUDGET);
+        pros_make_segments(f, &r);
         fw_rom_call(f, ROM_BOOT_LOOP_PLAY, &r, FW_ROM_CALL_SPEECH_BUDGET);
         f->tn_flushes++;
     }

@@ -11,6 +11,7 @@
 #include "firmware/pros_decl.h"
 #include "firmware/ph_expand.h"
 #include "firmware/pros_gen.h"
+#include "firmware/pros_make.h"
 #include "firmware/pros_stress.h"
 #include "firmware/pros_phrase.h"
 #include "firmware/data/fw_data.h"
@@ -281,6 +282,22 @@ static void pros_reset_seg_ptrs_regs(fw *f, cpu740 *c)
     c->a = (uint8_t)(PROS_SEG_FLAGS >> 8);
 }
 
+/* pros_make_segments $CA92: A, X, Y in; only Y is read, by pros_mark_stress's first isr_par_ready ($CB1F; A is
+   written by the parameter copies, X by pros_mark_stress's TAX at $CAEC). A, X and Y out as pros_phrase_gen leaves
+   them (RTS at $CABC). The C's ROM calls overwrite the machine's registers, so all three are set from the C. Its
+   ROM callers, boot_reset ($A684), boot_selftest_sound ($A7B7) and cmd_say_phonetic ($A879, unreachable), call
+   boot_loop_play next ($A687, $A7BA, $A87C), which loads A from $6B first ($A7D4) and, when that is 0 or the host
+   aborted, returns with X and Y untouched; the C tn_convert_clause hands them to boot_loop_play the same way. No
+   reader of X or Y was found; no caller reads a flag. They are defined, so all three are declared. */
+static void pros_make_segments_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    pros_make_segments(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
 /* pros_mark_stress $CABD: Y in (it reaches isr_par_ready at $CB1F at position 0; A and X are written first, $CABD
    LDA #0 and $CAEC TAX). A and Y out as at the last isr_par_ready ($CB1F preserves them), X = pros_pos
    (= tn_phon_len, $CB25 LDX), as the RTS at $CB2C leaves them. The only ROM caller, pros_make_segments ($CAB3),
@@ -396,6 +413,7 @@ THUNK(ph_append_phrase_pause)
 THUNK(ph_append_pause)
 THUNK(pros_append_segment)
 THUNK(pros_reset_seg_ptrs)
+THUNK(pros_make_segments)
 THUNK(pros_mark_stress)
 THUNK(pros_mark_phrases)
 THUNK(pros_store_phrase_len)
@@ -426,6 +444,7 @@ const fw_replacement fw_replacements[] = {
     { "ph_append_pause",    0xCA15, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_pause },
     { "pros_append_segment", 0xCA3B, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_append_segment },
     { "pros_reset_seg_ptrs", 0xCA71, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_reset_seg_ptrs },
+    { "pros_make_segments", 0xCA92, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_make_segments },
     { "pros_mark_stress",   0xCABD, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_mark_stress },
     { "pros_mark_phrases",  0xCEF6, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_mark_phrases },
     { "pros_store_phrase_len", 0xD0FD, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_store_phrase_len },
