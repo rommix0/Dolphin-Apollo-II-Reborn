@@ -123,7 +123,7 @@ Every routine is contiguous. None has a second entry, code before its entry, a f
 - A routine whose exit registers a caller reads returns them.
 - The **running X** of the boundary pass is explicit. `par_read_segment` leaves X = 0. `par_boundary_jump`, `cur_dom` and `next_dom` never set X, and pass it to `par_store_boundary` and `par_boundary_value`, which index with it and increment it. The dominance loop's own counter `par_param_index` agrees with X only because X enters as 0. In C the pass takes X from its caller (the C `par_read_segment`'s 0, or the machine's X in a thunk) and does not assume 0.
 
-### 2.3 Hooks (20 new replacements; 48 in all, 50 `golden_hybrid` modes)
+### 2.3 Hooks (20 new replacements; 48 in all, 49 `golden_hybrid` modes)
 
 Declared outputs: **A, X and Y for all 20**. Each thunk's comment cites what its ROM callers read after the call:
 
@@ -268,7 +268,7 @@ Declared outputs: **A, X and Y for all 20**. Each thunk's comment cites what its
 - The routines under `boot_loop_play` are observed on the ROM machine. None of the 20 waits on an interrupt.
 
 ### 4.3 `golden_hybrid`
-Every file × 50 modes (all routines, then each alone), byte for byte. This is about 4 minutes, against 2.5 today.
+Every file × 49 modes (all routines, then each alone), byte for byte. This is about 4 minutes, against 2.5 today.
 
 ### 4.4 Unit tests (`tests/test_fw_par.c`)
 - One or more cases per routine. The registers in and out follow §2.3, and the RAM is checked byte for byte against expected values worked out from the dumps.
@@ -287,7 +287,7 @@ Every file × 50 modes (all routines, then each alone), byte for byte. This is a
 
 ### 4.5 Done criteria
 1. `diff_lts` checks all 48 routines more than 0 times each, with 0 mismatches.
-2. `golden_hybrid` reproduces every file × 50 modes byte for byte, and every existing golden is unchanged.
+2. `golden_hybrid` reproduces every file × 49 modes byte for byte, and every existing golden is unchanged.
 3. `firmware_data` passes at 47,692 converted bytes.
 4. The three new goldens exist and reach what §4.1 lists.
 5. `apollo2 --engine hybrid` equals `--engine rom` for every new text.
