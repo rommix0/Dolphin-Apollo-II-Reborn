@@ -10,9 +10,13 @@
    a level and a rising baseline; phonetic symbols without features, and a second stress in a word; a phrase of
    exactly 127 phonetic letters; and the 16-bit segment index (exactly 256 segments, then a page wrap at a phrase
    pause, at a word pause and at a segment). The seg_* texts depend on exact segment counts: one per file.
-   The last three (M4.3b) reach the stress and phrase passes' rare paths: a word of five or more syllables;
+   The next three (M4.3b) reach the stress and phrase passes' rare paths: a word of five or more syllables;
    the linking R before a vowel; and a stressed syllabic consonant at the nucleus, with the accent still set
-   after a stress toggle, and a linking R after a vowel that counted no syllable. */
+   after a stress toggle, and a linking R after a vowel that counted no syllable.
+   The last three (M4.4a) reach the playback set-up's rare paths: @R7 with the pitch capped at $FF under @FF and
+   floored at 4 under @F0, where the microprosody's + 5 and - 5 would wrap; @B0, @B2, @B3 and @B5, with a pause
+   dominating a vowel (a voicing value 0), and a P10 target that @u937- makes 8; and a @T effect at @W9, whose
+   duration 40 the speed map caps at 31. */
 #define CORPUS_NAMES \
     "hello", "prose", "numbers", "punctuation", "letters_k_to_z", "abbreviations", \
     "voice_b", "presets", "source_filter", "mark_space", "breathy", "pitch", "speed", \
@@ -21,5 +25,6 @@
     "cmd_misc", "index_marks", "cmd_args", "cmd_unmatched", "bank_select", \
     "phrase_pauses", "baseline", "phonetic_stress", "phrase_127", "seg_256", "seg_wrap_phrase", \
     "seg_wrap_word", \
-    "long_words", "linking_r", "syllabic_stress"
+    "long_words", "linking_r", "syllabic_stress", \
+    "pitch_extremes", "voicing_levels", "fast_effect"
 #endif
