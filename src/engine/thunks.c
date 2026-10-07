@@ -300,6 +300,86 @@ static void pros_scale_target_regs(fw *f, cpu740 *c)
     c->y = r.y;
 }
 
+/* par_boundary_pass $BE6A: X in (the running store index, handed down to par_store_boundary and par_boundary_value;
+   par_read_segment leaves it 0 at $BDD0, but the thunk takes the machine's); A and Y are written first (LDY
+   par_next_phoneme, LDA (par_rank_ptr),Y). A, X and Y out as par_boundary_jump, par_boundary_next_dom or
+   par_boundary_cur_dom leaves them (RTS at $BE82, $BE8F, $BE93). The only caller, par_next_segment ($BD00), calls
+   par_plan_tracks next ($BD03), which writes Y and A first (LDY #$0A, LDA #0) and never reads X; then it returns to
+   par_play ($B903 LDA par_frames_left), which writes Y ($B8B1 LDY) or X (par_step_tracks' LDX #$0A at $C0FF, after
+   isr_par_ready, which preserves them) before reading them. No caller reads a flag. Declared: A, X, Y. */
+static void par_boundary_pass_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_boundary_pass(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_boundary_jump $BE94: X in (the store index; A and Y are written first, LDY #$0A, LDA #0). A = par_row_ptr's
+   high byte (par_next_param's), X + 10 and Y = par_next_phoneme out (RTS at $BEB4). The only caller,
+   par_boundary_pass ($BE7F), returns at once ($BE82), and nothing reads them (par_boundary_pass's thunk comment).
+   Declared: A, X, Y. */
+static void par_boundary_jump_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_boundary_jump(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_store_boundary $BEB5: A (the boundary value) and X (the store index) in. A = par_trans_dur, X + 1 and Y
+   untouched out (RTS at $BEE1). par_boundary_jump ($BEA9) calls par_next_param next, which writes A and keeps X
+   and Y: its loop reads Y at $BEA7 (LDA (par_row_ptr),Y) and hands X to the next par_store_boundary. In
+   par_boundary_value ($C0AE) the RTS at $C0B1 follows, and X reaches the next parameter's TXA in the dominance loop
+   ($BEF3, $BF38). No caller reads a flag (JSR, RTS). Declared: A, X, Y. */
+static void par_store_boundary_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_store_boundary(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_boundary_cur_dom $BEE2: X in (the store index; A and Y are written first, AND #0 and LDY). A = 10, X + 10 and
+   Y as par_boundary_value leaves it out (RTS at $BF26). The only caller, par_boundary_pass ($BE90), returns at once
+   ($BE93), and nothing reads them (par_boundary_pass's thunk comment). Declared: A, X, Y. */
+static void par_boundary_cur_dom_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_boundary_cur_dom(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_boundary_next_dom $BF27: as par_boundary_cur_dom (RTS at $BF6B); the only caller, par_boundary_pass ($BE8C),
+   returns at once ($BE8F). Declared: A, X, Y. */
+static void par_boundary_next_dom_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_boundary_next_dom(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_read_dominance $BF6C: X = the parameter p in (CPX #9 at $BF83; A and Y are written first). A = par_row_ptr's
+   low byte (par_next_row's), X = p and Y = par_dominant_phoneme out (RTS at $BFC2). Its callers read Y next
+   (LDA (par_row_ptr),Y at $BF01 in par_boundary_cur_dom, $BF46 in par_boundary_next_dom) and X after
+   par_scale_duration, which keeps X and Y (STA $171D,X at $BF06, $BF56); A is overwritten by that LDA. No caller
+   reads a flag. Declared: A, X, Y. */
+static void par_read_dominance_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_read_dominance(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
 /* par_scale_voicing $BFC3: A in; A scaled out, X and Y untouched. par_read_segment ($BD96) reads A and X ($BD99
    STA $17BF,X, $BD9C INX) and Y at the next $BD83; par_read_dominance ($BF87) reads A ($BF8A STA par_fixed), Y
    ($BF90 LDA ($32),Y) and X ($BF9D TXA). No caller reads a flag (STA follows). Declared: A, X, Y. */
@@ -307,6 +387,21 @@ static void par_scale_voicing_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
     par_scale_voicing(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_boundary_value $C039: X (the store index) and Y (kept unless the halves path) in; A is written first (LDA #0).
+   A = par_trans_dur (par_store_boundary's), X + 1, and Y = 0 on the halves path, else as it came in, out (RTS at
+   $C0B1). Its callers, the dominance loops of par_boundary_cur_dom ($BF19) and par_boundary_next_dom ($BF5E),
+   write A next (INC / LDA par_param_index); the next parameter reads X (TXA at $BEF3, $BF38) and writes Y
+   (par_read_dominance's LDY at $BF6C) before reading it; after the tenth they return to par_boundary_pass (its thunk
+   comment). No caller reads a flag. Declared: A, X, Y. */
+static void par_boundary_value_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_boundary_value(f, &r);
     c->a = r.a;
     c->x = r.x;
     c->y = r.y;
@@ -513,7 +608,14 @@ THUNK(par_next_row)
 THUNK(par_next_param)
 THUNK(par_clamp)
 THUNK(pros_scale_target)
+THUNK(par_boundary_pass)
+THUNK(par_boundary_jump)
+THUNK(par_store_boundary)
+THUNK(par_boundary_cur_dom)
+THUNK(par_boundary_next_dom)
+THUNK(par_read_dominance)
 THUNK(par_scale_voicing)
+THUNK(par_boundary_value)
 THUNK(par_scale_duration)
 THUNK(cmd_hex_value)
 THUNK(ph_append_phrase_pause)
@@ -551,7 +653,14 @@ const fw_replacement fw_replacements[] = {
     { "par_next_param",     0xBD14, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_next_param },
     { "par_clamp",          0xBD24, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_clamp },
     { "pros_scale_target",  0xBDD3, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_scale_target },
+    { "par_boundary_pass",  0xBE6A, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_boundary_pass },
+    { "par_boundary_jump",  0xBE94, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_boundary_jump },
+    { "par_store_boundary", 0xBEB5, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_store_boundary },
+    { "par_boundary_cur_dom", 0xBEE2, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_boundary_cur_dom },
+    { "par_boundary_next_dom", 0xBF27, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_boundary_next_dom },
+    { "par_read_dominance", 0xBF6C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_read_dominance },
     { "par_scale_voicing",  0xBFC3, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_voicing },
+    { "par_boundary_value", 0xC039, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_boundary_value },
     { "par_scale_duration", 0xC29C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_duration },
     { "cmd_hex_value",      0xC520, FW_OUT_A | FW_OUT_X | FW_OUT_Y | FW_OUT_Z, t_cmd_hex_value },
     { "ph_append_phrase_pause", 0xC9B8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_phrase_pause },

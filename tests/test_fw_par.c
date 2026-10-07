@@ -392,6 +392,435 @@ static void test_microprosody(void)
     micro_case(0xFF, 0x50, 0xFF, 0x50);
 }
 
+/* ---- the boundary pass (M4.4a Task 5) ---- */
+
+/* A voice table in RAM (fw_ind_y reads RAM below $4000) with N = PT_N phonemes per row: parameter p's five rows
+   (target, fixed contribution, proportion, external duration, internal duration) start at PT_BASE + 5 * PT_N * p, as
+   they do from par_params_ptr; the ranks at PT_RANKS (par_rank_ptr). */
+#define PT_BASE   0x3000
+#define PT_N      8
+#define PT_RANKS  0x2F00
+enum { ROW_TARGET, ROW_FIXED, ROW_PROP, ROW_EXT_DUR, ROW_INT_DUR };
+
+static void pt_set(unsigned p, unsigned row, uint8_t phoneme, uint8_t v)
+{
+    g_ram[PT_BASE + 5 * PT_N * p + PT_N * row + phoneme] = v;
+}
+
+/* Zeroed RAM; par_row_ptr on P1's target row, par_row_len N, par_param_stride 5N, par_rank_ptr on the ranks. */
+static void pt_setup(void)
+{
+    setup();
+    g_ram[PAR_ROW_LEN] = PT_N;
+    fw_wr16(&g_f, PAR_PARAM_STRIDE, 5 * PT_N);
+    fw_wr16(&g_f, PAR_ROW_PTR, PT_BASE);
+    fw_wr16(&g_f, PAR_RANK_PTR, PT_RANKS);
+}
+
+static void test_boundary_rows(void)
+{
+    check_row("par_boundary_pass", ROM_PAR_BOUNDARY_PASS, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_boundary_jump", ROM_PAR_BOUNDARY_JUMP, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_store_boundary", ROM_PAR_STORE_BOUNDARY, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_boundary_cur_dom", ROM_PAR_BOUNDARY_CUR_DOM, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_boundary_next_dom", ROM_PAR_BOUNDARY_NEXT_DOM, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_read_dominance", ROM_PAR_READ_DOMINANCE, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_boundary_value", ROM_PAR_BOUNDARY_VALUE, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+}
+
+/* $BEB5: par_store_boundary's two cuts ($BEB9 and $BEC9), both unsigned (BCS), the second only while par_trans_dur
+   is 0; par_end_dur = par_trans_dur; A = par_trans_dur, X + 1, Y kept */
+static void test_store_boundary(void)
+{
+    fw_regs r;
+    setup();
+    g_ram[PAR_FRAMES_LEFT] = 5;                     /* no start transition: par_trans_dur 9 is cut to 5 */
+    g_ram[PAR_TRANS_DUR] = 9;
+    r = (fw_regs){ 0x2A, 2, 0x77, 0 };
+    par_store_boundary(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 3], 0x2A);
+    CHECK_EQ(g_ram[PAR_TRANS_DUR], 5);
+    CHECK_EQ(g_ram[PAR_END_DUR + 3], 5);
+    CHECK_EQ(g_ram[PAR_START_DUR + 3], 0);          /* the second cut: par_trans_dur is not 0 */
+    CHECK_EQ(r.a, 5);
+    CHECK_EQ(r.x, 3);
+    CHECK_EQ(r.y, 0x77);
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 2], 0);
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 4], 0);
+
+    g_ram[PAR_TRANS_DUR] = 0xF0;                    /* unsigned: 5 < $F0 cuts (a signed compare would not) */
+    r = (fw_regs){ 0x11, 0, 0, 0 };
+    par_store_boundary(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_TRANS_DUR], 5);
+    CHECK_EQ(g_ram[PAR_END_DUR + 1], 5);
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 1], 0x11);
+
+    g_ram[PAR_TRANS_DUR] = 6;                       /* par_frames_left 6, equal: no cut (BCS) */
+    g_ram[PAR_FRAMES_LEFT] = 6;
+    r = (fw_regs){ 0x12, 0, 0, 0 };
+    par_store_boundary(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_TRANS_DUR], 6);
+
+    g_ram[PAR_START_DUR + 5] = 12;                  /* a start transition and no end one: the start one is cut */
+    g_ram[PAR_FRAMES_LEFT] = 7;
+    g_ram[PAR_TRANS_DUR] = 0;
+    r = (fw_regs){ 0x13, 4, 0x01, 0 };
+    par_store_boundary(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_START_DUR + 5], 7);
+    CHECK_EQ(g_ram[PAR_END_DUR + 5], 0);
+    CHECK_EQ(r.a, 0);
+    CHECK_EQ(r.x, 5);
+
+    g_ram[PAR_START_DUR + 2] = 12;                  /* both: neither is cut (the first needs par_start_dur 0, */
+    g_ram[PAR_FRAMES_LEFT] = 3;                     /* the second par_trans_dur 0) */
+    g_ram[PAR_TRANS_DUR] = 6;
+    r = (fw_regs){ 0x14, 1, 0, 0 };
+    par_store_boundary(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_START_DUR + 2], 12);
+    CHECK_EQ(g_ram[PAR_TRANS_DUR], 6);
+    CHECK_EQ(g_ram[PAR_END_DUR + 2], 6);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+/* One par_read_dominance at X = p, @B voicing, with par_target_phoneme 3 and par_dominant_phoneme 5: their rows of
+   parameter p hold target, fixed and prop; par_row_ptr starts on p's target row. */
+static void dominance_case(uint8_t p, uint8_t voicing, uint8_t ofs, uint8_t target, uint8_t fixed, uint8_t prop,
+                           fw_regs *r)
+{
+    pt_setup();
+    fw_wr16(&g_f, PAR_ROW_PTR, (uint16_t)(PT_BASE + 5 * PT_N * p));
+    g_ram[CMD_VOICING] = voicing;
+    g_ram[PAR_TARGET_PHONEME] = 3;
+    g_ram[PAR_DOMINANT_PHONEME] = 5;
+    g_ram[PAR_OFS] = ofs;
+    pt_set(p, ROW_TARGET, 3, target);
+    pt_set(p, ROW_FIXED, 5, fixed);
+    pt_set(p, ROW_PROP, 5, prop);
+    *r = (fw_regs){ 0xA5, p, 0xB6, 0 };
+    par_read_dominance(&g_f, r);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+/* $BF6C: the dominated target clamped; the fixed contribution plus the weighted @u offset: 8 - prop adds of par_ofs
+   in 8 bits, >> 3, negative only when the last add carried ($BFA6-$BFBA); the weight wraps for a proportion above 8
+   (latent: the tables hold 0-8) */
+static void test_read_dominance(void)
+{
+    fw_regs r;
+    uint16_t row3 = PT_BASE + 5 * PT_N * 2 + 3 * PT_N;
+    dominance_case(2, 8, 0xFE, 40, 20, 7, &r);      /* weight 1: 0 + $FE, no carry: $FE >> 3 = $1F, so -2 adds +31 */
+    CHECK_EQ(g_ram[PAR_DOMINATED_TARGET], 38);      /* 40 + $FE, clamped (1..$3F: kept) */
+    CHECK_EQ(g_ram[PAR_PROP], 7);
+    CHECK_EQ(g_ram[PAR_OFS_WEIGHT], 1);             /* (7 - 9) ^ $FF */
+    CHECK_EQ(g_ram[PAR_FIXED], 20 + 0x1F);
+    CHECK_EQ(fw_rd16(&g_f, PAR_ROW_PTR), row3);     /* three rows on: the external durations */
+    CHECK_EQ(r.a, row3 & 0xFF);                     /* par_next_row's low byte */
+    CHECK_EQ(r.x, 2);
+    CHECK_EQ(r.y, 5);                               /* the dominant phoneme, for its duration rows */
+    CHECK_EQ(g_ram[FW_TMP_76], 0);                  /* no par_scale_voicing below P10 */
+
+    dominance_case(2, 8, 0xFE, 40, 20, 6, &r);      /* weight 2: $FE + $FE carries: $FC >> 3 | $E0 = $FF (-1) */
+    CHECK_EQ(g_ram[PAR_OFS_WEIGHT], 2);
+    CHECK_EQ(g_ram[PAR_FIXED], 19);
+
+    dominance_case(2, 8, 0x50, 40, 20, 4, &r);      /* weight 4: $50 x 4 = $140, the last add carries: +40 */
+    CHECK_EQ(g_ram[PAR_FIXED], (uint8_t)(20 + 0xE8));   /* becomes ($40 >> 3) | $E0 = $E8 (-24) */
+    CHECK_EQ(g_ram[PAR_DOMINATED_TARGET], 0x3F);    /* 40 + $50 = $78: par_clamp gives $3F */
+
+    dominance_case(2, 8, 0x90, 40, 20, 5, &r);      /* weight 3: $90, $120 (carries), $B0 (does not): only the last */
+    CHECK_EQ(g_ram[PAR_FIXED], 20 + 0x16);          /* counts, so $B0 >> 3 = $16 stays positive */
+
+    dominance_case(2, 8, 0x50, 40, 20, 8, &r);      /* weight 0 (LDX; BEQ): par_fixed as read */
+    CHECK_EQ(g_ram[PAR_OFS_WEIGHT], 0);
+    CHECK_EQ(g_ram[PAR_FIXED], 20);
+    CHECK_EQ(r.x, 2);
+
+    dominance_case(2, 8, 0xFF, 40, 20, 9, &r);      /* prop 9: weight (9 - 9) ^ $FF = 255 adds of $FF; the last is */
+    CHECK_EQ(g_ram[PAR_OFS_WEIGHT], 0xFF);          /* 2 + $FF, which carries: 1 >> 3 | $E0 = $E0 */
+    CHECK_EQ(g_ram[PAR_FIXED], (uint8_t)(20 + 0xE0));
+    CHECK_EQ(g_ram[PAR_DOMINATED_TARGET], 39);      /* 40 + $FF */
+
+    dominance_case(9, 6, 0, 2, 46, 8, &r);          /* P10 (CPX #9): @B6 scales 46 to 46/2 + 46/8 = 28 ... */
+    CHECK_EQ(g_ram[PAR_FIXED], 28);
+    CHECK_EQ(g_ram[FW_TMP_76], 23);                 /* ... with its scratch */
+    CHECK_EQ(g_ram[PAR_DOMINATED_TARGET], 2);       /* the target is not scaled */
+    CHECK_EQ(r.x, 9);
+    dominance_case(8, 6, 0, 2, 46, 8, &r);          /* P9: not scaled */
+    CHECK_EQ(g_ram[PAR_FIXED], 46);
+}
+
+/* One par_boundary_value at X = x, Y = $66, with par_prop, par_dominated_target and par_fixed as given;
+   par_start_dur[x + 1] = 1 and par_trans_dur = 7, so par_store_boundary cuts nothing and leaves A = 7. */
+static void value_case(uint8_t x, uint8_t prop, uint8_t target, uint8_t fixed, fw_regs *r)
+{
+    setup();
+    g_ram[PAR_PROP] = prop;
+    g_ram[PAR_DOMINATED_TARGET] = target;
+    g_ram[PAR_FIXED] = fixed;
+    g_ram[PAR_START_DUR + 1 + x] = 1;
+    g_ram[PAR_TRANS_DUR] = 7;
+    g_ram[PAR_FRAMES_LEFT] = 200;
+    *r = (fw_regs){ 0xA5, x, 0x66, 0 };
+    par_boundary_value(&g_f, r);
+    CHECK_EQ(r->a, 7);
+    CHECK_EQ(r->x, (uint8_t)(x + 1));
+    CHECK_EQ(g_ram[PAR_END_DUR + 1 + x], 7);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+/* $C039: par_target_bias is 18, 4, 10, 26, then 0 for P5-P10 (ROM $B7A7). Each path: prop 0, 8, a multiple of 4,
+   and the halves (with the 9-bit sum the ROR at $C09B takes, and the carry chained through a halves loop); the
+   limit (0 and $40 up become 1, unsigned); the halves state; Y = 0 on the halves path only. */
+static void test_boundary_value(void)
+{
+    fw_regs r;
+    value_case(1, 0, 33, 0x45, &r);                 /* prop 0: par_clamp($45) = $3F, no 0 / $40 test */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 2], 0x3F);
+    CHECK_EQ(r.y, 0x66);
+    CHECK_EQ(g_ram[PAR_TARGET_X2], 66);             /* the set-up runs on every path: t = 33 */
+    CHECK_EQ(g_ram[PAR_TARGET_HALF], 16);
+    CHECK_EQ(g_ram[PAR_BIAS_X2], 8);                /* b = 4 */
+    CHECK_EQ(g_ram[PAR_BIAS_HALF], 2);
+    value_case(1, 0, 33, 0, &r);                    /* prop 0: par_clamp(0) = 1 */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 2], 1);
+
+    value_case(3, 8, 33, 0xF8, &r);                 /* prop 8: 33 + 26 - 8 */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 4], 51);
+    CHECK_EQ(r.y, 0x66);
+    value_case(3, 8, 0xF0, 0, &r);                  /* latent: $F0 + 26 = $10A, the carry lost: 10 */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 4], 10);
+
+    value_case(0, 4, 33, 3, &r);                    /* prop 4: 18 + 33 = 51, >> 1 rounded = 26, + 3 */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 1], 29);
+    CHECK_EQ(r.y, 0x66);
+    value_case(2, 12, 21, 0, &r);                   /* prop 12, & 3 = 0: the same path, 10 + 21 = 31 -> 16 */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 3], 16);
+
+    value_case(1, 3, 33, 5, &r);                    /* prop 3: 3 halves from 0: target 16 x 3 = 48, bias 2 x 3 = 6; */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 2], 19);          /* 54 >> 2 = 13, + the bit out (1) = 14, + 5 */
+    CHECK_EQ(g_ram[PAR_TARGET_SUM], 48);
+    CHECK_EQ(g_ram[PAR_BIAS_SUM], 0);               /* the bias's sum stays in A */
+    CHECK_EQ(g_ram[PAR_PROP_LOW], 3);
+    CHECK_EQ(r.y, 0);
+
+    value_case(3, 7, 63, 0xF0, &r);                 /* prop 7: from x2: target 126 + 31 x 3 = 219, bias 52 + 13 x 3 = */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 4], 62);          /* 91; 310 is 9 bits: ROR gives $9B, LSR $4D + 1 = $4E; + $F0 */
+    CHECK_EQ(g_ram[PAR_TARGET_SUM], 219);           /* = $13E -> $3E (with 8 bits only it would be 1) */
+    CHECK_EQ(g_ram[PAR_BIAS_SUM], 52);              /* x2, not the sum */
+    CHECK_EQ(g_ram[PAR_PROP_LOW], 3);
+    CHECK_EQ(r.y, 0);
+
+    value_case(4, 6, 0x7F, 0, &r);                  /* latent: prop 6 from x2 $FE: $FE + $3F carries into the */
+    CHECK_EQ(g_ram[PAR_TARGET_SUM], 0x7D);          /* second add: $3D + $3F + 1 = $7D */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 5], 0x1F);        /* bias 0: $7D >> 2 = $1F, the bit out 0 */
+
+    value_case(4, 8, 16, 0xF0, &r);                 /* the limit: 16 + 0 - 16 = 0 becomes 1 */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 5], 1);
+    value_case(4, 8, 20, 0xC0, &r);                 /* $D4: $40 or more, unsigned: 1 */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 5], 1);
+    value_case(4, 8, 20, 43, &r);                   /* $3F is kept */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 5], 0x3F);
+    value_case(4, 8, 20, 44, &r);                   /* $40: 1 */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 5], 1);
+}
+
+/* Phonemes 2 and 6 in the RAM table: per parameter p, targets 30 + p and 40 + p, fixed contributions 10 + p and
+   20 + p, proportion 0 (the boundary is par_clamp(par_fixed)), external durations 3 + p and 50 + p, internal 7 + p
+   and 70 + p; ranks 5 and 9. cmd_formant_ofs[1] = 2 (weight 8: 16 >> 3 = +2 on P2's fixed contribution), @B5,
+   speed 0 (par_scale_duration passes), par_frames_left 200 (no cut). */
+static void pair_setup(uint8_t cur, uint8_t next)
+{
+    pt_setup();
+    for (unsigned p = 0; p < 10; p++) {
+        pt_set(p, ROW_TARGET, 2, (uint8_t)(30 + p));
+        pt_set(p, ROW_TARGET, 6, (uint8_t)(40 + p));
+        pt_set(p, ROW_FIXED, 2, (uint8_t)(10 + p));
+        pt_set(p, ROW_FIXED, 6, (uint8_t)(20 + p));
+        pt_set(p, ROW_EXT_DUR, 2, (uint8_t)(3 + p));
+        pt_set(p, ROW_EXT_DUR, 6, (uint8_t)(50 + p));
+        pt_set(p, ROW_INT_DUR, 2, (uint8_t)(7 + p));
+        pt_set(p, ROW_INT_DUR, 6, (uint8_t)(70 + p));
+    }
+    g_ram[PT_RANKS + 2] = 5;
+    g_ram[PT_RANKS + 6] = 9;
+    g_ram[CMD_FORMANT_OFS + 1] = 2;
+    g_ram[CMD_VOICING] = 5;
+    g_ram[PAR_FRAMES_LEFT] = 200;
+    g_ram[PAR_CUR_PHONEME] = cur;
+    g_ram[PAR_CUR_RANK] = g_ram[PT_RANKS + cur];
+    g_ram[PAR_NEXT_PHONEME] = next;
+}
+
+/* The pass picks the dominant phoneme by rank, and the two dominance routines take its durations the other way
+   round: next_dom row 3 (external) into par_trans_dur and row 4 into par_next_start_dur, cur_dom the reverse */
+static void test_pass_dominance(void)
+{
+    fw_regs r;
+    pair_setup(2, 6);                               /* next rank 9 >= 5: par_boundary_next_dom, phoneme 6 dominates */
+    r = (fw_regs){ 0xA5, 0, 0xB6, 0 };
+    par_boundary_pass(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_NEXT_RANK], 9);
+    CHECK_EQ(g_ram[PAR_TARGET_PHONEME], 2);
+    CHECK_EQ(g_ram[PAR_DOMINANT_PHONEME], 6);
+    for (unsigned p = 0; p < 10; p++) {
+        CHECK_EQ(g_ram[PAR_NEXT_START_DUR + 1 + p], 70 + p);    /* row 4 */
+        CHECK_EQ(g_ram[PAR_END_DUR + 1 + p], 50 + p);           /* row 3, through par_trans_dur */
+        CHECK_EQ(g_ram[PAR_BOUNDARY + 1 + p], p == 1 ? 23 : p == 9 ? 29 / 2 : 20 + p);   /* P10 at @B5: 29 / 2 */
+    }
+    CHECK_EQ(g_ram[PAR_TRANS_DUR], 59);
+    CHECK_EQ(g_ram[PAR_DOMINATED_TARGET], 39);      /* the last parameter's: the target phoneme 2's 30 + 9 */
+    CHECK_EQ(g_ram[PAR_FIXED], 14);
+    CHECK_EQ(g_ram[PAR_OFS], 0);                    /* cmd_formant_ofs[9] */
+    CHECK_EQ(g_ram[PAR_OFS_WEIGHT], 8);
+    CHECK_EQ(g_ram[PAR_PARAM_INDEX], 10);
+    CHECK_EQ(g_ram[FW_TMP_78], 6);                  /* par_scale_duration's saved Y */
+    CHECK_EQ(fw_rd16(&g_f, PAR_ROW_PTR), PT_BASE + 50 * PT_N);   /* ten parameters of five rows on */
+    CHECK_EQ(r.a, 10);
+    CHECK_EQ(r.x, 10);
+    CHECK_EQ(r.y, 6);                               /* prop 0 keeps Y */
+    CHECK_EQ(g_ram[PAR_NEXT_START_DUR], 0);         /* entry 0 is not written */
+    CHECK_EQ(g_ram[PAR_BOUNDARY], 0);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+
+    pair_setup(6, 2);                               /* next rank 5 < 9: par_boundary_cur_dom, phoneme 6 dominates */
+    r = (fw_regs){ 0xA5, 0, 0xB6, 0 };
+    par_boundary_pass(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_NEXT_RANK], 5);
+    CHECK_EQ(g_ram[PAR_TARGET_PHONEME], 2);
+    CHECK_EQ(g_ram[PAR_DOMINANT_PHONEME], 6);
+    for (unsigned p = 0; p < 10; p++) {
+        CHECK_EQ(g_ram[PAR_NEXT_START_DUR + 1 + p], 50 + p);    /* row 3 */
+        CHECK_EQ(g_ram[PAR_END_DUR + 1 + p], 70 + p);           /* row 4, through par_trans_dur */
+        CHECK_EQ(g_ram[PAR_BOUNDARY + 1 + p], p == 1 ? 23 : p == 9 ? 29 / 2 : 20 + p);
+    }
+    CHECK_EQ(g_ram[PAR_TRANS_DUR], 79);
+    CHECK_EQ(r.a, 10);
+    CHECK_EQ(r.x, 10);
+    CHECK_EQ(r.y, 6);
+    CHECK(!g_f.fault);
+
+    pair_setup(2, 2);                               /* equal ranks: par_boundary_next_dom (BCC not taken) */
+    r = (fw_regs){ 0xA5, 0, 0xB6, 0 };
+    par_boundary_pass(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_END_DUR + 1], 3);            /* row 3 into par_trans_dur: next_dom */
+    CHECK_EQ(g_ram[PAR_NEXT_START_DUR + 1], 7);
+
+    pair_setup(2, 6);                               /* the next rank 29 or more, the current one below: no jump */
+    g_ram[PT_RANKS + 6] = 31;
+    r = (fw_regs){ 0xA5, 0, 0xB6, 0 };
+    par_boundary_pass(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_DOMINANT_PHONEME], 6);
+    CHECK_EQ(g_ram[PAR_NEXT_START_DUR + 1], 70);
+    pair_setup(6, 2);                               /* the current rank 29 or more, the next one below: no jump */
+    g_ram[PAR_CUR_RANK] = 31;
+    r = (fw_regs){ 0xA5, 0, 0xB6, 0 };
+    par_boundary_pass(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_DOMINANT_PHONEME], 6);
+    CHECK_EQ(g_ram[PAR_NEXT_START_DUR + 1], 50);
+    CHECK(!g_f.fault);
+}
+
+/* Both ranks 29 or more: par_boundary_jump stores the next phoneme's raw targets (no @u offset, no clamp) at the
+   running X, entering here at 3 (it is 0 in the ROM, but the pass does not set it): par_store_boundary indexes
+   par_boundary, par_start_dur and par_end_dur at X + 1 while par_param_index counts 10 down to 1 */
+static void test_jump_running_x(void)
+{
+    static const uint8_t raw[10] = { 0x90, 0, 63, 64, 5, 6, 7, 8, 9, 10 };
+    fw_regs r;
+    pt_setup();
+    for (unsigned p = 0; p < 10; p++) {
+        pt_set(p, ROW_TARGET, 4, raw[p]);
+        g_ram[CMD_FORMANT_OFS + p] = 0x11;          /* not added on this path */
+    }
+    for (unsigned i = 0; i < 16; i++) {
+        g_ram[PAR_NEXT_START_DUR + i] = 0x55;
+        g_ram[PAR_START_DUR + i] = 6;
+    }
+    g_ram[PT_RANKS + 4] = 31;
+    g_ram[PAR_CUR_RANK] = 29;
+    g_ram[PAR_NEXT_PHONEME] = 4;
+    g_ram[PAR_TRANS_DUR] = 9;
+    g_ram[PAR_FRAMES_LEFT] = 4;
+    r = (fw_regs){ 0xA5, 3, 0xB6, 0 };
+    par_boundary_pass(&g_f, &r);
+    for (unsigned i = 1; i <= 10; i++)
+        CHECK_EQ(g_ram[PAR_NEXT_START_DUR + i], 0); /* par_next_start_dur[1..10], by Y, not X */
+    CHECK_EQ(g_ram[PAR_NEXT_START_DUR + 0], 0x55);
+    CHECK_EQ(g_ram[PAR_NEXT_START_DUR + 11], 0x55);
+    CHECK_EQ(g_ram[PAR_TRANS_DUR], 0);
+    for (unsigned p = 0; p < 10; p++) {
+        CHECK_EQ(g_ram[PAR_BOUNDARY + 4 + p], raw[p]);
+        CHECK_EQ(g_ram[PAR_START_DUR + 4 + p], 4);  /* par_trans_dur 0: the second cut, 6 to par_frames_left */
+        CHECK_EQ(g_ram[PAR_END_DUR + 4 + p], 0);
+    }
+    for (unsigned i = 1; i <= 3; i++) {
+        CHECK_EQ(g_ram[PAR_BOUNDARY + i], 0);
+        CHECK_EQ(g_ram[PAR_START_DUR + i], 6);
+    }
+    CHECK_EQ(g_ram[PAR_NEXT_RANK], 31);
+    CHECK_EQ(g_ram[PAR_PARAM_INDEX], 0);
+    CHECK_EQ(fw_rd16(&g_f, PAR_ROW_PTR), PT_BASE + 50 * PT_N);  /* ten strides on, not reset */
+    CHECK_EQ(r.a, (PT_BASE + 50 * PT_N) >> 8);      /* par_next_param's high byte */
+    CHECK_EQ(r.x, 13);
+    CHECK_EQ(r.y, 4);
+    CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
+}
+
+/* The running X through a dominance pass: par_param_index p indexes cmd_formant_ofs and par_next_start_dur, X = p + 1
+   the stores and par_target_bias. At p = 9, X = 10 reads $B7B1, past par_target_bias (unused_B7B1, not converted):
+   the C faults there; no ROM path enters the pass with X other than 0. */
+static void test_dominance_running_x(void)
+{
+    fw_regs r;
+    pair_setup(6, 2);
+    r = (fw_regs){ 0xA5, 1, 0xB6, 0 };
+    par_boundary_cur_dom(&g_f, &r);
+    for (unsigned p = 0; p < 10; p++) {
+        CHECK_EQ(g_ram[PAR_NEXT_START_DUR + 1 + p], 50 + p);
+        CHECK_EQ(g_ram[PAR_END_DUR + 2 + p], 70 + p);
+    }
+    for (unsigned p = 0; p < 9; p++)
+        CHECK_EQ(g_ram[PAR_BOUNDARY + 2 + p], p == 1 ? 23 : 20 + p);   /* P2's offset lands in par_boundary[3] */
+    CHECK_EQ(g_ram[PAR_BOUNDARY + 1], 0);
+    CHECK_EQ(r.x, 11);
+    CHECK(g_f.fault);
+    CHECK_EQ(g_f.fault_addr, PAR_TARGET_BIAS + 10);
+}
+
+/* The end of a @T effect: par_next_phoneme $FF, read past the 86 phonemes of the converted voice tables: rank[$FF]
+   is 32 and the pause (rank 31) is current, so par_boundary_jump stores the raw bytes at index $FF of P1..P10's
+   target rows, 4, 4, 0, 4, 8, 8, 8, 8, 8, 8 in both voices (the 0 as it is) */
+static void test_jump_end_marker(void)
+{
+    static const uint8_t raw[10] = { 4, 4, 0, 4, 8, 8, 8, 8, 8, 8 };
+    static const uint16_t voice[2] = { PAR_VOICE_A, PAR_VOICE_B };
+    for (unsigned v = 0; v < 2; v++) {
+        fw_regs r = { 0, 0, 0, 0 };
+        setup();
+        g_ram[PAR_ROW_LEN] = PAR_PHONEMES;
+        fw_wr16(&g_f, PAR_PARAM_STRIDE, 5 * PAR_PHONEMES);
+        fw_wr16(&g_f, PAR_RANK_PTR, voice[v]);
+        fw_wr16(&g_f, PAR_ROW_PTR, (uint16_t)(voice[v] + 2 * PAR_PHONEMES));   /* par_params_ptr */
+        g_ram[PAR_NEXT_PHONEME] = 0xFF;
+        g_ram[PAR_CUR_RANK] = 31;
+        g_ram[PAR_FRAMES_LEFT] = 3;
+        par_boundary_pass(&g_f, &r);
+        CHECK_EQ(g_ram[PAR_NEXT_RANK], 32);
+        for (unsigned p = 0; p < 10; p++) {
+            CHECK_EQ(g_ram[PAR_BOUNDARY + 1 + p], raw[p]);
+            CHECK_EQ(g_ram[PAR_END_DUR + 1 + p], 0);
+        }
+        CHECK_EQ(r.x, 10);
+        CHECK_EQ(r.y, 0xFF);
+        CHECK(!g_f.fault);
+    }
+}
+
 void suite_fw_par(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -403,4 +832,12 @@ void suite_fw_par(void)
     test_scale_duration();
     test_scale_target();
     test_microprosody();
+    test_boundary_rows();
+    test_store_boundary();
+    test_read_dominance();
+    test_boundary_value();
+    test_pass_dominance();
+    test_jump_running_x();
+    test_dominance_running_x();
+    test_jump_end_marker();
 }
