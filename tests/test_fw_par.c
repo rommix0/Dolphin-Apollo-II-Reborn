@@ -1071,6 +1071,7 @@ static void test_plan_tracks(void)
     CHECK_EQ(r.x, 0x34);
     CHECK_EQ(r.y, 0);
     CHECK_EQ(g_ncalls, 0);
+    CHECK(!g_f.fault);
 }
 
 /* par_reset_tracks: frm_snap[i] = frm_rest_frame[frm_snapshot_map[i]], the map being 10 8 6 4 2 0 1 3 5 7 (b10, AHF,

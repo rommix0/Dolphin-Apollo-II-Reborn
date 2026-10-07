@@ -1,6 +1,6 @@
 #ifndef FW_PAR_SEGMENT_H
 #define FW_PAR_SEGMENT_H
-/* The segment reader of the playback set-up and its leaves (ROM $BD07-$BD32 and $BFC3-$C038), decompiled (M4.4a
+/* The segment reader of the playback set-up and its leaves (ROM $BD07-$BDD2 and $BFC3-$C038), decompiled (M4.4a
    spec 2.2). Every routine takes the registers the ROM has at its entry in r (r->p is not read: no routine here
    reads an entry flag) and returns in r the A, X and Y the ROM leaves at its RTS; a register the routine does not
    touch is left as it came in. */

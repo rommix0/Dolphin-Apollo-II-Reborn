@@ -54,7 +54,7 @@ void par_boundary_next_dom(fw *f, fw_regs *r);
 void par_boundary_jump(fw *f, fw_regs *r);
 /* $BE6A: par_next_rank = the next phoneme's rank (par_rank_ptr); both ranks 29 or more: par_boundary_jump; else
    par_boundary_next_dom when par_next_rank >= par_cur_rank, par_boundary_cur_dom when it is lower (unsigned).
-   r in: X, the running store index. r out: as the callee leaves them (A = par_next_rank going in). */
+   r in: X, the running store index. r out: as the callee leaves them (A going in: par_cur_rank into par_boundary_jump, par_next_rank into par_boundary_next_dom and par_boundary_cur_dom). */
 void par_boundary_pass(fw *f, fw_regs *r);
 
 #endif
