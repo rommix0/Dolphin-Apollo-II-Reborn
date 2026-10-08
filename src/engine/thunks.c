@@ -384,6 +384,35 @@ static void frm_raise_formants_regs(fw *f, cpu740 *c)
     c->y = r.y;
 }
 
+/* frm_finish_frame $B9B5: A, X and Y in, the same out (PHA / TXA / PHA / TYA / PHA at $B9B5-$B9B9, PLA / TAY / PLA /
+   TAX / PLA at $BA39-$BA3D; the pushes are dead stack at the RTS). par_play ($B8C3, $B90E) clears isr_frame_flag
+   (LDM) and then writes X ($B877 LDX cmd_ev_next) or calls isr_par_ready (PHA / PLA), isr_wait_frame or
+   par_step_tracks, none of which reads them, before it writes A, X and Y (par_step_tracks' thunk). No caller reads
+   a flag. The C par_play calls the C (M4.5), so the hook fires only while the ROM par_play runs. Declared: A, X,
+   Y. */
+static void frm_finish_frame_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    frm_finish_frame(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* frm_transition_flags $BA3F: X passes through (A and Y are loaded first). A = frm_flags, X untouched and Y = $0D
+   out (the RTS at $BAEB). frm_finish_frame ($BA36) restores A, X and Y next (PLA / TAY / PLA / TAX / PLA); par_play
+   ($B8E3) waits (isr_par_ready, PHA / PLA), then calls frm_copy_rest_frame (LDY and LDA first, X kept) or, after
+   the last rest frame, cmd_ev_sound_end (A as it came in unless it restores; X and Y kept) and isr_par_ready, which
+   return them as par_play's exit registers (its thunk). No caller reads a flag. Declared: A, X, Y. */
+static void frm_transition_flags_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    frm_transition_flags(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
 /* pros_microprosody $B983: no register input (it loads A first). A = par_next_phoneme, or pros_play_target plus or
    minus 5 (stored or not), out; X and Y untouched. The only caller, par_read_segment ($BD67), reads Y next ($BD6A
    CPY #0, $BD70 DEY, $BD71 LDA ($24),Y) and X ($BD76 STA $17BF,X), and loads A first ($BD71). No caller reads a
@@ -1016,6 +1045,8 @@ THUNK(frm_snapshot)
 THUNK(frm_clamp_mark_space)
 THUNK(frm_raise_formants)
 THUNK(pros_microprosody)
+THUNK(frm_finish_frame)
+THUNK(frm_transition_flags)
 THUNK(par_play_start)
 THUNK(par_reset_tracks)
 THUNK(cmd_run_event)
@@ -1088,6 +1119,8 @@ const fw_replacement fw_replacements[] = {
     { "frm_clamp_mark_space", 0xB930, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_clamp_mark_space },
     { "frm_raise_formants", 0xB95D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_raise_formants },
     { "pros_microprosody",  0xB983, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_microprosody },
+    { "frm_finish_frame",   0xB9B5, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_finish_frame },
+    { "frm_transition_flags", 0xBA3F, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_transition_flags },
     { "par_play_start",     0xBAF2, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_play_start },
     { "par_reset_tracks",   0xBB35, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_reset_tracks },
     { "cmd_run_event",      0xBB74, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_run_event },

@@ -85,9 +85,9 @@ static void check_golden(const uint8_t *rom, size_t len, const char *name, const
 /* Spec section 4: the produced-frame stream does not depend on CPU timing. Scale the cycles the
    peripheral timers see (1/4 = timers 4x slower relative to the CPU, 3/1 = 3x faster: there the ROM finishes some
    frames after their period has ended, and the timer interrupt sends the previous frame again). First the rom
-   engine, then the hybrid engine with every replacement (M4.4b spec 4.4): its frame loop is C, which takes no
-   emulated time, so it builds faster (frm_finish_frame is still ROM and takes cycles); the produced frames must not
-   change either way. */
+   engine, then the hybrid engine with every replacement (M4.4b spec 4.4): its frame loop and frame builder are C
+   (M4.5), which take no emulated time, so it builds faster (only its isr_* and ser_* ROM calls take cycles); the
+   produced frames must not change either way. */
 static void test_timing_invariance(const uint8_t *rom, size_t len)
 {
     static const uint32_t k_scale[][2] = { { 1, 4 }, { 3, 1 } };

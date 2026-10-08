@@ -1,4 +1,5 @@
 #include "frm_build.h"
+#include "fw_ops.h"
 #include "par_segment.h"
 #include "data/fw_data.h"
 
@@ -154,4 +155,183 @@ void frm_raise_formants(fw *f, fw_regs *r)
     raise(f, r, FRAME_F1);
     r->a = (uint8_t)(fw_rd8(f, FW_TMP_75) >> 1);   /* $B975-$B977: LDA $75; LSR */
     raise(f, r, FRAME_F2);
+}
+
+/* ---- frm_transition_flags $BA3F ---- */
+
+/* CMP #k: the N flag, bit 7 of the 8-bit d - k (BPL / BMI). */
+static bool minus(uint8_t d, uint8_t k) { return ((uint8_t)(d - k) & 0x80) != 0; }
+
+/* LDA $16DD,Y; SEC; SBC $16CD,Y: frm_snap_prev[i] - frm_snap[i], 8 bits. */
+static uint8_t moved(fw *f, uint8_t i)
+{
+    return (uint8_t)(fw_rd8(f, (uint16_t)(FRM_SNAP_PREV + i)) - fw_rd8(f, (uint16_t)(FRM_SNAP + i)));
+}
+
+/* LDA frm_flags; ORA #bit; STA frm_flags. */
+static void set_flag(fw *f, uint8_t bit) { fw_wr8(f, FRM_FLAGS, (uint8_t)(fw_rd8(f, FRM_FLAGS) | bit)); }
+
+/* $BA44-$BA74: the frequencies (Y = 9 down to 6, CMP #$10 / BPL, CMP #$F1 / BMI; DEY / CPY #5), then the
+   amplitudes (Y = 5 down to 1, CMP #$0C / BPL, CMP #$F5 / BMI; DEY / BNE); the first hit sets FRM_FLAG_JUMP. */
+static void jump_flag(fw *f)
+{
+    uint8_t i = 9;
+    for (; i != 5; i--)
+        if (!minus(moved(f, i), 0x10) || minus(moved(f, i), 0xF1)) {
+            set_flag(f, FRM_FLAG_JUMP);
+            return;
+        }
+    for (; i != 0; i--)
+        if (!minus(moved(f, i), 0x0C) || minus(moved(f, i), 0xF5)) {
+            set_flag(f, FRM_FLAG_JUMP);
+            return;
+        }
+}
+
+/* $BA77-$BAA4: for Y = 5 down to 1: CMP #1 / BEQ on frm_snap[i] picks the limit, 19 ($13) at the silent value 1,
+   else 28 ($1C); CMP / BPL: the first hit sets FRM_FLAG_FALL. */
+static void fall_flag(fw *f)
+{
+    for (uint8_t i = 5; i != 0; i--) {
+        uint8_t k = fw_rd8(f, (uint16_t)(FRM_SNAP + i)) == 1 ? 0x13 : 0x1C;
+        if (!minus(moved(f, i), k)) {
+            set_flag(f, FRM_FLAG_FALL);
+            return;
+        }
+    }
+}
+
+/* $BAA7-$BAC7: LDM #0,$75; for Y = 5 down to 1: frm_snap[i] - frm_snap_prev[i] (SEC; SBC); CMP #$0C / BMI, else
+   INC $75. Then LDA $75; CMP #2 / BMI, else FRM_FLAG_RISES. */
+static void rise_flag(fw *f)
+{
+    fw_wr8(f, FW_TMP_75, 0);
+    for (uint8_t i = 5; i != 0; i--) {
+        uint8_t rise = (uint8_t)(fw_rd8(f, (uint16_t)(FRM_SNAP + i)) - fw_rd8(f, (uint16_t)(FRM_SNAP_PREV + i)));
+        if (!minus(rise, 0x0C))
+            fw_inc8(f, FW_TMP_75);
+    }
+    if (!minus(fw_rd8(f, FW_TMP_75), 2))
+        set_flag(f, FRM_FLAG_RISES);
+}
+
+/* $BACA-$BAE1: the pitch code (frm_snap_prev[0] - frm_snap[0]): CMP #7 / BPL, CMP #$FA / BMI: FRM_FLAG_PITCH. */
+static void pitch_flag(fw *f)
+{
+    if (!minus(moved(f, 0), 0x07) || minus(moved(f, 0), 0xFA))
+        set_flag(f, FRM_FLAG_PITCH);
+}
+
+void frm_transition_flags(fw *f, fw_regs *r)
+{
+    r->a = 0;                                  /* $BA3F-$BA41 */
+    fw_wr8(f, FRM_FLAGS, r->a);
+    jump_flag(f);
+    fall_flag(f);
+    rise_flag(f);
+    pitch_flag(f);
+    r->a = fw_rd8(f, FRM_FLAGS);               /* $BAE4-$BAE9: b13 = frm_flags */
+    r->y = FRAME_FLAGS;
+    fw_wr_ind_y(f, ISR_FILL_PTR, r->y, r->a);
+}
+
+/* ---- frm_finish_frame $B9B5 ---- */
+
+/* $B9C3-$B9D7: Y = 16, X = frm_source_index: b16 = frm_source_codes,X; INY, X = frm_filter_index: b17 =
+   frm_filter_codes,X; DEY / DEY: Y = 15. */
+static void source_filter(fw *f, fw_regs *r)
+{
+    r->y = FRAME_SOURCE;
+    r->x = fw_rd8(f, FRM_SOURCE_INDEX);
+    r->a = fw_rom8(f, (uint16_t)(FRM_SOURCE_CODES + r->x));
+    fw_wr_ind_y(f, ISR_FILL_PTR, r->y, r->a);
+    r->y++;
+    r->x = fw_rd8(f, FRM_FILTER_INDEX);
+    r->a = fw_rom8(f, (uint16_t)(FRM_FILTER_CODES + r->x));
+    fw_wr_ind_y(f, ISR_FILL_PTR, r->y, r->a);
+    r->y -= 2;
+}
+
+/* $B9D8-$B9E9: X = 5, LDA frm_snap,X; DEX; SEC; SBC frm_snap,X; SEC; SBC #4: d = ALF - A1 - 4 (8 bits). BEQ / BMI:
+   false when d is 0 or has bit 7 set; else frm_level_diff = d. */
+static bool level_diff(fw *f, fw_regs *r)
+{
+    r->x = 5;
+    r->a = fw_rd8(f, (uint16_t)(FRM_SNAP + r->x));
+    r->x--;
+    r->a = (uint8_t)(r->a - fw_rd8(f, (uint16_t)(FRM_SNAP + r->x)));
+    r->a = (uint8_t)(r->a - FRM_LEVEL_MARGIN);
+    if (r->a == 0 || (r->a & 0x80))
+        return false;
+    fw_wr8(f, FRM_LEVEL_DIFF, r->a);
+    return true;
+}
+
+/* $B9EC-$B9FB: X = 7, LDA frm_snap,X; SEC; SBC #$21: e = F1 - 33 (8 bits). BEQ / BMI: false when e is 0 or has
+   bit 7 set; else frm_f1_excess = e and X = e (TAX). */
+static bool f1_excess(fw *f, fw_regs *r)
+{
+    r->x = 7;
+    r->a = (uint8_t)(fw_rd8(f, (uint16_t)(FRM_SNAP + r->x)) - FRM_F1_BASE);
+    if (r->a == 0 || (r->a & 0x80))
+        return false;
+    fw_wr8(f, FRM_F1_EXCESS, r->a);
+    r->x = r->a;
+    return true;
+}
+
+/* $BA04-$BA17: A = 0; for X = 8 down to 1: LSR frm_f1_excess, BCC, else CLC / ADC frm_level_diff (8 bits, the
+   carry out lost); ASL frm_level_diff. A = d * e (8 bits); both bytes end at 0. */
+static void multiply(fw *f, fw_regs *r)
+{
+    r->a = 0;
+    for (r->x = 8; r->x != 0; r->x--) {
+        uint8_t e = fw_rd8(f, FRM_F1_EXCESS);
+        fw_wr8(f, FRM_F1_EXCESS, (uint8_t)(e >> 1));
+        if (e & 1)
+            r->a = (uint8_t)(r->a + fw_rd8(f, FRM_LEVEL_DIFF));
+        fw_wr8(f, FRM_LEVEL_DIFF, (uint8_t)(fw_rd8(f, FRM_LEVEL_DIFF) << 1));
+    }
+}
+
+/* $B9FC-$BA26: LDA frm_product_limit,X (X = e); CMP frm_level_diff / BMI: the index FRM_PRODUCT_SATURATED when the
+   8-bit difference has bit 7 set, else the product. TAX: frm_b14 = frm_b14_15_lo,X; A = frm_b14_15_hi,X. */
+static void product_word(fw *f, fw_regs *r)
+{
+    r->a = fw_rom8(f, (uint16_t)(FRM_PRODUCT_LIMIT + r->x));
+    if (minus(r->a, fw_rd8(f, FRM_LEVEL_DIFF)))
+        r->a = FRM_PRODUCT_SATURATED;
+    else
+        multiply(f, r);
+    r->x = r->a;
+    r->a = fw_rom8(f, (uint16_t)(FRM_B14_15_LO + r->x));
+    fw_wr8(f, FRM_B14, r->a);
+    r->a = fw_rom8(f, (uint16_t)(FRM_B14_15_HI + r->x));
+}
+
+/* $B9D8-$BA34: the b14-b15 word, or 0 ($BA29-$BA2B: LDA #0; STA frm_b14); STA (fill),Y: b15 (Y = 15); DEY;
+   LDA frm_b14; STA (fill),Y: b14. */
+static void b14_15(fw *f, fw_regs *r)
+{
+    if (level_diff(f, r) && f1_excess(f, r)) {
+        product_word(f, r);
+    } else {
+        r->a = 0;
+        fw_wr8(f, FRM_B14, r->a);
+    }
+    fw_wr_ind_y(f, ISR_FILL_PTR, r->y, r->a);
+    r->y--;
+    r->a = fw_rd8(f, FRM_B14);
+    fw_wr_ind_y(f, ISR_FILL_PTR, r->y, r->a);
+}
+
+void frm_finish_frame(fw *f, fw_regs *r)
+{
+    fw_regs s = *r;                            /* $B9B5-$B9B9: PHA / TXA / PHA / TYA / PHA */
+    frm_snapshot(f, &s);
+    frm_clamp_mark_space(f, &s);
+    frm_raise_formants(f, &s);
+    source_filter(f, &s);
+    b14_15(f, &s);
+    frm_transition_flags(f, &s);               /* $BA36, then PLA / TAY / PLA / TAX / PLA: r as it came in */
 }

@@ -12,8 +12,8 @@
 #define FW_TMP_78    0x0078   /* zero-page scratch, unnamed in the annotations: a saved Y, byte counters;
                                  par_scale_duration's saved Y ($C2A0; not written for a duration of 0) */
 #define FW_TMP_75    0x0075   /* zero-page scratch, unnamed in the annotations: tn_convert_clause's saved X;
-                                 frm_clamp_mark_space's 2 x b10 ($B936; called by par_setup_voice at $B40A and
-                                 $B419) and frm_raise_formants' (b10 - 32) / 4 ($B969) */
+                                 frm_clamp_mark_space's 2 x b10 ($B936), frm_raise_formants' (b10 - 32) / 4 ($B969)
+                                 and frm_transition_flags' count of the rising amplitudes ($BAA7-$BAB7) */
 #define FW_TMP_76    0x0076   /* zero-page scratch, unnamed in the annotations: cmd_scan_clause's resume index,
                                  cmd_set_prosody's parameter index; par_scale_voicing's first term at @B2, @B3, @B4,
                                  @B6 and @B7 ($BFE7, $BFF8, $C006/$C00D, $C022, $C030) */

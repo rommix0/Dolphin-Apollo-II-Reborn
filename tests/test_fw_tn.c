@@ -58,10 +58,6 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
     case ROM_ISR_WAIT_FRAME:
     case ROM_ISR_SET_VOLUME:
     case ROM_ISR_SPEECH_STOP:
-    case ROM_FRM_COPY_REST_FRAME:
-    case ROM_FRM_SNAPSHOT:
-    case ROM_FRM_CLAMP_MARK_SPACE:
-    case ROM_FRM_TRANSITION_FLAGS:
         return FW_CALL_RETURNED;
     default:
         return FW_CALL_FAILED;
@@ -242,6 +238,7 @@ static void test_flush(void)
         text[i] = (char)('A' + i % 26);
     setup_n(text, sizeof text);
     g_ram[CMD_PHONETIC] = 1;                    /* verbatim: one phonetic byte per character */
+    fw_wr16(&g_f, ISR_FILL_PTR, ISR_FRAME_B);   /* where par_setup_voice leaves it: the C rest frames go there */
     tn_convert_clause(&g_f);
     CHECK_EQ(g_f.tn_flushes, 1);
     CHECK_EQ(g_ram[TN_RESUME_POS], 250);
@@ -262,12 +259,8 @@ static void test_flush(void)
     static const uint16_t k_play[] = {
         ROM_ISR_PAR_HOLD, ROM_ISR_SPEECH_START, ROM_ISR_VOLUME_HALF, ROM_ISR_WAIT_FRAME, ROM_ISR_SET_VOLUME,
         ROM_ISR_PAR_READY, ROM_ISR_WAIT_FRAME,                                     /* par_play: the pass, the end */
-        ROM_FRM_COPY_REST_FRAME, ROM_FRM_SNAPSHOT, ROM_FRM_CLAMP_MARK_SPACE, ROM_FRM_TRANSITION_FLAGS,
+        ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,                   /* the rest frames (C) */
         ROM_ISR_PAR_READY,
-        ROM_FRM_COPY_REST_FRAME, ROM_FRM_SNAPSHOT, ROM_FRM_CLAMP_MARK_SPACE, ROM_FRM_TRANSITION_FLAGS,
-        ROM_ISR_PAR_READY,
-        ROM_FRM_COPY_REST_FRAME, ROM_FRM_SNAPSHOT, ROM_FRM_CLAMP_MARK_SPACE, ROM_FRM_TRANSITION_FLAGS,
-        ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,
         ROM_ISR_VOLUME_HALF, ROM_ISR_WAIT_FRAME, ROM_ISR_SET_VOLUME, ROM_ISR_SPEECH_STOP,
         ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,
     };
@@ -284,7 +277,7 @@ static void test_flush(void)
                                                              them */
     CHECK_EQ(g_calls[first].phon_len, TN_PHONETIC_FLUSH);
     CHECK_EQ(g_calls[first + 4].a, g_ram[CMD_VOLUME]);   /* isr_set_volume(cmd_volume) ($B2C2) */
-    CHECK_EQ(g_calls[first + 25].a, 0);                   /* isr_set_volume(0) ($B2D0) */
+    CHECK_EQ(g_calls[first + 13].a, 0);                   /* isr_set_volume(0) ($B2D0) */
     CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0xFFFF);          /* par_play_start: no event queued */
     CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 0);                  /* the three rest frames counted down */
     CHECK_EQ(g_ram[ISR_FRAME_FLAG], 1);                   /* set by the last isr_par_ready calls */

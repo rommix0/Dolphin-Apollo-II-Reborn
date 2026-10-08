@@ -320,6 +320,188 @@ static void test_raise_formants(void)
     raise_case(0x9F, 0, 0, 31, 15, 0x1F, 15, FRAME_F2);
 }
 
+/* ---- the finish (M4.5 Task 3) ---- */
+
+static void test_finish_rows(void)
+{
+    check_row("frm_finish_frame", ROM_FRM_FINISH_FRAME);
+    check_row("frm_transition_flags", ROM_FRM_TRANSITION_FLAGS);
+}
+
+/* frm_snap and frm_snap_prev in the flag cases: the pitch code 20, the amplitudes AHF, A3, A2, A1, ALF 10 and the
+   frequencies FN, F1, F2, F3 30 (i = 0..9, in frm_snapshot_map's order), in both arrays. */
+static const uint8_t k_snap[10] = { 20, 10, 10, 10, 10, 10, 30, 30, 30, 30 };
+
+/* A change from k_snap: frm_snap_prev[i] = prev and frm_snap[i] = snap (i = 10: none). */
+typedef struct { uint8_t i, prev, snap; } snap_change;
+
+/* One frm_transition_flags call with k_snap changed by a and b; b13 and frm_flags $EE before. Out: frm_flags = b13 =
+   A = want, FW_TMP_75 = want_75 (the rises counted), X untouched, Y = 13; nothing else written. */
+static void flags_case(snap_change a, snap_change b, uint8_t want, uint8_t want_75)
+{
+    static const uint16_t w[] = { FRM_FLAGS, FW_TMP_75, ISR_FRAME_B + FRAME_FLAGS };
+    setup();
+    fill_frame_b();
+    memcpy(g_ram + FRM_SNAP, k_snap, 10);
+    memcpy(g_ram + FRM_SNAP_PREV, k_snap, 10);
+    if (a.i < 10) {
+        g_ram[FRM_SNAP_PREV + a.i] = a.prev;
+        g_ram[FRM_SNAP + a.i] = a.snap;
+    }
+    if (b.i < 10) {
+        g_ram[FRM_SNAP_PREV + b.i] = b.prev;
+        g_ram[FRM_SNAP + b.i] = b.snap;
+    }
+    g_ram[FRM_FLAGS] = 0xEE;
+    g_ram[ISR_FRAME_B + FRAME_FLAGS] = 0xEE;
+    g_ram[FW_TMP_75] = 0xEE;
+    snapshot();
+    fw_regs r = { 0x11, 0x5A, 0x33, 0 };
+    frm_transition_flags(&g_f, &r);
+    CHECK_EQ(g_ram[FRM_FLAGS], want);
+    CHECK_EQ(g_ram[ISR_FRAME_B + FRAME_FLAGS], want);
+    CHECK_EQ(g_ram[FW_TMP_75], want_75);
+    CHECK_EQ(r.a, want);
+    CHECK_EQ(r.x, 0x5A);
+    CHECK_EQ(r.y, FRAME_FLAGS);
+    check_written(w, 3);
+    check_no_calls();
+}
+
+/* Each flag at its threshold and one short of it, with d = frm_snap_prev[i] - frm_snap[i] (i: 0 the pitch code, 1-5
+   AHF, A3, A2, A1, ALF, 6-9 FN, F1, F2, F3), and two 8-bit wraps. */
+static void test_transition_flags(void)
+{
+#define NONE { 10, 0, 0 }
+    static const struct { snap_change a, b; uint8_t want, want_75; } k[] = {
+        { NONE, NONE, 0, 0 },                                       /* nothing moved */
+        /* F1: d = 16 ($BA4F BPL taken), 15; d = -16 ($F0 - $F1 has bit 7: $BA53 BMI taken), -15 ($F1 - $F1 = 0) */
+        { { 7, 46, 30 }, NONE, FRM_FLAG_JUMP, 0 },
+        { { 7, 45, 30 }, NONE, 0, 0 },
+        { { 7, 14, 30 }, NONE, FRM_FLAG_JUMP, 0 },
+        { { 7, 15, 30 }, NONE, 0, 0 },
+        /* A1: d = 12 ($BA63 BPL), 11; d = -12 ($F4 - $F5: $BA67 BMI; a rise of 12, counted), -11 (not counted) */
+        { { 4, 22, 10 }, NONE, FRM_FLAG_JUMP, 0 },
+        { { 4, 21, 10 }, NONE, 0, 0 },
+        { { 4, 10, 22 }, NONE, FRM_FLAG_JUMP, 1 },
+        { { 4, 10, 21 }, NONE, 0, 0 },
+        /* a fall of A2: d = 28 ($BA89 BPL taken), 27 (the jump only) */
+        { { 3, 38, 10 }, NONE, FRM_FLAG_JUMP | FRM_FLAG_FALL, 0 },
+        { { 3, 37, 10 }, NONE, FRM_FLAG_JUMP, 0 },
+        /* a fall of A3 to the silent value 1 ($BA7E BEQ taken): d = 19 ($BA97 BPL taken), 18; and d = 19 to 10 */
+        { { 2, 20, 1 }, NONE, FRM_FLAG_JUMP | FRM_FLAG_FALL, 0 },
+        { { 2, 19, 1 }, NONE, FRM_FLAG_JUMP, 0 },
+        { { 2, 29, 10 }, NONE, FRM_FLAG_JUMP, 0 },
+        /* A1 and AHF rise by 12: $75 = 2, not below 2 ($BAC0 BMI not taken) */
+        { { 4, 10, 22 }, { 1, 10, 22 }, FRM_FLAG_JUMP | FRM_FLAG_RISES, 2 },
+        /* the pitch code: d = 7 ($BAD3 BPL), 6; d = -7 ($F9 - $FA: $BAD7 BMI), -6 */
+        { { 0, 27, 20 }, NONE, FRM_FLAG_PITCH, 0 },
+        { { 0, 26, 20 }, NONE, 0, 0 },
+        { { 0, 13, 20 }, NONE, FRM_FLAG_PITCH, 0 },
+        { { 0, 14, 20 }, NONE, 0, 0 },
+        /* FN from 250 to 0: d = $FA, -6 in 8 bits: no jump. ALF from 0 to $77: d = $89, and $89 - 12 and $89 - 28 have
+           bit 7 clear: a rise of 119 sets the jump and the fall flags (and counts as one rise) */
+        { { 6, 250, 0 }, NONE, 0, 0 },
+        { { 5, 0, 0x77 }, NONE, FRM_FLAG_JUMP | FRM_FLAG_FALL, 1 },
+    };
+#undef NONE
+    for (size_t n = 0; n < sizeof k / sizeof k[0]; n++)
+        flags_case(k[n].a, k[n].b, k[n].want, k[n].want_75);
+}
+
+/* One frm_finish_frame case: the producer frame's ALF, A1, F1 and pitch code b10 (FN 30, A2 10, F2 40, A3 10, F3 50,
+   AHF 10, V 63; b11-b17 $EE), @M 20, frm_source_index src and frm_filter_index flt; frm_snap already as the frame
+   gives it (so no transition flag); frm_level_diff, frm_f1_excess, frm_b14 and frm_flags $EE before. Out: b14, b15
+   and frm_level_diff, frm_f1_excess ($EE: not written) as the ROM leaves them; F1 and F2 after the raise. */
+typedef struct {
+    uint8_t alf, a1, f1, pitch, src, flt;
+    uint8_t b14, b15, level, excess, f1_out, f2_out;
+} finish_row;
+
+static void finish_case(const finish_row *k)
+{
+    static const uint8_t codes_src[4] = { 0x82, 0x58, 0x9B, 0xBA }, codes_flt[2] = { 0x4A, 0x54 };
+    uint16_t w[40];
+    size_t n = 0;
+    setup();
+    fill_frame_b();
+    uint8_t *frame = g_ram + ISR_FRAME_B;
+    static const uint8_t base[11] = { 0, 30, 0, 0, 10, 40, 10, 50, 10, 63, 0 };
+    memcpy(frame, base, 11);
+    memset(frame + 11, 0xEE, 9);
+    frame[FRAME_ALF] = k->alf;
+    frame[FRAME_A1] = k->a1;
+    frame[FRAME_F1] = k->f1;
+    frame[FRAME_PITCH] = k->pitch;
+    for (unsigned i = 0; i < 10; i++)
+        g_ram[FRM_SNAP + i] = frame[fw_frm_snapshot_map[i]];
+    g_ram[CMD_MARK_SPACE] = 20;
+    g_ram[FRM_SOURCE_INDEX] = k->src;
+    g_ram[FRM_FILTER_INDEX] = k->flt;
+    g_ram[FRM_LEVEL_DIFF] = g_ram[FRM_F1_EXCESS] = g_ram[FRM_B14] = g_ram[FRM_FLAGS] = 0xEE;
+    for (unsigned i = 0; i < 10; i++) {
+        w[n++] = (uint16_t)(FRM_SNAP + i);
+        w[n++] = (uint16_t)(FRM_SNAP_PREV + i);
+    }
+    static const uint16_t more[] = {
+        FW_TMP_75, ISR_FRAME_B + FRAME_F1, ISR_FRAME_B + FRAME_F2, ISR_FRAME_B + FRAME_MARK_SPACE,
+        ISR_FRAME_B + FRAME_FLAGS, ISR_FRAME_B + FRAME_B14, ISR_FRAME_B + FRAME_B15, ISR_FRAME_B + FRAME_SOURCE,
+        ISR_FRAME_B + FRAME_FILTER, FRM_FLAGS, FRM_B14, FRM_LEVEL_DIFF, FRM_F1_EXCESS,
+    };
+    for (size_t i = 0; i < sizeof more / sizeof more[0]; i++)
+        w[n++] = more[i];
+    snapshot();
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    frm_finish_frame(&g_f, &r);
+    CHECK_EQ(frame[FRAME_B14], k->b14);
+    CHECK_EQ(frame[FRAME_B15], k->b15);
+    CHECK_EQ(g_ram[FRM_B14], k->b14);
+    CHECK_EQ(g_ram[FRM_LEVEL_DIFF], k->level);
+    CHECK_EQ(g_ram[FRM_F1_EXCESS], k->excess);
+    CHECK_EQ(frame[FRAME_F1], k->f1_out);
+    CHECK_EQ(frame[FRAME_F2], k->f2_out);
+    CHECK_EQ(frame[FRAME_SOURCE], codes_src[k->src]);
+    CHECK_EQ(frame[FRAME_FILTER], codes_flt[k->flt]);
+    CHECK_EQ(frame[FRAME_MARK_SPACE], 20);   /* @M 20 within 47 - 2c and 160 - 2c (c = 20 or 40) */
+    CHECK_EQ(frame[FRAME_FLAGS], 0);         /* frm_snap_prev = frm_snap: no flag */
+    CHECK_EQ(g_ram[FRM_FLAGS], 0);
+    CHECK_EQ(g_ram[FW_TMP_75], 0);           /* the clamp's 2c, then the raise's, then the rise count 0 */
+    CHECK_EQ(frame[FRAME_END_MARKER], 0xEE);
+    CHECK_EQ(r.a, 0x11);                     /* A, X and Y as they came in */
+    CHECK_EQ(r.x, 0x22);
+    CHECK_EQ(r.y, 0x33);
+    check_written(w, n);
+    check_no_calls();
+}
+
+/* d = ALF - A1 - 4 and e = F1 - 33 from the snapshot (taken before the raise); the word is 82 x the index. */
+static void test_finish_frame(void)
+{
+    static const finish_row k[] = {
+        /* d = -4 ($FC, $B9E7 BMI taken): 0 and 0; nothing else written. Both codes at index 0 */
+        { 10, 10, 30, 20, 0, 0, 0, 0, 0xEE, 0xEE, 30, 40 },
+        /* d = 0 ($B9E5 BEQ taken). source 1 (spike $58), filter 1 (female $54) */
+        { 14, 10, 40, 20, 1, 1, 0, 0, 0xEE, 0xEE, 40, 40 },
+        /* d = 6, e = 0 (F1 33: $B9F4 BEQ taken, which no corpus text takes): frm_level_diff = 6 is written; 0 */
+        { 20, 10, 33, 20, 2, 0, 0, 0, 6, 0xEE, 33, 40 },
+        /* d = 6, e = 20 - 33 = $F3 ($B9F6 BMI taken): 0. source 3 (reduced HF $BA) */
+        { 20, 10, 20, 20, 3, 1, 0, 0, 6, 0xEE, 20, 40 },
+        /* e = 1 (F1 34): the limit 255 - 6 = $F9 has bit 7 set ($BA02 BMI taken): the index $FF, 82 x 255 = $51AE;
+           frm_f1_excess = 1 stays (no multiply) */
+        { 20, 10, 34, 20, 0, 0, 0xAE, 0x51, 6, 1, 34, 40 },
+        /* d = 60 above the limit 51 of e = 5 (F1 38): $F7: the index $FF */
+        { 74, 10, 38, 20, 0, 0, 0xAE, 0x51, 60, 5, 38, 40 },
+        /* d = 6, e = 5: 51 - 6 = 45: the multiply, 30 (82 x 30 = 2460 = $099C); both bytes shifted out to 0 */
+        { 20, 10, 38, 20, 0, 0, 0x9C, 0x09, 0, 0, 38, 40 },
+        /* d = 85 at the limit of e = 3 (F1 36): 85 - 85 = 0: the multiply, 255 */
+        { 99, 10, 36, 20, 0, 0, 0xAE, 0x51, 0, 0, 36, 40 },
+        /* b10 = 40: the raise ((40 - 32) >> 2 = 2: F1 34 -> 36, F2 40 -> 41) comes after the snapshot, so e = 1 */
+        { 20, 10, 34, 40, 0, 0, 0xAE, 0x51, 6, 1, 36, 41 },
+    };
+    for (size_t n = 0; n < sizeof k / sizeof k[0]; n++)
+        finish_case(&k[n]);
+}
+
 void suite_fw_frm(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -330,4 +512,7 @@ void suite_fw_frm(void)
     test_snapshot();
     test_clamp_mark_space();
     test_raise_formants();
+    test_finish_rows();
+    test_transition_flags();
+    test_finish_frame();
 }

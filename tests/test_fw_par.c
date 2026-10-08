@@ -45,9 +45,9 @@ static unsigned g_abort_at;      /* the mock receive interrupt sets ser_abort bi
 static uint8_t g_uart_status;    /* UART_STATUS as the mock reads it */
 
 /* Records every ROM call. isr_set_volume (M4.6, called by cmd_ev_set_volume) returns the registers the ROM one
-   leaves; so do the interrupt, serial and frame routines that par_play and boot_loop_play call (M4.5, M4.6), with
-   what the timer and receive interrupts would do between the frame loop's tests (g_flag_every, g_abort_at); any
-   other call fails (par_setup_voice calls the C frame builder since M4.5). */
+   leaves; so do the interrupt and serial routines that par_play and boot_loop_play call (M4.6), with what the timer
+   and receive interrupts would do between the frame loop's tests (g_flag_every, g_abort_at); any other call fails
+   (par_setup_voice and par_play call the C frame builder since M4.5). */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     (void)ctx;
@@ -65,14 +65,6 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
     }
     g_ncalls++;
     switch (addr) {
-    case ROM_FRM_COPY_REST_FRAME:    /* $B445-$B44F: LDA $2000,Y for Y = $13..0, DEY / BPL: Y = $FF; X untouched */
-        r->a = g_ram[FRM_REST_FRAME];
-        r->y = 0xFF;
-        return FW_CALL_RETURNED;
-    case ROM_FRM_CLAMP_MARK_SPACE:   /* $B930-$B95C: LDY #$0A, INY; LDA #$0B at $B954; X untouched */
-        r->a = 0x0B;
-        r->y = 0x0B;
-        return FW_CALL_RETURNED;
     case ROM_ISR_VOLUME_HALF:        /* $B46C-$B472: LDA cmd_volume / LSR / JSR isr_set_volume: on into its case */
         r->a = (uint8_t)(g_ram[CMD_VOLUME] >> 1);
         /* fall through */
@@ -94,8 +86,6 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
     case ROM_ISR_PAR_HOLD:           /* $C5DE-$C5DF, $C5EA-$C5EB: PHA, BBC0 boot_dip, PLA: A, X, Y kept */
     case ROM_SER_TX_SERVICE:         /* $C581-$C585, $C5A2-$C5A3: PHA, BBS0 boot_dip, BBC2 P0 (the host line low, as
                                         in the machine), PLA: nothing sent, A, X, Y kept */
-    case ROM_FRM_FINISH_FRAME:       /* $B9B5-$B9B9 PHA / TXA / PHA / TYA / PHA ... $BA39-$BA3E PLA / TAY / PLA / TAX /
-                                        PLA: A, X, Y restored */
     case ROM_ISR_SPEECH_STOP:        /* $B398-$B3A3: LDM, LDM, isr_dsp_reset (PHP ... PLP), CLB0: A, X, Y kept */
         return FW_CALL_RETURNED;
     case ROM_ISR_WAIT_FRAME:         /* $B465-$B46B: BBC0 isr_frame_flag (the frame is due), LDM #0: A, X, Y kept */
@@ -107,18 +97,6 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         r->a = 0;
         r->x = 0;
         g_ram[ISR_FRAME_FLAG] = 0;
-        return FW_CALL_RETURNED;
-    case ROM_FRM_SNAPSHOT:           /* $B917-$B92F: LDY #$0A / DEY loop, then LDX #$0A: LDY $B772,X / LDA ($2C),Y /
-                                        DEX: the last at X = 1, Y = frm_snapshot_map[0] = 10: A = the fill frame's b10,
-                                        X = 0, Y = 10 */
-        r->y = FRAME_PITCH;
-        r->a = fw_ind_y(&g_f, ISR_FILL_PTR, r->y);
-        r->x = 0;
-        return FW_CALL_RETURNED;
-    case ROM_FRM_TRANSITION_FLAGS:   /* $BAE4-$BAEB: LDA frm_flags / LDY #$0D / STA ($2C),Y / RTS; X not used. The
-                                        flags themselves are not modelled: A = frm_flags as it is */
-        r->a = g_ram[FRM_FLAGS];
-        r->y = 0x0D;
         return FW_CALL_RETURNED;
     default:
         return FW_CALL_FAILED;
@@ -2049,26 +2027,20 @@ static void check_order(unsigned i, const uint16_t *addrs, unsigned n)
 }
 
 /* The end ($B8D2-$B8FA) from call i on, with `waits` isr_par_ready calls per wait for the flag: isr_wait_frame,
-   then per rest frame frm_copy_rest_frame, frm_snapshot, frm_clamp_mark_space, frm_transition_flags and the wait,
-   with par_frames_left 3, 2, 1 ($B8D5, then the DEC at $B8EF); then the last isr_par_ready ($B8F7;
+   then per rest frame (frm_copy_rest_frame, frm_snapshot, frm_clamp_mark_space and frm_transition_flags, all C)
+   the wait, with par_frames_left 3, 2, 1 ($B8D5, then the DEC at $B8EF); then the last isr_par_ready ($B8F7;
    cmd_ev_sound_end is C and returns at once, cmd_sound_active being 0). Returns the number of calls. */
 static unsigned check_rest_frames(unsigned i, unsigned waits)
 {
-    static const uint16_t k_frame[] = {
-        ROM_FRM_COPY_REST_FRAME, ROM_FRM_SNAPSHOT, ROM_FRM_CLAMP_MARK_SPACE, ROM_FRM_TRANSITION_FLAGS,
-    };
-    uint16_t k[1 + 3 * (4 + 2) + 1];   /* enough for waits <= 2 */
+    uint16_t k[1 + 3 * 2 + 1];   /* enough for waits <= 2 */
     CHECK(waits <= 2);
     if (waits > 2)
         return 0;
-    unsigned n = 0, per = 4 + waits;
+    unsigned n = 0, per = waits;
     k[n++] = ROM_ISR_WAIT_FRAME;
-    for (unsigned j = 0; j < 3; j++) {
-        for (unsigned m = 0; m < 4; m++)
-            k[n++] = k_frame[m];
+    for (unsigned j = 0; j < 3; j++)
         for (unsigned m = 0; m < waits; m++)
             k[n++] = ROM_ISR_PAR_READY;
-    }
     k[n++] = ROM_ISR_PAR_READY;
     check_order(i, k, n);
     for (unsigned j = 0; j < 3; j++)
@@ -2079,12 +2051,15 @@ static unsigned check_rest_frames(unsigned i, unsigned waits)
 }
 
 /* No segment left (pros_seg_count = 0): two passes (the flag comes at the second isr_par_ready, every 2nd call),
-   then the tight loop ($B8BB-$B8CF): par_frames_left 3 -> 2 -> 1 gives two frames, each par_step_tracks (C) and
-   frm_finish_frame, the flag cleared and waited for again; 0 ends it. The rest frames, the flag every 2nd call. No
-   event (cmd_ev_count 0) and no reply (ser_status_due 0). The registers flow: the entry A and Y and X =
+   then the tight loop ($B8BB-$B8CF): par_frames_left 3 -> 2 -> 1 gives two frames, each par_step_tracks and
+   frm_finish_frame (both C), the flag cleared and waited for again; 0 ends it. The rest frames, the flag every 2nd
+   call. No event (cmd_ev_count 0) and no reply (ser_status_due 0). The registers flow: the entry A and Y and X =
    cmd_ev_next ($B877 LDX) reach the passes' isr_par_ready; Y = 0 from $B8B6 (pros_seg_count + 1); par_step_tracks
-   leaves A = pros_play_pitch >> 2 = 0, X = 0, Y = 10; the rest frames' calls leave A = frm_flags, X = 0 and Y = $0D
-   (frm_transition_flags' LDY #$0D, frm_snapshot's X = 0), which par_play returns. */
+   leaves A = pros_play_pitch >> 2 = 0, X = 0, Y = 10, which frm_finish_frame keeps; each rest frame leaves A =
+   frm_flags, X = 0 (frm_snapshot's) and Y = $0D (frm_transition_flags'), which par_play returns. frm_rest_frame is
+   $77 and zeros: the first rest frame's ALF goes from 0 (the frames before) to $77, an 8-bit difference of $89, so
+   frm_flags = $C0 (bit 7: $89 - 12 has bit 7 clear; bit 6: $89 - 28 too); the next two change nothing (0). The
+   fill frame ends as the rest frame with b11 = @M 0 raised to 47 - 2 x 0 and b13 = 0. */
 static void test_play_tail(void)
 {
     setup();
@@ -2092,40 +2067,34 @@ static void test_play_tail(void)
     memset(g_ram + ISR_FRAME_B, 0xEE, 20);
     g_ram[PAR_FRAMES_LEFT] = 3;
     g_ram[FRM_REST_FRAME] = 0x77;
-    g_ram[FRM_FLAGS] = 0x5A;
     g_flag_every = 2;
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
     par_play(&g_f, &r);
     static const uint16_t k[] = {
-        ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,                       /* pass 1: $B89F, $B8AB (the flag comes) */
-        ROM_ISR_PAR_READY,                                          /* pass 2: $B89F, then $B8B1-$B8B9 */
-        ROM_FRM_FINISH_FRAME, ROM_ISR_PAR_READY,                    /* frame 1: $B8C3, $B8C9 */
-        ROM_FRM_FINISH_FRAME, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, /* frame 2: $B8C3, $B8C9 twice */
+        ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,   /* pass 1: $B89F, $B8AB (the flag comes) */
+        ROM_ISR_PAR_READY,                      /* pass 2: $B89F, then $B8B1-$B8B9 */
+        ROM_ISR_PAR_READY,                      /* frame 1: $B8C9 */
+        ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,   /* frame 2: $B8C9 twice */
     };
-    check_order(0, k, 8);
+    check_order(0, k, 6);
     check_play_call(0, ROM_ISR_PAR_READY, 0x11, 0, 0x33, 3);
     check_play_call(2, ROM_ISR_PAR_READY, 0x11, 0, 0x33, 3);
-    check_play_call(3, ROM_FRM_FINISH_FRAME, 0, 0, FRAME_PITCH, 2);   /* par_step_tracks' A, X, Y */
-    check_play_call(5, ROM_FRM_FINISH_FRAME, 0, 0, FRAME_PITCH, 1);
-    CHECK_EQ(g_calls[4].frames, 2);
-    CHECK_EQ(check_rest_frames(8, 2), 20);                             /* the flag every 2nd call */
-    check_play_call(8, ROM_ISR_WAIT_FRAME, 0, 0, FRAME_PITCH, 0);
-    check_play_call(9, ROM_FRM_COPY_REST_FRAME, 3, 0, FRAME_PITCH, 3); /* $B8D5 LDA #3 */
-    check_play_call(10, ROM_FRM_SNAPSHOT, 0x77, 0, 0xFF, 3);           /* frm_copy_rest_frame's A and Y */
-    check_play_call(11, ROM_FRM_CLAMP_MARK_SPACE, 0, 0, FRAME_PITCH, 3);   /* frm_snapshot's: b10 (0), X = 0 */
-    check_play_call(12, ROM_FRM_TRANSITION_FLAGS, 0x0B, 0, 0x0B, 3);
-    check_play_call(13, ROM_ISR_PAR_READY, 0x5A, 0, 0x0D, 3);
-    check_play_call(15, ROM_FRM_COPY_REST_FRAME, 0x5A, 0, 0x0D, 2);
-    check_play_call(21, ROM_FRM_COPY_REST_FRAME, 0x5A, 0, 0x0D, 1);
-    check_play_call(27, ROM_ISR_PAR_READY, 0x5A, 0, 0x0D, 0);           /* $B8F7 */
-    CHECK_EQ(g_ncalls, 28);
+    check_play_call(3, ROM_ISR_PAR_READY, 0, 0, FRAME_PITCH, 2);   /* par_step_tracks' A, X, Y */
+    check_play_call(4, ROM_ISR_PAR_READY, 0, 0, FRAME_PITCH, 1);
+    CHECK_EQ(check_rest_frames(6, 2), 8);                           /* the flag every 2nd call */
+    check_play_call(6, ROM_ISR_WAIT_FRAME, 0, 0, FRAME_PITCH, 0);
+    check_play_call(7, ROM_ISR_PAR_READY, 0xC0, 0, 0x0D, 3);         /* the first rest frame's frm_flags */
+    check_play_call(9, ROM_ISR_PAR_READY, 0, 0, 0x0D, 2);
+    check_play_call(11, ROM_ISR_PAR_READY, 0, 0, 0x0D, 1);
+    check_play_call(13, ROM_ISR_PAR_READY, 0, 0, 0x0D, 0);           /* $B8F7 */
+    CHECK_EQ(g_ncalls, 14);
     CHECK_EQ(count(ROM_ISR_PAR_READY), 13);
     CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 0);
-    CHECK_EQ(g_ram[ISR_FRAME_FLAG], 0);                                  /* cleared after the last rest frame */
-    for (int b = 0; b <= FRAME_PITCH; b++)
-        CHECK_EQ(g_ram[ISR_FRAME_B + b], 0);                             /* par_step_tracks wrote b0-b10 */
-    CHECK_EQ(g_ram[ISR_FRAME_B + 11], 0xEE);
-    CHECK_EQ(r.a, 0x5A);
+    CHECK_EQ(g_ram[ISR_FRAME_FLAG], 0);                                /* cleared after the last rest frame */
+    for (int b = 0; b < FRAME_SIZE; b++)
+        CHECK_EQ(g_ram[ISR_FRAME_B + b], b == FRAME_ALF ? 0x77 : b == FRAME_MARK_SPACE ? 47 : 0);
+    CHECK_EQ(g_ram[FRM_FLAGS], 0);
+    CHECK_EQ(r.a, 0);
     CHECK_EQ(r.x, 0);
     CHECK_EQ(r.y, 0x0D);
     CHECK(!g_f.fault);
@@ -2156,43 +2125,46 @@ static void test_play_segment(void)
     fw_wr16(&g_f, CMD_EV_HANDLERS, ROM_CMD_EV_SET_VOICING);
     g_ram[CMD_EV_ARGS] = 6;
     g_ram[SER_STATUS_DUE] = 1;
-    g_ram[FRM_FLAGS] = 0x5A;
     g_flag_every = 2;
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
     par_play(&g_f, &r);
     static const uint16_t k[] = {
         ROM_SER_TX_SERVICE, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,                      /* pass 1 */
         ROM_SER_TX_SERVICE, ROM_ISR_PAR_READY,                                         /* pass 2 */
-        ROM_ISR_PAR_READY, ROM_FRM_FINISH_FRAME,                                       /* $B908-$B90E */
+        ROM_ISR_PAR_READY,                                                             /* $B908 */
         ROM_SER_TX_SERVICE, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,                      /* pass 3 */
         ROM_SER_TX_SERVICE, ROM_ISR_PAR_READY,                                         /* pass 4 */
-        ROM_FRM_FINISH_FRAME, ROM_ISR_PAR_READY,                                       /* the last frame */
+        ROM_ISR_PAR_READY,                                                             /* the last frame: $B8C9 */
     };
-    check_order(0, k, 14);
+    check_order(0, k, 12);
     check_play_call(0, ROM_SER_TX_SERVICE, 6, 1, 0x33, 1);       /* the handler's A, cmd_ev_next from $B877 */
     check_play_call(4, ROM_ISR_PAR_READY, 6, 1, 0x33, 1);
     CHECK_EQ(g_calls[5].frames, 2);                              /* par_next_segment's duration */
     check_play_call(5, ROM_ISR_PAR_READY, 2, 10, 0, 2);          /* A = par_frames_left ($B903), par_next_segment's
                                                                     X = 10 and Y = 0 */
-    check_play_call(6, ROM_FRM_FINISH_FRAME, 0x18, 0, FRAME_PITCH, 2);   /* the pitch $55 to $70 over 2 frames:
-                                                                       ($70 + $55) >> 1 = $62, b10 = $62 >> 2 */
-    check_play_call(12, ROM_FRM_FINISH_FRAME, 0x1C, 0, FRAME_PITCH, 1);  /* then over 1: $70, b10 = $1C */
-    CHECK_EQ(check_rest_frames(14, 2), 20);
-    CHECK_EQ(g_ncalls, 34);
+    check_play_call(6, ROM_SER_TX_SERVICE, 0x18, 1, FRAME_PITCH, 2);    /* the pitch $55 to $70 over 2 frames:
+                                                                       ($70 + $55) >> 1 = $62, b10 = $62 >> 2: A of
+                                                                       par_step_tracks, kept by frm_finish_frame;
+                                                                       X = cmd_ev_next ($B877) */
+    check_play_call(11, ROM_ISR_PAR_READY, 0x1C, 0, FRAME_PITCH, 1);    /* then over 1: $70, b10 = $1C */
+    CHECK_EQ(check_rest_frames(12, 2), 8);
+    CHECK_EQ(g_ncalls, 20);
     CHECK_EQ(g_ram[CMD_VOICING], 6);
     CHECK_EQ(g_ram[CMD_EV_NEXT], 1);
     CHECK_EQ(fw_rd16(&g_f, PAR_SEG_INDEX), 4);
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 0);
     CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 0);
-    CHECK_EQ(r.a, 0x5A);
+    CHECK_EQ(g_ram[ISR_FRAME_B + FRAME_SOURCE], 0);   /* the last rest frame: frm_rest_frame's (zeros here) */
+    CHECK_EQ(r.a, 0);                                 /* its frm_flags: nothing moved from the rest frame before */
     CHECK_EQ(r.x, 0);
     CHECK_EQ(r.y, 0x0D);
     CHECK(!g_f.fault);
 }
 
 /* A mute: ser_abort bit 0 arrives with the flag at the first isr_par_ready. The abort test ($B8A2) comes before the
-   flag test, so par_play goes straight to the end: no frame is built (the fill frame is untouched, par_frames_left
-   is only set to 3 and counted down), pros_seg_count is kept, and ser_abort stays set (boot_get_clause clears it).
+   flag test, so par_play goes straight to the end: no frame is built (par_frames_left is only set to 3 and counted
+   down; the fill frame becomes the rest frame, zeros here, with b11 = 47 - 2 x 0, and frm_finish_frame would have
+   written b16 = $82), pros_seg_count is kept, and ser_abort stays set (boot_get_clause clears it).
    With UART_STATUS bit 1 clear (the transmitter busy, $B895 BBC1) the due reply is not served. */
 static void test_play_abort(void)
 {
@@ -2208,13 +2180,12 @@ static void test_play_abort(void)
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
     par_play(&g_f, &r);
     check_play_call(0, ROM_ISR_PAR_READY, 0x11, 0, 0x33, 4);
-    CHECK_EQ(check_rest_frames(1, 1), 17);
+    CHECK_EQ(check_rest_frames(1, 1), 5);
     check_play_call(1, ROM_ISR_WAIT_FRAME, 0x11, 0, 0x33, 4);
-    CHECK_EQ(g_ncalls, 18);
+    CHECK_EQ(g_ncalls, 6);
     CHECK_EQ(count(ROM_SER_TX_SERVICE), 0);
-    CHECK_EQ(count(ROM_FRM_FINISH_FRAME), 0);
-    for (int b = 0; b < 20; b++)
-        CHECK_EQ(g_ram[ISR_FRAME_B + b], 0xEE);
+    for (int b = 0; b < FRAME_SIZE; b++)
+        CHECK_EQ(g_ram[ISR_FRAME_B + b], b == FRAME_MARK_SPACE ? 47 : 0);
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 5);
     CHECK_EQ(g_ram[SER_ABORT], 1);
     CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 0);
@@ -2233,11 +2204,11 @@ static void test_play_zero_frames_main(void)
     g_abort_at = 3;
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
     par_play(&g_f, &r);
-    static const uint16_t k[] = { ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_FRM_FINISH_FRAME, ROM_ISR_PAR_READY };
-    check_order(0, k, 4);
+    static const uint16_t k[] = { ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY };
+    check_order(0, k, 3);
     check_play_call(1, ROM_ISR_PAR_READY, 0x11, 0, 1, 0xFF);   /* $B908 after the DEC; Y = pros_seg_count ($B8B1) */
-    CHECK_EQ(check_rest_frames(4, 1), 17);
-    CHECK_EQ(g_ncalls, 21);
+    CHECK_EQ(check_rest_frames(3, 1), 5);
+    CHECK_EQ(g_ncalls, 8);
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 1);   /* par_next_segment was not called */
     CHECK(!g_f.fault);
 }
@@ -2265,19 +2236,20 @@ static void test_play_zero_frames_segment(void)
     g_abort_at = 3;
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
     par_play(&g_f, &r);
-    static const uint16_t k[] = { ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_FRM_FINISH_FRAME, ROM_ISR_PAR_READY };
-    check_order(0, k, 4);
+    static const uint16_t k[] = { ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY };
+    check_order(0, k, 3);
     check_play_call(1, ROM_ISR_PAR_READY, 0, 10, 1, 0xFF);   /* A = 0 ($B903), X = 10 (par_next_segment), Y = 1:
                                                                pros_seg_count again at $B8B1 */
-    CHECK_EQ(check_rest_frames(4, 1), 17);
-    CHECK_EQ(g_ncalls, 21);
+    CHECK_EQ(check_rest_frames(3, 1), 5);
+    CHECK_EQ(g_ncalls, 8);
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 1);
     CHECK_EQ(fw_rd16(&g_f, PAR_SEG_INDEX), 4);
     CHECK(!g_f.fault);
 }
 
 /* No segment left and par_frames_left = 0: the DEC at $B8BB gives $FF, and the tight loop builds 255 frames
-   ($FF ... 1), each frm_finish_frame and one isr_par_ready (the flag at every call), before the end. */
+   ($FF ... 1), each par_step_tracks and frm_finish_frame (C) and one isr_par_ready (the flag at every call), before
+   the end. */
 static void test_play_zero_frames_tail(void)
 {
     setup();
@@ -2286,11 +2258,11 @@ static void test_play_zero_frames_tail(void)
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
     par_play(&g_f, &r);
     check_play_call(0, ROM_ISR_PAR_READY, 0x11, 0, 0x33, 0);
-    check_play_call(1, ROM_FRM_FINISH_FRAME, 0, 0, FRAME_PITCH, 0xFF);
-    check_play_call(509, ROM_FRM_FINISH_FRAME, 0, 0, FRAME_PITCH, 1);
-    CHECK_EQ(count(ROM_FRM_FINISH_FRAME), 255);
-    CHECK_EQ(check_rest_frames(511, 1), 17);
-    CHECK_EQ(g_ncalls, 528);
+    check_play_call(1, ROM_ISR_PAR_READY, 0, 0, FRAME_PITCH, 0xFF);     /* frame $FF's wait */
+    check_play_call(255, ROM_ISR_PAR_READY, 0, 0, FRAME_PITCH, 1);      /* frame 1's */
+    CHECK_EQ(count(ROM_ISR_PAR_READY), 1 + 255 + 3 + 1);
+    CHECK_EQ(check_rest_frames(256, 1), 5);
+    CHECK_EQ(g_ncalls, 261);
     CHECK(!g_f.fault);
 }
 
@@ -2318,17 +2290,19 @@ static void test_loop_play_idle(void)
    (C, test_play_start's voice A set-up: Y = the pause phoneme $3B, A = 0); isr_speech_start (A = X = 0 out);
    isr_volume_half; isr_wait_frame; isr_set_volume with A = cmd_volume ($B2C2); par_play (C), here ended by a mute
    at its first isr_par_ready; isr_volume_half; isr_wait_frame; isr_set_volume with A = 0 ($B2D0);
-   isr_speech_stop, whose registers it returns. cmd_volume 9: the half is 4, P3 = (P3 & $87) | (4 ^ $F) << 3. */
+   isr_speech_stop, whose registers it returns. cmd_volume 9: the half is 4, P3 = (P3 & $87) | (4 ^ $F) << 3. The
+   rest frames go to isr_frame_b (isr_fill_ptr as par_setup_voice leaves it); par_play returns the last one's
+   frm_flags, 0. */
 static void test_loop_play(void)
 {
     setup();
+    fill_frame_b();
     pitch_identity();
     fw_wr16(&g_f, PAR_RANK_PTR, PAR_VOICE_A);
     g_ram[PROS_SEG_PHONEME] = 0x3B;
     g_ram[PROS_SEG_PITCH] = 0x70;
     g_ram[FW_UTT_CONTENT] = 0xFF;
     g_ram[CMD_VOLUME] = 9;
-    g_ram[FRM_FLAGS] = 0x5A;
     g_p3 = 0xFF;
     g_flag_every = 1;
     g_abort_at = 1;
@@ -2341,12 +2315,12 @@ static void test_loop_play(void)
     check_call(4, ROM_ISR_SET_VOLUME, 9, 0, 0x3B);               /* cmd_volume */
     check_call(5, ROM_ISR_PAR_READY, 0xB7, 0, 0x3B);             /* par_play: P3 $87 | (9 ^ $F) << 3 = $87 | $30;
                                                                     X = cmd_ev_next 0 */
-    CHECK_EQ(check_rest_frames(6, 1), 17);
-    check_call(23, ROM_ISR_VOLUME_HALF, 0x5A, 0, 0x0D);          /* par_play's exit registers */
-    check_call(24, ROM_ISR_WAIT_FRAME, 0xDF, 0, 0x0D);
-    check_call(25, ROM_ISR_SET_VOLUME, 0, 0, 0x0D);
-    check_call(26, ROM_ISR_SPEECH_STOP, 0xFF, 0, 0x0D);          /* P3 $87 | $F << 3 */
-    CHECK_EQ(g_ncalls, 27);
+    CHECK_EQ(check_rest_frames(6, 1), 5);
+    check_call(11, ROM_ISR_VOLUME_HALF, 0, 0, 0x0D);             /* par_play's exit registers */
+    check_call(12, ROM_ISR_WAIT_FRAME, 0xDF, 0, 0x0D);
+    check_call(13, ROM_ISR_SET_VOLUME, 0, 0, 0x0D);
+    check_call(14, ROM_ISR_SPEECH_STOP, 0xFF, 0, 0x0D);          /* P3 $87 | $F << 3 */
+    CHECK_EQ(g_ncalls, 15);
     CHECK_EQ(g_p3, 0xFF);
     CHECK_EQ(g_ram[PAR_CUR_PHONEME], 0x3B);                      /* par_play_start ran */
     CHECK_EQ(g_ram[PAR_CUR_RANK], 31);

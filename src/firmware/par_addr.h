@@ -17,13 +17,13 @@
 #define ROM_ISR_VOLUME_HALF        0xB46C   /* M4.6; called by boot_loop_play $B2BC, $B2CA */
 #define ROM_PAR_PLAY               0xB877   /* called by boot_loop_play $B2C7; re-entered by its own JMPs $B892,
                                                $B8AE, $B914 */
-#define ROM_FRM_SNAPSHOT           0xB917   /* called by par_play $B8DD (and frm_finish_frame $B9BA) */
-#define ROM_FRM_CLAMP_MARK_SPACE   0xB930   /* called by par_setup_voice $B40A, $B419, par_play $B8E0 (and
-                                               frm_finish_frame $B9BD) */
-#define ROM_FRM_RAISE_FORMANTS     0xB95D   /* called by (frm_finish_frame $B9C0) */
+#define ROM_FRM_SNAPSHOT           0xB917   /* called by par_play $B8DD, frm_finish_frame $B9BA */
+#define ROM_FRM_CLAMP_MARK_SPACE   0xB930   /* called by par_setup_voice $B40A, $B419, par_play $B8E0,
+                                               frm_finish_frame $B9BD */
+#define ROM_FRM_RAISE_FORMANTS     0xB95D   /* called by frm_finish_frame $B9C0 */
 #define ROM_PROS_MICROPROSODY      0xB983   /* called by par_read_segment $BD67 */
-#define ROM_FRM_FINISH_FRAME       0xB9B5   /* M4.5; called by par_play $B8C3, $B90E */
-#define ROM_FRM_TRANSITION_FLAGS   0xBA3F   /* M4.5; called by par_play $B8E3 (and frm_finish_frame $BA36) */
+#define ROM_FRM_FINISH_FRAME       0xB9B5   /* called by par_play $B8C3, $B90E */
+#define ROM_FRM_TRANSITION_FLAGS   0xBA3F   /* called by par_play $B8E3, frm_finish_frame $BA36 */
 #define ROM_PAR_PLAY_START         0xBAF2   /* called by boot_play_body $B2B6 */
 #define ROM_PAR_RESET_TRACKS       0xBB35   /* called by par_play_start $BAF2 */
 #define ROM_CMD_RUN_EVENT          0xBB74   /* called by par_play $B88F */

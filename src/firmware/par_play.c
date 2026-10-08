@@ -1,5 +1,6 @@
 #include "par_play.h"
 #include "cmd_play_event.h"
+#include "frm_build.h"
 #include "fw_ops.h"
 #include "par_addr.h"
 #include "par_start.h"
@@ -77,13 +78,13 @@ static bool segment_frame(fw *f, fw_regs *r)
     }
 }
 
-/* $B908-$B911: isr_par_ready, par_step_tracks, frm_finish_frame (it saves and restores A, X and Y), then LDM #0:
-   the whole of isr_frame_flag cleared, the frame is ready for the next swap. */
+/* $B908-$B911: isr_par_ready, par_step_tracks, frm_finish_frame (C; it keeps A, X and Y), then LDM #0: the whole of
+   isr_frame_flag cleared, the frame is ready for the next swap. */
 static void segment_step(fw *f, fw_regs *r)
 {
     fw_par_ready(f, *r);
     par_step_tracks(f, r);
-    fw_rom_call(f, ROM_FRM_FINISH_FRAME, r, FW_ROM_CALL_BUDGET);
+    frm_finish_frame(f, r);
     fw_wr8(f, ISR_FRAME_FLAG, 0);
 }
 
@@ -93,25 +94,26 @@ static void last_frames(fw *f, fw_regs *r)
 {
     while (count_frame(f) != 0) {
         par_step_tracks(f, r);
-        fw_rom_call(f, ROM_FRM_FINISH_FRAME, r, FW_ROM_CALL_BUDGET);
+        frm_finish_frame(f, r);
         fw_wr8(f, ISR_FRAME_FLAG, 0);
         wait_frame_flag(f, *r);
     }
 }
 
 /* $B8D2-$B8FA, the end: isr_wait_frame; par_frames_left = 3; per rest frame frm_copy_rest_frame, frm_snapshot,
-   frm_clamp_mark_space and frm_transition_flags, a wait for the swap, the flag cleared (LDM #0) and DEC
-   par_frames_left (BNE $B8DA). Then cmd_ev_sound_end (a @T effect cut short is undone) and isr_par_ready. */
+   frm_clamp_mark_space and frm_transition_flags (C, the registers flowing from one to the next), a wait for the
+   swap, the flag cleared (LDM #0) and DEC par_frames_left (BNE $B8DA). Then cmd_ev_sound_end (a @T effect cut short
+   is undone) and isr_par_ready. */
 static void rest_frames(fw *f, fw_regs *r)
 {
     fw_rom_call(f, ROM_ISR_WAIT_FRAME, r, FW_ROM_CALL_BUDGET);
     r->a = PAR_REST_FRAMES;
     fw_wr8(f, PAR_FRAMES_LEFT, r->a);
     do {
-        fw_rom_call(f, ROM_FRM_COPY_REST_FRAME, r, FW_ROM_CALL_BUDGET);
-        fw_rom_call(f, ROM_FRM_SNAPSHOT, r, FW_ROM_CALL_BUDGET);
-        fw_rom_call(f, ROM_FRM_CLAMP_MARK_SPACE, r, FW_ROM_CALL_BUDGET);
-        fw_rom_call(f, ROM_FRM_TRANSITION_FLAGS, r, FW_ROM_CALL_BUDGET);
+        frm_copy_rest_frame(f, r);
+        frm_snapshot(f, r);
+        frm_clamp_mark_space(f, r);
+        frm_transition_flags(f, r);
         wait_frame_flag(f, *r);
         fw_wr8(f, ISR_FRAME_FLAG, 0);
     } while (count_frame(f) != 0);
