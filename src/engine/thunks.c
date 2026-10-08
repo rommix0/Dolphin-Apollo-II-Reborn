@@ -7,6 +7,8 @@
 #include "firmware/cmd_scan.h"
 #include "firmware/cmd_run.h"
 #include "firmware/cmd_apply.h"
+#include "firmware/cmd_play_event.h"
+#include "firmware/fw_ops.h"
 #include "firmware/pros_seg.h"
 #include "firmware/pros_decl.h"
 #include "firmware/ph_expand.h"
@@ -294,6 +296,85 @@ static void par_reset_tracks_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
     par_reset_tracks(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* cmd_run_event $BB74: Y in (handed to the handler, which does not read it); A and X are written first. A, X and Y
+   out as the handler leaves them (the C handler, or the ROM one through rom_call). Its one ROM caller, par_play
+   ($B88F), goes on at $B892 JMP par_play: LDX cmd_ev_next ($B877), then LDA par_seg_index ($B87F) or, past the
+   event test, isr_par_ready (PHA / PLA) and LDY pros_seg_count ($B8B1), par_next_segment or par_step_tracks (each
+   loads A, X and Y before reading them), or isr_wait_frame and LDA #3 ($B8D5). No caller reads a flag (JMP, LDX
+   follow). From the ROM par_play only. Declared: A, X, Y. */
+static void cmd_run_event_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    cmd_run_event(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* cmd_ev_index $BBA0: no register input; A, X and Y untouched (TST / DEC). Entered by cmd_run_event's JMP
+   (cmd_ev_vector) ($BB9D); its RTS returns to par_play $B892 (JMP par_play: LDX, as cmd_run_event's row). No caller
+   reads a flag. Declared: A, X, Y. */
+static void cmd_ev_index_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    cmd_ev_index(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* cmd_ev_sound_start $BBA7: A in (the effect; X and Y are written before they are read: TAX at $BBAA, LDY #0 at
+   $BC36). A = 0, X = cmd_ev_next << 1 and Y = the end's index out. Entered by cmd_run_event's JMP (cmd_ev_vector)
+   ($BB9D); its RTS returns to par_play $B892 (JMP par_play: LDX, as cmd_run_event's row). No caller reads a flag.
+   Declared: A, X, Y. */
+static void cmd_ev_sound_start_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    cmd_ev_sound_start(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* cmd_ev_sound_end $BC80: no register input. A = cmd_sound_state[6] when it restores, else as it came in; X and Y
+   untouched. Entered by cmd_run_event's JMP (cmd_ev_vector) ($BB9D), returning to par_play $B892 (JMP par_play:
+   LDX, as cmd_run_event's row), and called by par_play $B8F4, which calls isr_par_ready next (PHA / PLA, A, X and Y
+   preserved) and returns ($B8FA RTS) to boot_play_body $B2CA, JSR isr_volume_half (LDA cmd_volume first). No caller
+   reads a flag. From the ROM par_play only. Declared: A, X, Y. */
+static void cmd_ev_sound_end_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    cmd_ev_sound_end(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* cmd_ev_set_voicing $BCEA: A in; A, X and Y untouched (STA cmd_voicing). Entered by cmd_run_event's JMP
+   (cmd_ev_vector) ($BB9D); its RTS returns to par_play $B892 (JMP par_play: LDX, as cmd_run_event's row). No caller
+   reads a flag. Declared: A, X, Y. */
+static void cmd_ev_set_voicing_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    cmd_ev_set_voicing(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* cmd_ev_set_volume $BCED: A in (X and Y reach isr_set_volume, which does not read them). A, X and Y out as
+   isr_set_volume leaves them (A = the new P3 value, X and Y untouched). Entered by cmd_run_event's JMP
+   (cmd_ev_vector) ($BB9D); its RTS returns to par_play $B892 (JMP par_play: LDX, as cmd_run_event's row). No caller
+   reads a flag. Declared: A, X, Y. */
+static void cmd_ev_set_volume_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    cmd_ev_set_volume(f, &r);
     c->a = r.a;
     c->x = r.x;
     c->y = r.y;
@@ -607,6 +688,28 @@ static void cmd_hex_value_regs(fw *f, cpu740 *c)
     c->p = (uint8_t)(v == 0 ? c->p | CPU740_Z : c->p & ~CPU740_Z);
 }
 
+/* util_shl4 $C656: A in; A << 4 out (8 bits); X and Y untouched. Callers read A: cmd_apply_pitch ($A838 ORA
+   cmd_prosody, $A842 STA pros_pitch_centre), cmd_set_formant ($A955 STA $75), cmd_set_mark_space ($A9B0 STA $75),
+   cmd_hex_byte ($B458 STA $1809); the first two of these read X next ($A957, $A9B2 INX), which util_shl4 leaves. No
+   caller reads a flag (ORA, STA follow; the carry is not read). All four callers are C and inline it: in "all"
+   mode it never fires. Declared: A, X, Y. */
+static void util_shl4_regs(fw *f, cpu740 *c)
+{
+    (void)f;
+    c->a = util_shl4(c->a);
+}
+
+/* util_shl3 $C657: A in; A << 3 out (8 bits); X and Y untouched. Callers read A: isr_set_volume ($ACEF STA $75),
+   cmd_ev_sound_start ($BBAA TAX); the ROM util_shl4 falls into it ($C656 ASL), so its callers' reads apply too (A,
+   above). No caller reads a flag (STA, TAX follow). Fires in "all" mode from the ROM isr_set_volume, which stays
+   ROM (M4.6; called by boot_reset $A642, boot_loop_play $B2C4/$B2D2, isr_volume_half $B46F and cmd_ev_set_volume
+   $BCEF, the C ones through rom_call). Declared: A, X, Y. */
+static void util_shl3_regs(fw *f, cpu740 *c)
+{
+    (void)f;
+    c->a = util_shl3(c->a);
+}
+
 /* ph_append_phrase_pause $C9B8: no register input; A, X and Y out as they came in (PHA / TYA / PHA, then the exit
    JMP $CA6D into pros_append_segment's PLA / TAY / PLA / RTS; X untouched). The C makes no ROM call, so the thunk
    leaves all three as they are. The only caller, pros_phrase_gen ($D1DA, $D1DD), calls it twice in a row (the
@@ -784,6 +887,12 @@ THUNK(par_setup_voice)
 THUNK(pros_microprosody)
 THUNK(par_play_start)
 THUNK(par_reset_tracks)
+THUNK(cmd_run_event)
+THUNK(cmd_ev_index)
+THUNK(cmd_ev_sound_start)
+THUNK(cmd_ev_sound_end)
+THUNK(cmd_ev_set_voicing)
+THUNK(cmd_ev_set_volume)
 THUNK(par_next_segment)
 THUNK(par_next_row)
 THUNK(par_next_param)
@@ -807,6 +916,8 @@ THUNK(par_track_start)
 THUNK(par_track_end)
 THUNK(par_scale_duration)
 THUNK(cmd_hex_value)
+THUNK(util_shl4)
+THUNK(util_shl3)
 THUNK(ph_append_phrase_pause)
 THUNK(ph_append_pause)
 THUNK(pros_append_segment)
@@ -841,6 +952,12 @@ const fw_replacement fw_replacements[] = {
     { "pros_microprosody",  0xB983, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_microprosody },
     { "par_play_start",     0xBAF2, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_play_start },
     { "par_reset_tracks",   0xBB35, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_reset_tracks },
+    { "cmd_run_event",      0xBB74, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_run_event },
+    { "cmd_ev_index",       0xBBA0, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_ev_index },
+    { "cmd_ev_sound_start", 0xBBA7, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_ev_sound_start },
+    { "cmd_ev_sound_end",   0xBC80, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_ev_sound_end },
+    { "cmd_ev_set_voicing", 0xBCEA, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_ev_set_voicing },
+    { "cmd_ev_set_volume",  0xBCED, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_ev_set_volume },
     { "par_next_segment",   0xBCF3, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_next_segment },
     { "par_next_row",       0xBD07, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_next_row },
     { "par_next_param",     0xBD14, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_next_param },
@@ -864,6 +981,8 @@ const fw_replacement fw_replacements[] = {
     { "par_track_end",      0xC26C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_end },
     { "par_scale_duration", 0xC29C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_duration },
     { "cmd_hex_value",      0xC520, FW_OUT_A | FW_OUT_X | FW_OUT_Y | FW_OUT_Z, t_cmd_hex_value },
+    { "util_shl4",          0xC656, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_util_shl4 },
+    { "util_shl3",          0xC657, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_util_shl3 },
     { "ph_append_phrase_pause", 0xC9B8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_phrase_pause },
     { "ph_append_pause",    0xCA15, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_pause },
     { "pros_append_segment", 0xCA3B, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_append_segment },

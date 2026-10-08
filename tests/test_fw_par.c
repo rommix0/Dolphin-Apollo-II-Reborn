@@ -7,6 +7,9 @@
 #include <string.h>
 #include "test.h"
 #include "engine/thunks.h"
+#include "firmware/cmd_addr.h"
+#include "firmware/cmd_play_event.h"
+#include "firmware/fw_ops.h"
 #include "firmware/par_addr.h"
 #include "firmware/par_boundary.h"
 #include "firmware/par_segment.h"
@@ -32,9 +35,10 @@ static fw g_f;
 static fw_host g_host;
 static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
+static uint8_t g_p3;             /* the port P3 the mock isr_set_volume reads and writes (an SFR: not in g_ram) */
 
-/* Records every ROM call. The three frame routines par_setup_voice calls (M4.5) return the registers the ROM ones
-   leave; any other call fails (no other routine of the playback set-up makes one). */
+/* Records every ROM call. The three frame routines par_setup_voice calls (M4.5) and isr_set_volume (M4.6, called by
+   cmd_ev_set_volume) return the registers the ROM ones leave; any other call fails. */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     (void)ctx;
@@ -63,6 +67,12 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
     case ROM_FRM_CLAMP_MARK_SPACE:   /* $B930-$B95C: LDY #$0A, INY; LDA #$0B at $B954; X untouched */
         r->a = 0x0B;
         r->y = 0x0B;
+        return FW_CALL_RETURNED;
+    case ROM_ISR_SET_VOLUME:         /* $ACE8-$ACF9: EOR #$F / AND #$F / JSR util_shl3 / STA $75 / LDA #$87 / AND P3 /
+                                        ORA $75 / STA P3: A = the new P3; X and Y untouched ($75, the ROM's scratch,
+                                        is not modelled) */
+        g_p3 = (uint8_t)((g_p3 & 0x87) | util_shl3((uint8_t)((r->a ^ 0x0F) & 0x0F)));
+        r->a = g_p3;
         return FW_CALL_RETURNED;
     default:
         return FW_CALL_FAILED;
@@ -1634,6 +1644,327 @@ static void test_step_tracks(void)
     check_no_calls();
 }
 
+/* ---- the command events (M4.4b Task 3) ---- */
+
+static void test_event_rows(void)
+{
+    check_row("cmd_run_event", ROM_CMD_RUN_EVENT, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("cmd_ev_index", ROM_CMD_EV_INDEX, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("cmd_ev_sound_start", ROM_CMD_EV_SOUND_START, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("cmd_ev_sound_end", ROM_CMD_EV_SOUND_END, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("cmd_ev_set_voicing", ROM_CMD_EV_SET_VOICING, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("cmd_ev_set_volume", ROM_CMD_EV_SET_VOLUME, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("util_shl4", ROM_UTIL_SHL4, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("util_shl3", ROM_UTIL_SHL3, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+}
+
+/* cmd_ev_index with cmd_index_count = n: TST / BEQ $BBA6 (0: nothing written), else DEC. A, X and Y untouched. */
+static void ev_index_case(uint8_t n, uint8_t want)
+{
+    static const uint16_t w[] = { CMD_INDEX_COUNT };
+    setup();
+    g_ram[CMD_INDEX_COUNT] = n;
+    snapshot();
+    fw_regs r = { 0x11, 0x5A, 0xA5, 0 };
+    cmd_ev_index(&g_f, &r);
+    CHECK_EQ(g_ram[CMD_INDEX_COUNT], want);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0x5A);
+    CHECK_EQ(r.y, 0xA5);
+    check_written(w, 1);
+    check_no_calls();
+}
+
+static void test_ev_index(void)
+{
+    ev_index_case(0, 0);         /* $BBA2 BEQ taken: only an 8-bit wrap of the count reaches it */
+    ev_index_case(1, 0);
+    ev_index_case(0xFF, 0xFE);
+}
+
+/* cmd_ev_set_voicing: STA cmd_voicing; RTS. */
+static void test_set_voicing(void)
+{
+    static const uint16_t w[] = { CMD_VOICING };
+    setup();
+    g_ram[CMD_VOICING] = 2;
+    snapshot();
+    fw_regs r = { 9, 0x5A, 0xA5, 0 };
+    cmd_ev_set_voicing(&g_f, &r);
+    CHECK_EQ(g_ram[CMD_VOICING], 9);
+    CHECK_EQ(r.a, 9);
+    CHECK_EQ(r.x, 0x5A);
+    CHECK_EQ(r.y, 0xA5);
+    check_written(w, 1);
+    check_no_calls();
+}
+
+/* cmd_ev_set_volume with volume v and the P3 latch p3: STA cmd_volume; JSR isr_set_volume with the entry A, X and Y;
+   out what it leaves: A = (p3 & $87) | ((v ^ $F) & $F) << 3 (the mock's model of $ACE8), X and Y untouched. */
+static void set_volume_case(uint8_t v, uint8_t p3, uint8_t want_a)
+{
+    static const uint16_t w[] = { CMD_VOLUME };
+    setup();
+    g_p3 = p3;
+    g_ram[CMD_VOLUME] = 0xEE;
+    snapshot();
+    fw_regs r = { v, 0x5A, 0xA5, 0 };
+    cmd_ev_set_volume(&g_f, &r);
+    CHECK_EQ(g_ram[CMD_VOLUME], v);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, ROM_ISR_SET_VOLUME, v, 0x5A, 0xA5);
+    CHECK_EQ(r.a, want_a);
+    CHECK_EQ(r.x, 0x5A);
+    CHECK_EQ(r.y, 0xA5);
+    check_written(w, 1);
+    CHECK(!g_f.fault);
+}
+
+static void test_set_volume(void)
+{
+    set_volume_case(0x0A, 0xFF, 0xAF);   /* $0A ^ $F = 5, << 3 = $28; $FF & $87 = $87 */
+    set_volume_case(0x00, 0x00, 0x78);   /* silent: $F << 3 */
+    set_volume_case(0x0F, 0x3C, 0x04);   /* full: 0; $3C & $87 = $04 */
+}
+
+/* The playback state cmd_ev_sound_start saves, set to distinct values: the pointers $22-$29 = $10-$17, par_seg_index
+   = $1234, pros_seg_count = $0156, cmd_voicing 5, pros_pitch_centre $66, cmd_source_prosody $27, pros_play_target
+   $55, par_next_phoneme $3A, par_next_rank $0C; par_rank_ptr = voice A; the save area, the end event's position and
+   cmd_ev_pos $EE; cmd_sound_active $80 (bit 7 is not the flag). */
+static void sound_state(void)
+{
+    for (uint8_t i = 0; i < 8; i++)
+        g_ram[PROS_PHONEME_PTR + i] = (uint8_t)(0x10 + i);
+    fw_wr16(&g_f, PAR_RANK_PTR, PAR_VOICE_A);
+    fw_wr16(&g_f, PAR_SEG_INDEX, 0x1234);
+    fw_wr16(&g_f, PROS_SEG_COUNT, 0x0156);
+    g_ram[CMD_VOICING] = 5;
+    g_ram[PROS_PITCH_CENTRE] = 0x66;
+    g_ram[CMD_SOURCE_PROSODY] = 0x27;
+    g_ram[PROS_PLAY_TARGET] = 0x55;
+    g_ram[PAR_NEXT_PHONEME] = 0x3A;
+    g_ram[PAR_NEXT_RANK] = 0x0C;
+    memset(g_ram + CMD_SOUND_SAVE, 0xEE, 8);
+    memset(g_ram + CMD_SOUND_SEG_INDEX, 0xEE, 2);
+    memset(g_ram + CMD_SOUND_STATE, 0xEE, 8);
+    memset(g_ram + CMD_EV_POSITIONS, 0xEE, 256);
+    fw_wr16(&g_f, CMD_EV_POS, 0xEEEE);
+    g_ram[CMD_SOUND_ACTIVE] = 0x80;
+}
+
+/* cmd_ev_sound_start for effect e with cmd_ev_next = next, on sound_state(): the effect's four pointers from
+   cmd_sound_table (phonemes, durations, pitches; the flags are shared, $9FFC), its first phoneme 59 and that
+   phoneme's rank, and the end at index len. Then cmd_ev_sound_end restores all but the save area, the end event
+   and cmd_ev_pos. */
+static void sound_case(uint8_t e, uint8_t next, uint16_t phonemes, uint16_t durations, uint16_t pitches, uint8_t len)
+{
+    uint16_t at = (uint16_t)(CMD_EV_POSITIONS + (uint8_t)(next << 1));   /* LDX / TXA / ASL / TAX: 8 bits */
+    const uint16_t w[] = {
+        PROS_PHONEME_PTR, PROS_PHONEME_PTR + 1, PROS_DURATION_PTR, PROS_DURATION_PTR + 1, PROS_PITCH_PTR,
+        PROS_PITCH_PTR + 1, PROS_FLAGS_PTR, PROS_FLAGS_PTR + 1,
+        CMD_SOUND_SAVE, CMD_SOUND_SAVE + 1, CMD_SOUND_SAVE + 2, CMD_SOUND_SAVE + 3, CMD_SOUND_SAVE + 4,
+        CMD_SOUND_SAVE + 5, CMD_SOUND_SAVE + 6, CMD_SOUND_SAVE + 7,
+        CMD_SOUND_SEG_INDEX, CMD_SOUND_SEG_INDEX + 1,
+        CMD_SOUND_STATE, CMD_SOUND_STATE + 1, CMD_SOUND_STATE + 2, CMD_SOUND_STATE + 3, CMD_SOUND_STATE + 4,
+        CMD_SOUND_STATE + 5, CMD_SOUND_STATE + 6, CMD_SOUND_STATE + 7,
+        PAR_NEXT_PHONEME, PAR_NEXT_RANK, PROS_PITCH_CENTRE, CMD_SOURCE_PROSODY, CMD_VOICING,
+        PAR_SEG_INDEX, PAR_SEG_INDEX + 1, PROS_SEG_COUNT, PROS_SEG_COUNT + 1,
+        at, (uint16_t)(at + 1), CMD_EV_POS, CMD_EV_POS + 1, CMD_SOUND_ACTIVE,
+    };
+    setup();
+    sound_state();
+    g_ram[CMD_EV_NEXT] = next;
+    snapshot();
+    fw_regs r = { e, 0x5A, 0xA5, 0 };
+    cmd_ev_sound_start(&g_f, &r);
+    for (uint8_t i = 0; i < 8; i++)                                    /* the old pointers saved, low byte first */
+        CHECK_EQ(g_ram[CMD_SOUND_SAVE + i], 0x10 + i);
+    CHECK_EQ(fw_rd16(&g_f, PROS_PHONEME_PTR), phonemes);
+    CHECK_EQ(fw_rd16(&g_f, PROS_DURATION_PTR), durations);
+    CHECK_EQ(fw_rd16(&g_f, PROS_PITCH_PTR), pitches);
+    CHECK_EQ(fw_rd16(&g_f, PROS_FLAGS_PTR), CMD_SOUND_DATA);       /* fw_cmd_sound_flags lands first, at $9FFC */
+    CHECK_EQ(fw_rd16(&g_f, CMD_SOUND_SEG_INDEX), 0x1234);
+    static const uint8_t state[8] = { 0x56, 0x01, 5, 0x66, 0x27, 0x55, 0x0C, 0x3A };
+    for (unsigned i = 0; i < 8; i++)
+        CHECK_EQ(g_ram[CMD_SOUND_STATE + i], state[i]);
+    CHECK_EQ(g_ram[PAR_NEXT_PHONEME], 59);                         /* every effect starts with phoneme 59 */
+    CHECK_EQ(g_ram[PAR_NEXT_RANK], fw_par_voice_a[59].rank);       /* (par_rank_ptr),59: voice A's rank row */
+    CHECK_EQ(g_ram[PROS_PITCH_CENTRE], CMD_SOUND_PITCH_CENTRE);
+    CHECK_EQ(g_ram[CMD_SOURCE_PROSODY], CMD_SOUND_SOURCE_PROSODY);
+    CHECK_EQ(g_ram[CMD_VOICING], CMD_SOUND_VOICING);
+    CHECK_EQ(fw_rd16(&g_f, PAR_SEG_INDEX), 0);
+    CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 0x00FF);               /* STY pros_seg_count with Y = $FF */
+    CHECK_EQ(fw_rd16(&g_f, at), len);                              /* the end event's position: the length */
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), len);
+    CHECK_EQ(g_ram[CMD_SOUND_ACTIVE], 0x81);                       /* SEB0 */
+    CHECK_EQ(r.a, 0);                                              /* LDA #0 at $BC75 */
+    CHECK_EQ(r.x, (uint8_t)(next << 1));
+    CHECK_EQ(r.y, len);                                            /* the scan's Y */
+    check_written(w, sizeof w / sizeof w[0]);
+    check_no_calls();
+
+    fw_regs s = { 0x11, 0x22, 0x33, 0 };
+    cmd_ev_sound_end(&g_f, &s);
+    CHECK_EQ(s.a, 0x0C);                                           /* the last LDA, cmd_sound_state[6] */
+    CHECK_EQ(s.x, 0x22);
+    CHECK_EQ(s.y, 0x33);
+    for (uint8_t i = 0; i < 8; i++) {                              /* what the end only reads stays as the start */
+        g_before[CMD_SOUND_SAVE + i] = (uint8_t)(0x10 + i);       /* wrote it; the end event and cmd_ev_pos too */
+        g_before[CMD_SOUND_STATE + i] = state[i];
+    }
+    g_before[CMD_SOUND_SEG_INDEX] = 0x34;
+    g_before[CMD_SOUND_SEG_INDEX + 1] = 0x12;
+    g_before[at] = len;
+    g_before[at + 1] = 0;
+    g_before[CMD_EV_POS] = len;
+    g_before[CMD_EV_POS + 1] = 0;
+    check_written(NULL, 0);                                        /* the rest restored, cmd_sound_active $80 (CLB0) */
+    check_no_calls();
+}
+
+static void test_sound_start_end(void)
+{
+    sound_case(0, 3, 0xA00E, 0xA012, 0xA015, 3);    /* @T0: 59 77 59, $FF at index 3; the end event at $120C */
+    sound_case(16, 3, 0xA183, 0xA185, 0xA186, 1);   /* @TG/@TX: 59, $FF at index 1 */
+    sound_case(0, 0x80, 0xA00E, 0xA012, 0xA015, 3); /* cmd_ev_next = 128: ASL wraps, X = 0: positions[0] */
+}
+
+/* A = $15 (never queued: @T takes 0-16): util_shl3 gives X = $A8, past the 17 entries, and the bytes there (the @T
+   arrays at $A01C) point the phonemes at $2805, RAM, all zero here. No end in 256 bytes: the ROM would loop
+   forever; the C faults at ROM_CMD_EV_SOUND_START before the end event. */
+static void test_sound_start_no_end(void)
+{
+    setup();
+    sound_state();
+    g_ram[CMD_EV_NEXT] = 3;
+    fw_regs r = { 0x15, 0x5A, 0xA5, 0 };
+    cmd_ev_sound_start(&g_f, &r);
+    CHECK_EQ(fw_rd16(&g_f, PROS_PHONEME_PTR), 0x2805);
+    CHECK(g_f.fault);
+    CHECK_EQ(g_f.fault_addr, ROM_CMD_EV_SOUND_START);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0xEEEE);                   /* the end event is not written */
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POSITIONS + 6), 0xEEEE);
+    CHECK_EQ(g_ram[CMD_SOUND_ACTIVE], 0x80);
+    CHECK_EQ(g_ncalls, 0);
+}
+
+/* cmd_ev_sound_end with cmd_sound_active bit 0 clear: BBS0 not taken, RTS: nothing written, A, X, Y untouched. */
+static void test_sound_end_inactive(void)
+{
+    setup();
+    sound_state();
+    g_ram[CMD_SOUND_ACTIVE] = 0xFE;
+    snapshot();
+    fw_regs r = { 0x11, 0x5A, 0xA5, 0 };
+    cmd_ev_sound_end(&g_f, &r);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0x5A);
+    CHECK_EQ(r.y, 0xA5);
+    check_written(NULL, 0);
+    check_no_calls();
+}
+
+/* cmd_run_event with cmd_ev_next = next: the handler word at $1306 + (next << 1) and the next position at $1206 +
+   (next << 1) + 2 (each 8 bits), the argument at $1406 + next; the entry A and X are not read, Y reaches the
+   handler. Sets those and runs it; the caller checks cmd_ev_pos (a @T start rewrites it) and the handler's work. */
+static void run_event(uint8_t next, uint16_t handler, uint16_t pos, uint8_t arg, fw_regs *r)
+{
+    uint8_t x = (uint8_t)(next << 1);
+    fw_wr16(&g_f, (uint16_t)(CMD_EV_HANDLERS + x), handler);
+    fw_wr16(&g_f, (uint16_t)(CMD_EV_POSITIONS + (uint8_t)(x + 2)), pos);
+    g_ram[CMD_EV_ARGS + next] = arg;
+    g_ram[CMD_EV_NEXT] = next;
+    g_ram[CMD_EV_COUNT] = 0x7F;                                    /* not read by cmd_run_event */
+    snapshot();
+    cmd_run_event(&g_f, r);
+    CHECK_EQ(g_ram[CMD_EV_NEXT], (uint8_t)(next + 1));
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_VECTOR), handler);
+}
+
+static void test_run_event(void)
+{
+    static const uint16_t w_voicing[] = { CMD_EV_NEXT, CMD_EV_VECTOR, CMD_EV_VECTOR + 1, CMD_EV_POS, CMD_EV_POS + 1,
+                                          CMD_VOICING };
+    setup();                                                       /* @B7 queued third: X = 4, then 6 */
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    run_event(2, ROM_CMD_EV_SET_VOICING, 0x0123, 7, &r);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0x0123);
+    CHECK_EQ(g_ram[CMD_VOICING], 7);
+    CHECK_EQ(r.a, 7);                                              /* the handler's A, X, Y: A = the argument, */
+    CHECK_EQ(r.x, 2);                                              /* X = cmd_ev_next - 1, */
+    CHECK_EQ(r.y, 0x33);                                           /* Y as par_play had it */
+    check_written(w_voicing, sizeof w_voicing / sizeof w_voicing[0]);
+    check_no_calls();
+
+    static const uint16_t w_index[] = { CMD_EV_NEXT, CMD_EV_VECTOR, CMD_EV_VECTOR + 1, CMD_EV_POS, CMD_EV_POS + 1,
+                                        CMD_INDEX_COUNT };
+    setup();                                                       /* the last of 128: X = $FE, INX / INX wrap to 0 */
+    g_ram[CMD_INDEX_COUNT] = 5;
+    r = (fw_regs){ 0x11, 0x22, 0x33, 0 };
+    run_event(127, ROM_CMD_EV_INDEX, 0x0456, 0x99, &r);           /* handler at $1404, position at $1206 */
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0x0456);
+    CHECK_EQ(g_ram[CMD_INDEX_COUNT], 4);
+    CHECK_EQ(r.a, 0x99);                                           /* LDA $1406,X with X = 127: $1485 */
+    CHECK_EQ(r.x, 127);
+    CHECK_EQ(r.y, 0x33);
+    check_written(w_index, sizeof w_index / sizeof w_index[0]);
+    check_no_calls();
+
+    setup();                                                       /* @A3, queued first: isr_set_volume in ROM */
+    g_p3 = 0;
+    r = (fw_regs){ 0x11, 0x22, 0x33, 0 };
+    run_event(0, ROM_CMD_EV_SET_VOLUME, 0x0010, 3, &r);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0x0010);
+    CHECK_EQ(g_ram[CMD_VOLUME], 3);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, ROM_ISR_SET_VOLUME, 3, 0, 0x33);
+    CHECK_EQ(r.a, 0x60);                                           /* $C << 3 */
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0x33);
+    CHECK(!g_f.fault);
+
+    setup();                                                       /* @T5, start then end, as cmd_sound queues them */
+    sound_state();
+    r = (fw_regs){ 0x11, 0x22, 0x33, 0 };
+    run_event(4, ROM_CMD_EV_SOUND_START, 0x0040, 5, &r);           /* the end event's position, cmd_sound's own */
+    CHECK_EQ(fw_rd16(&g_f, PROS_PHONEME_PTR), 0xA040);
+    CHECK_EQ(g_ram[CMD_SOUND_ACTIVE], 0x81);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POSITIONS + 10), 3);            /* the start rewrote the next event's position */
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 3);                        /* (X = cmd_ev_next << 1 = 10) and cmd_ev_pos */
+    CHECK_EQ(r.a, 0);
+    CHECK_EQ(r.x, 10);
+    CHECK_EQ(r.y, 3);
+    fw_wr16(&g_f, CMD_EV_HANDLERS + 10, ROM_CMD_EV_SOUND_END);
+    g_ram[CMD_EV_ARGS + 5] = 5;
+    r = (fw_regs){ 0x11, 0x22, 0x33, 0 };
+    cmd_run_event(&g_f, &r);
+    CHECK_EQ(g_ram[CMD_EV_NEXT], 6);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0xEEEE);                   /* positions[6], still sound_state()'s */
+    CHECK_EQ(g_ram[CMD_SOUND_ACTIVE], 0x80);
+    CHECK_EQ(fw_rd16(&g_f, PROS_PHONEME_PTR), 0x1110);
+    CHECK_EQ(r.a, 0x0C);
+    CHECK_EQ(r.x, 5);
+    CHECK_EQ(r.y, 0x33);
+    check_no_calls();
+}
+
+/* A handler word that is none of the five (the producers queue none): the same bookkeeping, then fw_rom_call at
+   that address with A = the argument, X = cmd_ev_next - 1 and the entry Y, as JMP (cmd_ev_vector) hands them over.
+   The mock fails the call, so the C faults there. */
+static void test_run_event_rom(void)
+{
+    static const uint16_t w[] = { CMD_EV_NEXT, CMD_EV_VECTOR, CMD_EV_VECTOR + 1, CMD_EV_POS, CMD_EV_POS + 1 };
+    setup();
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    run_event(1, 0xABCD, 0x0200, 0x42, &r);
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0x0200);
+    CHECK_EQ(g_ncalls, 1);
+    check_call(0, 0xABCD, 0x42, 1, 0x33);
+    CHECK(g_f.fault);
+    CHECK_EQ(g_f.fault_addr, 0xABCD);
+    check_written(w, sizeof w / sizeof w[0]);
+}
+
 void suite_fw_par(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -1669,4 +2000,13 @@ void suite_fw_par(void)
     test_track_sequential();
     test_track_overlap();
     test_step_tracks();
+    test_event_rows();
+    test_ev_index();
+    test_set_voicing();
+    test_set_volume();
+    test_sound_start_end();
+    test_sound_start_no_end();
+    test_sound_end_inactive();
+    test_run_event();
+    test_run_event_rom();
 }
