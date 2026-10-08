@@ -18,6 +18,7 @@
 #include "firmware/pros_play.h"
 #include "firmware/par_boundary.h"
 #include "firmware/par_start.h"
+#include "firmware/par_track.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -505,6 +506,84 @@ static void par_plan_tracks_regs(fw *f, cpu740 *c)
     c->y = r.y;
 }
 
+/* par_step_tracks $C0FF: nothing in (LDX #$0A first; A and Y are loaded before they are read). A = pros_play_pitch
+   >> 2, X = 0, Y = 10 out. Its ROM caller par_play ($B8C0, $B90B) calls frm_finish_frame next, which pushes A, X and
+   Y and restores them ($B9B5-$B9B9, $BA39-$BA3D; its frm_snapshot loads Y and X first, $B917, $B922); then par_play
+   writes X ($B877 LDX cmd_ev_next) or calls isr_par_ready (PHA / PLA), isr_wait_frame or par_step_tracks, none of
+   which reads them, before it writes A, X and Y. No caller reads a flag. Declared: A, X, Y. */
+static void par_step_tracks_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_step_tracks(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_track_sequential $C14C: X (the parameter) in. A = the frame byte's value, X untouched, Y = its index
+   (par_slot_map) out. par_step_tracks reads X ($C10F DEX; BNE) and loads A ($C101, $C118) and Y ($C112) before
+   reading them. No caller reads a flag. Declared: A, X, Y. */
+static void par_track_sequential_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_track_sequential(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* util_interp_step $C1A1: A (the target) and Y (the steps) in, util_interp_cur / _steps / _target in RAM. A = the
+   value, X untouched, Y = 0, Y - 2 or the quotient out. The callers store A at once: par_track_sequential ($C166
+   STA $16FC,X; $C198 STA $17BF,X), par_track_overlap ($C213 STA $170C,X), par_track_start ($C268 STA $16FC,X) and
+   par_track_end ($C291 STA $175C,X) with X; par_step_tracks ($C127 STA pros_play_pitch, LSR, LSR) reads A only. Y is
+   loaded before it is read on every path ($C169/$C19B/$C216 LDY $B796,X, $C12C LDY #$0A; after par_track_start and
+   par_track_end's RTS, par_track_overlap's $C1F5 STA and par_track_end's $C26C LDY, or $C1FB STA and $C1FE LDY).
+   No caller reads a flag. Declared: A, X, Y. */
+static void util_interp_step_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    util_interp_step(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_track_overlap $C1F2: X (the parameter) in. A = the median written, X untouched, Y = the frame byte's index out.
+   par_step_tracks reads X ($C109 JMP $C10F: DEX; BNE) and loads A and Y before reading them. No caller reads a flag.
+   Declared: A, X, Y. */
+static void par_track_overlap_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_track_overlap(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_track_start $C24A: X in. A = the start track's value, X untouched, Y = 0 or util_interp_step's out.
+   par_track_overlap reads A ($C1F5 STA par_start_track) and X (par_track_end's $C26C LDY $176C,X), which loads Y
+   first. No caller reads a flag. Declared: A, X, Y. */
+static void par_track_start_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_track_start(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_track_end $C26C: X in. A = the end track's value, X untouched, Y = the wait count, or util_interp_step's out.
+   par_track_overlap reads A ($C1FB STA par_end_track) and X ($C204 LDA $170C,X), and loads Y first ($C1FE LDY
+   par_frames_left). No caller reads a flag. Declared: A, X, Y. */
+static void par_track_end_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_track_end(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
 /* par_scale_duration $C29C: A and Y in (Y is saved in $78 and restored). A out; X untouched; Y as it came in.
    par_boundary_cur_dom reads A and X at $BF06 (STA $171D,X), Y at $BF0C (LDA ($32),Y) and A at $BF11 (STA
    par_trans_dur); par_boundary_next_dom reads A at $BF4B, Y at $BF51, A and X at $BF56. No caller reads a flag
@@ -720,6 +799,12 @@ THUNK(par_read_dominance)
 THUNK(par_scale_voicing)
 THUNK(par_boundary_value)
 THUNK(par_plan_tracks)
+THUNK(par_step_tracks)
+THUNK(par_track_sequential)
+THUNK(util_interp_step)
+THUNK(par_track_overlap)
+THUNK(par_track_start)
+THUNK(par_track_end)
 THUNK(par_scale_duration)
 THUNK(cmd_hex_value)
 THUNK(ph_append_phrase_pause)
@@ -771,6 +856,12 @@ const fw_replacement fw_replacements[] = {
     { "par_scale_voicing",  0xBFC3, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_voicing },
     { "par_boundary_value", 0xC039, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_boundary_value },
     { "par_plan_tracks",    0xC0D2, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_plan_tracks },
+    { "par_step_tracks",    0xC0FF, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_step_tracks },
+    { "par_track_sequential", 0xC14C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_sequential },
+    { "util_interp_step",   0xC1A1, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_util_interp_step },
+    { "par_track_overlap",  0xC1F2, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_overlap },
+    { "par_track_start",    0xC24A, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_start },
+    { "par_track_end",      0xC26C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_end },
     { "par_scale_duration", 0xC29C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_duration },
     { "cmd_hex_value",      0xC520, FW_OUT_A | FW_OUT_X | FW_OUT_Y | FW_OUT_Z, t_cmd_hex_value },
     { "ph_append_phrase_pause", 0xC9B8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_phrase_pause },

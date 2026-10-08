@@ -11,6 +11,7 @@
 #include "firmware/par_boundary.h"
 #include "firmware/par_segment.h"
 #include "firmware/par_start.h"
+#include "firmware/par_track.h"
 #include "firmware/pros_play.h"
 #include "firmware/data/fw_data.h"
 
@@ -1209,6 +1210,430 @@ static void test_setup_voice(void)
     setup_voice_case(0x10F0, 0xFF);
 }
 
+/* ---- the tracks (M4.4b Task 2) ---- */
+
+static void test_track_rows(void)
+{
+    check_row("par_step_tracks", ROM_PAR_STEP_TRACKS, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_track_sequential", ROM_PAR_TRACK_SEQUENTIAL, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("util_interp_step", ROM_UTIL_INTERP_STEP, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_track_overlap", ROM_PAR_TRACK_OVERLAP, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_track_start", ROM_PAR_TRACK_START, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("par_track_end", ROM_PAR_TRACK_END, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+}
+
+/* One util_interp_step call: A = a, Y = y, X = $5A, util_interp_cur = cur, util_interp_steps = steps,
+   util_interp_target = $77 (so a return of it shows), util_interp_quot = $EE. Out: A, Y, and util_interp_steps and
+   util_interp_quot as the ROM leaves them ($EE: not written); X untouched, nothing else written, no fault. */
+static void interp_case(uint8_t a, uint8_t y, uint8_t cur, uint8_t steps, uint8_t want_a, uint8_t want_y,
+                        uint8_t want_steps, uint8_t want_quot)
+{
+    static const uint16_t w[] = { UTIL_INTERP_STEPS, UTIL_INTERP_QUOT };
+    setup();
+    g_ram[UTIL_INTERP_CUR] = cur;
+    g_ram[UTIL_INTERP_STEPS] = steps;
+    g_ram[UTIL_INTERP_TARGET] = 0x77;
+    g_ram[UTIL_INTERP_QUOT] = 0xEE;
+    snapshot();
+    fw_regs r = { a, 0x5A, y, 0 };
+    util_interp_step(&g_f, &r);
+    CHECK_EQ(r.a, want_a);
+    CHECK_EQ(r.x, 0x5A);
+    CHECK_EQ(r.y, want_y);
+    CHECK_EQ(g_ram[UTIL_INTERP_STEPS], want_steps);
+    CHECK_EQ(g_ram[UTIL_INTERP_QUOT], want_quot);
+    check_written(w, 2);
+    check_no_calls();
+}
+
+static void test_interp_step(void)
+{
+    /* Y = 1: DEY; BNE not taken; RTS: A unchanged, Y = 0, nothing written */
+    interp_case(0x37, 1, 0x10, 1, 0x37, 0, 1, 0xEE);
+    /* Y = 2: CLC; ADC cur; ROR A. $F0 + $90 = $180: the carry comes back as bit 7: $C0. $20 + $11 = $31: $18 */
+    interp_case(0xF0, 2, 0x90, 2, 0xC0, 0, 2, 0xEE);
+    interp_case(0x20, 2, 0x11, 2, 0x18, 0, 2, 0xEE);
+    /* equal values: SEC; SBC gives 0 ($C1B2 BNE not taken): A = util_interp_target, Y = Y - 2 */
+    interp_case(0x40, 5, 0x40, 5, 0x77, 3, 5, 0xEE);
+    /* equal values with Y = 0 (and util_interp_steps 0): Y = $FE, no fault */
+    interp_case(0x40, 0, 0x40, 0, 0x77, 0xFE, 0, 0xEE);
+    /* up, d = 16, steps 5: SBC leaves 11, 6, 1, then $FC with the borrow, Y = 4. LSR: steps = 2 in RAM. $FC + 2 =
+       $FE has bit 7 ($C1CA BPL not taken): DEY, q = 3 (16 / 5 = 3.2). A = $10 + 3 */
+    interp_case(0x20, 5, 0x10, 5, 0x13, 3, 2, 3);
+    /* up, d = 18: 13, 8, 3, $FE with the borrow, Y = 4; $FE + 2 = 0, bit 7 clear (BPL taken): q = 4 (3.6) */
+    interp_case(0x22, 5, 0x10, 5, 0x14, 4, 2, 4);
+    /* up, d = 6, steps 4 (even): 2, then $FE, Y = 2; half 2: $FE + 2 = 0: q = 2 (1.5 rounds up) */
+    interp_case(0x16, 4, 0x10, 4, 0x12, 2, 2, 2);
+    /* down, d = -16 ($F0), steps 5: ADC leaves $F5, $FA, $FF, then 4 with the carry, Y = $FC. Not 0 ($C1E1 BEQ not
+       taken): LSR: steps 2 in RAM; 4 - 2 = 2 is above 0 ($C1EA BMI, $C1EC BEQ not taken): INY ($C1EE), q = $FD (-3,
+       -3.2). A = $40 + $FD = $3D */
+    interp_case(0x30, 5, 0x40, 5, 0x3D, 0xFD, 2, 0xFD);
+    /* down, d = -15 ($F1): $F6, $FB, then 0 with the carry, Y = $FD: $C1E1 BEQ taken: q = $FD (-3 exactly), and
+       util_interp_steps is NOT halved (it stays 5) */
+    interp_case(0x31, 5, 0x40, 5, 0x3D, 0xFD, 5, 0xFD);
+    /* down, d = -18 ($EE): $F3, $F8, $FD, then 2, Y = $FC; 2 - 2 = 0: $C1EC BEQ taken: q = $FC (-3.6 -> -4) */
+    interp_case(0x2E, 5, 0x40, 5, 0x3C, 0xFC, 2, 0xFC);
+    /* down, d = -19 ($ED): $F2, $F7, $FC, then 1, Y = $FC; 1 - 2 = $FF: $C1EA BMI taken: q = $FC (-3.8 -> -4) */
+    interp_case(0x2D, 5, 0x40, 5, 0x3C, 0xFC, 2, 0xFC);
+    /* a long way down, and the 8-bit add of the quotient wraps: cur $F0, A = $10: SBC gives $20 with the borrow (the
+       down path, d = -224). 75 ADCs of 3 carry ($20 + 225 = $101): A = 1, Y = -75 = $B5. LSR: steps 1; 1 - 1 = 0
+       ($C1EC BEQ taken): q = $B5 (-74.67 -> -75). A = $F0 + $B5 = $A5 (8 bits) */
+    interp_case(0x10, 3, 0xF0, 3, 0xA5, 0xB5, 1, 0xB5);
+}
+/* util_interp_step with 0 steps and different values: the ROM loops forever ($C1BC SBC #0 with the carry set, or
+   $C1DA ADC #0 with it clear); the C faults at ROM_UTIL_INTERP_STEP and writes nothing. */
+static void test_interp_zero_steps(void)
+{
+    static const uint8_t a[2] = { 0x30, 0x10 };    /* up (no borrow) and down (a borrow) from cur $20 */
+    for (unsigned i = 0; i < 2; i++) {
+        setup();
+        g_ram[UTIL_INTERP_CUR] = 0x20;
+        g_ram[UTIL_INTERP_TARGET] = a[i];
+        g_ram[UTIL_INTERP_QUOT] = 0xEE;
+        snapshot();
+        fw_regs r = { a[i], 0x5A, 0, 0 };
+        util_interp_step(&g_f, &r);
+        CHECK(g_f.fault);
+        CHECK_EQ(g_f.fault_addr, ROM_UTIL_INTERP_STEP);
+        CHECK_EQ(g_ncalls, 0);
+        check_written(NULL, 0);
+    }
+}
+
+/* The interpolation state a track step leaves: util_interp_steps, util_interp_cur, util_interp_target. */
+static void check_interp_state(uint8_t steps, uint8_t cur, uint8_t target)
+{
+    CHECK_EQ(g_ram[UTIL_INTERP_STEPS], steps);
+    CHECK_EQ(g_ram[UTIL_INTERP_CUR], cur);
+    CHECK_EQ(g_ram[UTIL_INTERP_TARGET], target);
+}
+
+static void test_track_start(void)
+{
+    const uint8_t x = 4;
+    static const uint16_t w[] = {
+        UTIL_INTERP_STEPS, UTIL_INTERP_CUR, UTIL_INTERP_TARGET, UTIL_INTERP_QUOT, PAR_START_DUR + 4, PAR_START_VAL + 4,
+    };
+    /* par_start_dur[X] = 0 ($C24D BNE not taken): A = par_seg_target[X], Y = 0 (the LDY), nothing written */
+    setup();
+    g_ram[PAR_SEG_TARGET + x] = 0x2B;
+    g_ram[PAR_START_VAL + x] = 0x10;
+    snapshot();
+    fw_regs r = { 0x11, x, 0x33, 0 };
+    par_track_start(&g_f, &r);
+    CHECK_EQ(r.a, 0x2B);
+    CHECK_EQ(r.x, x);
+    CHECK_EQ(r.y, 0);
+    check_written(NULL, 0);
+    check_no_calls();
+    /* par_start_dur[X] = 3: util_interp_steps = 3, par_start_dur = 2, cur = par_start_val $10, target =
+       par_seg_target $20; d = 16: 13, 10, 7, 4, 1, then $FE with the borrow (Y = 6); LSR: steps 1; $FE + 1 = $FF has
+       bit 7: DEY, q = 5 (16 / 3 = 5.33). par_start_val = A = $15; Y = 5 */
+    setup();
+    g_ram[PAR_SEG_TARGET + x] = 0x20;
+    g_ram[PAR_START_VAL + x] = 0x10;
+    g_ram[PAR_START_DUR + x] = 3;
+    snapshot();
+    r = (fw_regs){ 0x11, x, 0x33, 0 };
+    par_track_start(&g_f, &r);
+    CHECK_EQ(r.a, 0x15);
+    CHECK_EQ(r.x, x);
+    CHECK_EQ(r.y, 5);
+    CHECK_EQ(g_ram[PAR_START_VAL + x], 0x15);
+    CHECK_EQ(g_ram[PAR_START_DUR + x], 2);
+    CHECK_EQ(g_ram[UTIL_INTERP_QUOT], 5);
+    check_interp_state(1, 0x10, 0x20);
+    check_written(w, 6);
+    check_no_calls();
+}
+
+/* One par_track_end run with X = 7: par_end_wait, par_end_dur, par_end_val and par_boundary in, par_seg_target $2B,
+   util_interp_quot $EE. Out: A, Y, and the three track bytes; no case reaches the quotient. */
+static void track_end_case(uint8_t wait, uint8_t dur, uint8_t val, uint8_t boundary, uint8_t want_a, uint8_t want_y,
+                           uint8_t want_wait, uint8_t want_dur, uint8_t want_val)
+{
+    const uint8_t x = 7;
+    static const uint16_t w[] = {
+        UTIL_INTERP_STEPS, UTIL_INTERP_CUR, UTIL_INTERP_TARGET, PAR_END_WAIT + 7, PAR_END_DUR + 7, PAR_END_VAL + 7,
+    };
+    setup();
+    g_ram[PAR_END_WAIT + x] = wait;
+    g_ram[PAR_END_DUR + x] = dur;
+    g_ram[PAR_END_VAL + x] = val;
+    g_ram[PAR_BOUNDARY + x] = boundary;
+    g_ram[PAR_SEG_TARGET + x] = 0x2B;
+    g_ram[UTIL_INTERP_QUOT] = 0xEE;
+    snapshot();
+    fw_regs r = { 0x11, x, 0x33, 0 };
+    par_track_end(&g_f, &r);
+    CHECK_EQ(r.a, want_a);
+    CHECK_EQ(r.x, x);
+    CHECK_EQ(r.y, want_y);
+    CHECK_EQ(g_ram[PAR_END_WAIT + x], want_wait);
+    CHECK_EQ(g_ram[PAR_END_DUR + x], want_dur);
+    CHECK_EQ(g_ram[PAR_END_VAL + x], want_val);
+    check_written(w, 6);
+    check_no_calls();
+}
+
+static void test_track_end(void)
+{
+    /* waiting: par_end_wait 2 ($C277 BNE taken): DEC to 1; A = par_seg_target, Y = 2 (the LDY); no step */
+    track_end_case(2, 5, 0x10, 0x30, 0x2B, 2, 1, 5, 0x10);
+    check_interp_state(0, 0, 0);
+    /* the wait over (0): the step: steps = par_end_dur 2 (DEC to 1), cur $10, target $31: (CLC; ADC; ROR) $41 / 2 =
+       $20 into par_end_val; Y = 0 */
+    track_end_case(0, 2, 0x10, 0x31, 0x20, 0, 0, 1, 0x20);
+    check_interp_state(2, 0x10, 0x31);
+    /* a negative par_end_wait ($80; $C26F BPL not taken, unreachable in the ROM): LDY #0; TYA; STA zeroes it, and the
+       Z of the TYA takes the step: par_end_dur 1 (DEC to 0): Y = 1 returns the target $30 */
+    track_end_case(0x80, 1, 0x10, 0x30, 0x30, 0, 0, 0, 0x30);
+    check_interp_state(1, 0x10, 0x30);
+    /* par_end_dur 0 wraps (DEC to $FF); the values equal: Y = 0 - 2 = $FE, A = util_interp_target, no fault */
+    track_end_case(0, 0, 0x30, 0x30, 0x30, 0xFE, 0, 0xFF, 0x30);
+    check_interp_state(0, 0x30, 0x30);
+}
+
+/* The fill frame of the frame-byte tests: isr_fill_ptr = isr_frame_b. */
+static void fill_frame_b(void) { fw_wr16(&g_f, ISR_FILL_PTR, ISR_FRAME_B); }
+
+static void test_track_sequential(void)
+{
+    /* the start phase, X = 2 (F1: par_slot_map[1] = b3): par_start_dur 2 (DEC to 1): par_start_val $10 to
+       par_seg_target $31: (CLC; ADC; ROR) $41 / 2 = $20 into par_start_val and b3; Y = 3 (LDY $B796,X) */
+    {
+        static const uint16_t w[] = {
+            UTIL_INTERP_STEPS, UTIL_INTERP_CUR, UTIL_INTERP_TARGET, PAR_START_DUR + 2, PAR_START_VAL + 2,
+            ISR_FRAME_B + FRAME_F1,
+        };
+        setup();
+        fill_frame_b();
+        g_ram[PAR_START_DUR + 2] = 2;
+        g_ram[PAR_START_VAL + 2] = 0x10;
+        g_ram[PAR_SEG_TARGET + 2] = 0x31;
+        g_ram[PAR_STEADY + 2] = 9;                  /* not reached */
+        snapshot();
+        fw_regs r = { 0x11, 2, 0x33, 0 };
+        par_track_sequential(&g_f, &r);
+        CHECK_EQ(r.a, 0x20);
+        CHECK_EQ(r.x, 2);
+        CHECK_EQ(r.y, FRAME_F1);
+        CHECK_EQ(g_ram[PAR_START_DUR + 2], 1);
+        CHECK_EQ(g_ram[PAR_START_VAL + 2], 0x20);
+        CHECK_EQ(g_ram[ISR_FRAME_B + FRAME_F1], 0x20);
+        check_interp_state(2, 0x10, 0x31);
+        check_written(w, 6);
+        check_no_calls();
+    }
+    /* the hold, X = 5 (ALF: b0): par_start_dur 0, par_steady 4 ($C172 BEQ not taken): DEC to 3; b0 = par_seg_target;
+       A = par_seg_target, Y = 0; util_interp_* untouched */
+    {
+        static const uint16_t w[] = { PAR_STEADY + 5, ISR_FRAME_B + FRAME_ALF };
+        setup();
+        fill_frame_b();
+        g_ram[PAR_STEADY + 5] = 4;
+        g_ram[PAR_SEG_TARGET + 5] = 0x27;
+        g_ram[ISR_FRAME_B + FRAME_ALF] = 0xEE;
+        snapshot();
+        fw_regs r = { 0x11, 5, 0x33, 0 };
+        par_track_sequential(&g_f, &r);
+        CHECK_EQ(r.a, 0x27);
+        CHECK_EQ(r.x, 5);
+        CHECK_EQ(r.y, FRAME_ALF);
+        CHECK_EQ(g_ram[PAR_STEADY + 5], 3);
+        CHECK_EQ(g_ram[ISR_FRAME_B + FRAME_ALF], 0x27);
+        check_written(w, 2);
+        check_no_calls();
+    }
+    /* the end phase, X = 10 (voicing: b9): par_start_dur 0, par_steady 0: steps = par_end_dur 3 (DEC to 2), cur =
+       par_seg_target $30 itself, target = par_boundary $24: d = -12 ($F4): $F7, $FA, $FD, then 0 with the carry
+       (Y = $FC): $C1E1 BEQ: q = -4 exactly, util_interp_steps not halved (3). A = $2C into par_seg_target and b9 */
+    {
+        static const uint16_t w[] = {
+            UTIL_INTERP_STEPS, UTIL_INTERP_CUR, UTIL_INTERP_TARGET, UTIL_INTERP_QUOT, PAR_END_DUR + 10,
+            PAR_SEG_TARGET + 10, ISR_FRAME_B + FRAME_V,
+        };
+        setup();
+        fill_frame_b();
+        g_ram[PAR_END_DUR + 10] = 3;
+        g_ram[PAR_SEG_TARGET + 10] = 0x30;
+        g_ram[PAR_BOUNDARY + 10] = 0x24;
+        snapshot();
+        fw_regs r = { 0x11, 10, 0x33, 0 };
+        par_track_sequential(&g_f, &r);
+        CHECK_EQ(r.a, 0x2C);
+        CHECK_EQ(r.x, 10);
+        CHECK_EQ(r.y, FRAME_V);
+        CHECK_EQ(g_ram[PAR_END_DUR + 10], 2);
+        CHECK_EQ(g_ram[PAR_SEG_TARGET + 10], 0x2C);
+        CHECK_EQ(g_ram[UTIL_INTERP_QUOT], 0xFC);
+        CHECK_EQ(g_ram[ISR_FRAME_B + FRAME_V], 0x2C);
+        check_interp_state(3, 0x30, 0x24);
+        check_written(w, 7);
+        check_no_calls();
+    }
+    /* the end phase with par_end_dur 0, X = 1 (FN: b1): the DEC wraps it to $FF; Y = 0 with par_seg_target =
+       par_boundary ($22): the equal return (util_interp_target), no fault */
+    {
+        static const uint16_t w[] = {
+            UTIL_INTERP_STEPS, UTIL_INTERP_CUR, UTIL_INTERP_TARGET, PAR_END_DUR + 1, PAR_SEG_TARGET + 1,
+            ISR_FRAME_B + FRAME_FN,
+        };
+        setup();
+        fill_frame_b();
+        g_ram[PAR_SEG_TARGET + 1] = 0x22;
+        g_ram[PAR_BOUNDARY + 1] = 0x22;
+        g_ram[UTIL_INTERP_STEPS] = 0xEE;
+        snapshot();
+        fw_regs r = { 0x11, 1, 0x33, 0 };
+        par_track_sequential(&g_f, &r);
+        CHECK_EQ(r.a, 0x22);
+        CHECK_EQ(r.x, 1);
+        CHECK_EQ(r.y, FRAME_FN);
+        CHECK_EQ(g_ram[PAR_END_DUR + 1], 0xFF);
+        CHECK_EQ(g_ram[PAR_SEG_TARGET + 1], 0x22);
+        CHECK_EQ(g_ram[ISR_FRAME_B + FRAME_FN], 0x22);
+        check_interp_state(0, 0x22, 0x22);
+        check_written(w, 6);
+        check_no_calls();
+    }
+}
+
+/* One par_track_overlap case, X = 3 (F2: b5), the fill frame isr_frame_b, par_end_dur 1 and par_end_val 1. The start
+   track: par_seg_target t when sd = 0, else (sd = 2) the average of sv and t. The end track: par_boundary b when
+   ew = 0 (par_end_dur 1: Y = 1 returns the target), t when ew = 1 (the wait). The line: lv to b over fl frames (1:
+   b; 2: the average). s, e, l: the three values; want: the median the ROM writes. */
+typedef struct {
+    uint8_t sd, sv, t, ew, b, lv, fl;
+    uint8_t s, e, l, want;
+} overlap_row;
+
+static void overlap_case(const overlap_row *k)
+{
+    const uint8_t x = 3;
+    static const uint16_t w[] = {
+        UTIL_INTERP_STEPS, UTIL_INTERP_CUR, UTIL_INTERP_TARGET, PAR_START_DUR + 3, PAR_START_VAL + 3, PAR_END_WAIT + 3,
+        PAR_END_DUR + 3, PAR_END_VAL + 3, PAR_LINE_VAL + 3, PAR_START_TRACK, PAR_END_TRACK, ISR_FRAME_B + FRAME_F2,
+    };
+    setup();
+    fill_frame_b();
+    g_ram[PAR_START_DUR + x] = k->sd;
+    g_ram[PAR_START_VAL + x] = k->sv;
+    g_ram[PAR_SEG_TARGET + x] = k->t;
+    g_ram[PAR_END_WAIT + x] = k->ew;
+    g_ram[PAR_END_DUR + x] = 1;
+    g_ram[PAR_END_VAL + x] = 1;
+    g_ram[PAR_BOUNDARY + x] = k->b;
+    g_ram[PAR_LINE_VAL + x] = k->lv;
+    g_ram[PAR_FRAMES_LEFT] = k->fl;
+    g_ram[UTIL_INTERP_QUOT] = 0xEE;
+    snapshot();
+    fw_regs r = { 0x11, x, 0x33, 0 };
+    par_track_overlap(&g_f, &r);
+    CHECK_EQ(g_ram[PAR_START_TRACK], k->s);
+    CHECK_EQ(g_ram[PAR_END_TRACK], k->e);
+    CHECK_EQ(g_ram[PAR_LINE_VAL + x], k->l);
+    CHECK_EQ(g_ram[ISR_FRAME_B + FRAME_F2], k->want);
+    CHECK_EQ(r.a, k->want);
+    CHECK_EQ(r.x, x);
+    CHECK_EQ(r.y, FRAME_F2);
+    CHECK_EQ(g_ram[UTIL_INTERP_QUOT], 0xEE);
+    check_interp_state(k->fl, k->lv, k->b);         /* the line's step comes last */
+    check_written(w, 12);
+    check_no_calls();
+}
+
+static void test_track_overlap(void)
+{
+    static const overlap_row k[] = {
+        /* S = t, E = b, L = (lv + b) / 2 (fl = 2). The six outcomes, by CMP and BPL / BMI:
+           L >= S, L < E ($C21C BPL taken, $C229 BPL not taken): the line */
+        { 0, 0, 0x10, 0, 0x30, 0x10, 2, 0x10, 0x30, 0x20, 0x20 },
+        /* L >= S, L >= E, S < E ($C229 BPL taken, $C245 BMI taken): the end */
+        { 0, 0, 0x10, 0, 0x18, 0x28, 2, 0x10, 0x18, 0x20, 0x18 },
+        /* L >= S, L >= E, S >= E ($C245 BMI not taken): the start */
+        { 0, 0, 0x18, 0, 0x10, 0x30, 2, 0x18, 0x10, 0x20, 0x18 },
+        /* L < S, L >= E ($C21C BPL not taken, $C221 BMI not taken): the line */
+        { 0, 0, 0x20, 0, 0x10, 0x20, 2, 0x20, 0x10, 0x18, 0x18 },
+        /* L < S, L < E, S >= E ($C221 BMI taken, $C234 BPL taken): the end */
+        { 0, 0, 0x20, 0, 0x18, 0x08, 2, 0x20, 0x18, 0x10, 0x18 },
+        /* L < S, L < E, S < E ($C234 BPL not taken): the start */
+        { 0, 0, 0x18, 0, 0x20, 0x00, 2, 0x18, 0x20, 0x10, 0x18 },
+        /* the sign of the 8-bit difference: L = $10, S = $90, E = $20. $10 - $90 = $80 is "minus" (L < S), $10 - $20 is
+           minus, $90 - $20 = $70 is not: the end, $20. A true signed median is the line $10 (S = -112) */
+        { 0, 0, 0x90, 0, 0x20, 0x00, 2, 0x90, 0x20, 0x10, 0x20 },
+        /* L = $90 (fl = 1: b), S = $10 (sd = 2: (0 + $20) / 2), E = $20 (ew = 1: t): $90 - $10 = $80 is minus (L < S),
+           $90 - $20 = $70 is not: the line, $90. A true signed median is S ($10; L = -112), an unsigned one E ($20) */
+        { 2, 0, 0x20, 1, 0x90, 0x00, 1, 0x10, 0x20, 0x90, 0x90 },
+    };
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++)
+        overlap_case(&k[i]);
+}
+
+/* par_step_tracks: P10..P1, odd X sequential (a hold of par_seg_target), even X overlapping (start = end =
+   par_seg_target, the line par_boundary $3F over 1 frame, so the median is par_seg_target): each writes
+   par_seg_target[X] = $10 + X into frame byte par_slot_map[X - 1]. The pitch: par_frames_left 1: pros_play_pitch =
+   pros_play_target $A2, b10 = $A2 >> 2 = $28. The fill frame is isr_frame_a; its bytes b11-b19 stay $EE. */
+static void test_step_tracks(void)
+{
+    uint16_t w[64];
+    size_t n = 0;
+    setup();
+    fw_wr16(&g_f, ISR_FILL_PTR, ISR_FRAME_A);
+    memset(g_ram + ISR_FRAME_A, 0xEE, 20);
+    for (uint8_t x = 1; x <= 10; x++) {
+        g_ram[PAR_SEG_TARGET + x] = (uint8_t)(0x10 + x);
+        g_ram[PAR_SEQUENTIAL + x] = x & 1;
+        if (x & 1) {
+            g_ram[PAR_STEADY + x] = 1;
+            w[n++] = (uint16_t)(PAR_STEADY + x);
+        } else {
+            g_ram[PAR_END_WAIT + x] = 1;
+            g_ram[PAR_BOUNDARY + x] = 0x3F;
+            w[n++] = (uint16_t)(PAR_END_WAIT + x);
+            w[n++] = (uint16_t)(PAR_LINE_VAL + x);
+        }
+    }
+    g_ram[PAR_FRAMES_LEFT] = 1;
+    g_ram[PROS_PLAY_PITCH] = 0x80;
+    g_ram[PROS_PLAY_TARGET] = 0xA2;
+    for (uint16_t b = 0; b <= FRAME_PITCH; b++)
+        w[n++] = (uint16_t)(ISR_FRAME_A + b);
+    w[n++] = UTIL_INTERP_STEPS;
+    w[n++] = UTIL_INTERP_CUR;
+    w[n++] = UTIL_INTERP_TARGET;
+    w[n++] = PAR_START_TRACK;
+    w[n++] = PAR_END_TRACK;
+    w[n++] = PROS_PLAY_PITCH;
+    snapshot();
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    par_step_tracks(&g_f, &r);
+    for (uint8_t x = 1; x <= 10; x++) {
+        CHECK_EQ(g_ram[ISR_FRAME_A + fw_par_slot_map[x - 1]], 0x10 + x);
+        if (x & 1) {
+            CHECK_EQ(g_ram[PAR_STEADY + x], 0);
+        } else {
+            CHECK_EQ(g_ram[PAR_END_WAIT + x], 0);
+            CHECK_EQ(g_ram[PAR_LINE_VAL + x], 0x3F);
+        }
+    }
+    /* the routing in full: b0 = P5 (ALF), b1 = P1 (FN), b2 = P6 (A1), b3 = P2 (F1), ..., b8 = P9 (AHF), b9 = P10 (V) */
+    static const uint8_t frame[11] = { 0x15, 0x11, 0x16, 0x12, 0x17, 0x13, 0x18, 0x14, 0x19, 0x1A, 0x28 };
+    for (unsigned b = 0; b < 11; b++)
+        CHECK_EQ(g_ram[ISR_FRAME_A + b], frame[b]);
+    for (unsigned b = 11; b < 20; b++)
+        CHECK_EQ(g_ram[ISR_FRAME_A + b], 0xEE);
+    CHECK_EQ(g_ram[PROS_PLAY_PITCH], 0xA2);
+    CHECK_EQ(g_ram[PAR_START_TRACK], 0x12);         /* the last overlapping track is P2's */
+    CHECK_EQ(g_ram[PAR_END_TRACK], 0x12);
+    check_interp_state(1, 0x80, 0xA2);              /* the pitch's step comes last */
+    CHECK_EQ(r.a, 0x28);
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, FRAME_PITCH);
+    check_written(w, n);
+    check_no_calls();
+}
+
 void suite_fw_par(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -1236,4 +1661,12 @@ void suite_fw_par(void)
     test_reset_tracks();
     test_play_start();
     test_setup_voice();
+    test_track_rows();
+    test_interp_step();
+    test_interp_zero_steps();
+    test_track_start();
+    test_track_end();
+    test_track_sequential();
+    test_track_overlap();
+    test_step_tracks();
 }
