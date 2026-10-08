@@ -11,7 +11,7 @@
 - One plan for the whole frame builder (seven routines, 470 bytes).
 - Hooks: all seven routines, as in M4.4a and M4.4b (every routine, so that a mismatch points at one routine). That makes 71 replacements and 72 `golden_hybrid` modes.
 - The three formula tables (`frm_product_limit`, `frm_b14_15_lo`, `frm_b14_15_hi`) are converted as formulas that the encoder expands, not written out (§3).
-- Two new corpus texts and their rom-engine goldens, for the two pieces of the frame builder no text reaches (§4.5): `formant_extremes` and `mark_space_cap`. The existing goldens stay unchanged.
+- Two new corpus texts and their rom-engine goldens, for the two pieces of the frame builder no text reaches (§4.5): `formant_extremes` and `mark_space_cap`. The existing goldens stay unchanged. *(Corrected 2026-10-08, user decision after the plan's proof: `formant_extremes` is `@u110+ @u510- Hello world.`; the first text clipped the synthesizer, §4.5.)*
 
 ## 1. Goal
 
@@ -43,7 +43,7 @@ When M4.5 is done, the frame builder runs as C in the `hybrid` engine:
 | | `frm_transition_flags` | $BA3F–$BAEB | 173 |
 
 - `frm_build.h` declares the seven routines and any constant a caller or test needs. Every routine is `void name(fw *f, fw_regs *r)`: r in = the entry registers, r out = the ROM's exit registers. The larger routines are split into one static helper per ROM block, each commented with its address range, as in M4.4a and M4.4b.
-- The `ROM_FRM_*` addresses already exist in `src/firmware/par_addr.h`; their comments are updated (the routines are now C).
+- The `ROM_FRM_*` addresses exist in `src/firmware/par_addr.h` except `ROM_FRM_RAISE_FORMANTS` ($B95D), which is added; their comments are updated (the routines are now C).
 - **Memory access.** The producer frame is read with `fw_ind_y` and written with `fw_wr_ind_y`, both on `isr_fill_ptr`. ROM tables are read with `fw_rom8` at their ROM addresses (§3). `frm_snap`/`frm_snap_prev` ($16CD/$16DD, read 1-based from $16CC/$16DC) and the scratch bytes are RAM (`fw_rd8`/`fw_wr8`).
 
 ### 2.3 C calls C
@@ -79,7 +79,7 @@ The plan checks every one of these against the dumps (the "ROM facts checked" li
   - `frm_clamp_mark_space`: the upper cap 160 − 2c is an unsigned `CMP`/`BCS`; the lower bound 47 − 2c is skipped when the 8-bit result has bit 7 set (`BMI`), then compared unsigned (`CMP`/`BCC`); the floor of 11 is unsigned.
   - `frm_raise_formants`: b10 − 32 tested with `BPL` (bit 7 of the 8-bit difference).
   - `frm_finish_frame`: d = ALF − A1 − 4 and e = F1 − 33 (from `frm_snap`) each go on only when not zero and bit 7 clear (`BEQ`, `BMI`); then `frm_product_limit[e]` − d is tested with `BMI` (bit 7 of the 8-bit difference), so e = 1 (limit 255) always saturates to the index $FF; otherwise the 8-bit shift-and-add multiply, whose carries out of bit 7 are lost.
-  - `frm_transition_flags`: each window is two tests on the 8-bit difference, `CMP #k`/`BPL` and `CMP #−k`/`BMI`, which order by bit 7 of the comparison's result, not by the true signed value; the C writes them as the ROM's flags compute them, so a difference that wraps past ±127 behaves as on the ROM.
+  - `frm_transition_flags`: each window is two tests on the 8-bit difference, `CMP #k`/`BPL` and `CMP #(1 − k)`/`BMI` (frequencies $10/$F1, amplitudes $0C/$F5 and the amplitude falls $1C and $13 with `BPL` only, b10 $07/$FA), which order by bit 7 of the comparison's result, not by the true signed value; the C writes them as the ROM's flags compute them, so a difference that wraps past ±127 behaves as on the ROM.
 - **Loop orders and bounds:** `frm_template` copied 1-based for Y = 20 down to 1; `frm_copy_rest_frame` for Y = 19 down to 0 (`BPL`); `frm_snapshot` copies `frm_snap` to `frm_snap_prev` for Y = 10 down to 1, then reads the frame through `frm_snapshot_map` for X = 10 down to 1; `frm_transition_flags` walks Y = 9 down to 6 (frequencies), then 5 down to 1 (amplitudes) for bit 7, 5 down to 1 for bits 6 and 4.
 - The rest frames keep the template's b16/b17 whatever @$ selects (parent spec §1.4, rev 6): `par_play`'s rest frames do not call `frm_finish_frame`.
 
@@ -118,7 +118,7 @@ Unchanged; it passes on both engines.
 ### 4.5 Coverage and the new corpus texts
 Probed while designing with `apollo2_coverage` on the 45 corpus texts: every instruction of the seven routines executes except
 - **$B945**, the upper @M cap: b11 > 160 − 2c needs @M above 160 − 2c, i.e. b10 ≥ 49 with @M $3F. New text **`mark_space_cap`**: `@M3F @R7 @FF Take a cake.` (probed: reaches $B945).
-- **$B9F8–$BA26**, the b14–b15 product: it needs F1 > 33 and ALF − A1 > 4 in the same frame, which no phoneme's targets give (the rows with F1 above 33 all have ALF − A1 − 4 negative). The @u formant offsets reach it. New text **`formant_extremes`**: `@u120+ @u410+ @u510- Hello world.` (F1 + 32, ALF + 16, A1 − 16; probed: reaches the multiply and the saturated index $FF).
+- **$B9F8–$BA26**, the b14–b15 product: it needs F1 > 33 and ALF − A1 > 4 in the same frame, which no phoneme's targets give (the rows with F1 above 33 all have ALF − A1 − 4 negative). The @u formant offsets reach it. New text **`formant_extremes`**: `@u110+ @u510- Hello world.` (F1 + 16, A1 − 16; probed: reaches the multiply, the saturated index $FF and F1 = 33 exactly, $B9F4). The first choice, `@u120+ @u410+ @u510-`, reached the same branches but its ALF + 16 clipped the synthesizer (`suite_synth`: every golden must synthesize unclipped), so it was replaced.
 
 The corpus goes from 45 to 47 texts; both goldens are generated once by the rom engine. The plan confirms with a precise branch probe (each conditional branch's taken and fall-through edges, not only the instructions executed) that every conditional branch of the seven routines is seen both ways on the corpus, $BA02 (the limit test) and $BA0B (the multiplier bits) included. Any branch still one-sided is pinned by a unit test, and the plan names it.
 
@@ -131,6 +131,7 @@ One or more cases per routine, the registers in and out per §2.5, RAM checked b
 - `frm_snapshot`: `frm_snap_prev` = the old `frm_snap`; the new one through `frm_snapshot_map`.
 - `frm_copy_rest_frame`: the 20 bytes, Y = $FF.
 - `frm_build_rest_frame`: the template, the pause row's FN, F1, F2, F3, `par_row_ptr` reset.
+- `tests/test_fw_tn.c`: the flush case runs the C `par_play`, whose rest frames are now C writes through `isr_fill_ptr`; the case points `isr_fill_ptr` at a frame buffer (`isr_frame_b`).
 - `tests/test_fw_par.c` (`par_play`, `par_setup_voice`) and `tests/test_fw_cmd.c` (`cmd_apply_pitch` → `par_setup_voice`): the stub hosts record the `ROM_FRM_*` calls today. Those cases change to check that the C ran (its effect on the frame buffers and the registers that flow on) and that the stub saw no `ROM_FRM_*` call.
 
 ### 4.7 Done criteria
