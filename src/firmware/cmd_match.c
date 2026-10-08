@@ -1,4 +1,5 @@
 #include "cmd_match.h"
+#include "fw_ops.h"
 #include "data/fw_data.h"
 
 uint8_t cmd_upcase(fw *f, uint8_t c) { return fw_rom8(f, (uint16_t)(CMD_CASE_MAP + c)); }

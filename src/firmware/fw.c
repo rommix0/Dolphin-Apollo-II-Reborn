@@ -56,6 +56,26 @@ uint8_t fw_ind_y(fw *f, uint8_t zp, uint8_t y)
     return fw_mem8(f, (uint16_t)(fw_rd16(f, zp) + y));
 }
 
+void fw_wr_ind_y(fw *f, uint8_t zp, uint8_t y, uint8_t v)
+{
+    uint16_t addr = (uint16_t)(fw_rd16(f, zp) + y);
+    if (addr >= FW_RAM_SIZE || (addr >= 0xDA && addr <= 0xFF)) {
+        fault(f, addr);
+        return;
+    }
+    f->ram[addr] = v;
+}
+
+uint8_t fw_sfr8(fw *f, uint8_t addr)
+{
+    if (addr >= 0xDA && f->host && f->host->read_sfr)
+        return f->host->read_sfr(f->host->ctx, addr);
+    fault(f, addr);
+    return 0xFF;
+}
+
+void fw_fault(fw *f, uint16_t addr) { fault(f, addr); }
+
 void fw_set_low_window(fw *f, bool on)
 {
     f->low_window = on;

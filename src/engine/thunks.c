@@ -51,6 +51,16 @@ static void host_set_low_window(void *ctx, bool on)
     m->bus.write(m->bus.ctx, M50734_P2, (uint8_t)(on ? v | P2_LOWER_WINDOW : v & ~P2_LOWER_WINDOW));
 }
 
+/* The firmware's SFR read. Only UART_STATUS $E7, the one register it polls (par_play $B895), is read, as the CPU's
+   LDA reads it, through the bus; it has no side effect (m50734.c: bit 1, transmitter ready, always set; bit 0,
+   receive full). Any other SFR reads $FF without reaching the bus, so that no read side effect (UART_RX $E5 clears
+   receive full) can happen behind the ROM's back. */
+static uint8_t host_read_sfr(void *ctx, uint8_t addr)
+{
+    machine *m = ((fw_bridge *)ctx)->m;
+    return addr == M50734_UART_STATUS ? m->bus.read(m->bus.ctx, addr) : 0xFF;
+}
+
 bool fw_bridge_init(fw_bridge *b, machine *m)
 {
     const fw_image *img = fw_image_get();
@@ -60,6 +70,7 @@ bool fw_bridge_init(fw_bridge *b, machine *m)
     b->host.ctx = b;
     b->host.rom_call = host_rom_call;
     b->host.set_low_window = host_set_low_window;
+    b->host.read_sfr = host_read_sfr;
     fw_init(&b->f, m->ram, img, &b->host);
     return img != NULL;
 }

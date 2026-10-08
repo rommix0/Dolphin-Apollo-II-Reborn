@@ -5,7 +5,9 @@
    ROM copy reaches boot_loop_play ($A7D4, tn_convert_clause's mid-clause flush) cannot finish with interrupts
    held: it is skipped and counted (golden_hybrid covers it, M4.1 spec 5.1), in tn_convert_clause only. A call
    whose ROM copy resets the stack (@= entering a bank) stops right after the reset in both copies and is
-   compared like any other (M4.2 spec 3) and counted: bank_select must produce some (M4.2 spec 5.5). */
+   compared like any other (M4.2 spec 3) and counted: bank_select must produce some (M4.2 spec 5.5). The
+   replacements marked waits (the frame loop, which waits on the timer interrupt) cannot run with interrupts held:
+   they are not observed here but in diff_play (M4.4b spec 4.1, 4.2). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,12 +16,12 @@
 #include "rom_fixture.h"
 #include "engine/rom_engine.h"
 #include "engine/thunks.h"
-#include "firmware/tn_convert.h"
+#include "firmware/par_addr.h"
 
 #define DIFF_FULL_CALLS 1000      /* every call up to this many per routine and corpus file ... */
 #define DIFF_STRIDE     64        /* ... then every 64th */
 #define DIFF_BUDGET     10000000ULL
-#define DIFF_MAX        48
+#define DIFF_MAX        64
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
 /* Extra text, for this test only (not goldens): words whose rules use the % & @ context symbols. */
@@ -135,6 +137,8 @@ static void install(machine *m, void *user)
 {
     (void)user;
     for (size_t i = 0; i < fw_replacement_count; i++) {
+        if (fw_replacements[i].waits)
+            continue;   /* diff_play's */
         g_obs[i].r = &fw_replacements[i];
         g_obs[i].calls = 0;   /* the full-call budget is per corpus file */
         CHECK(machine_hook(m, fw_replacements[i].addr, observe, &g_obs[i]));
@@ -190,6 +194,8 @@ void suite_diff_lts(void)
     for (size_t i = 0; i < sizeof k_extra / sizeof k_extra[0]; i++)
         run(rom, len, "extra", k_extra[i], false);
     for (size_t i = 0; i < fw_replacement_count; i++) {
+        if (fw_replacements[i].waits)
+            continue;
         printf("  %-20s %u calls checked\n", fw_replacements[i].name, g_checked[i]);
         CHECK(g_checked[i] > 0);   /* every ported routine is exercised */
     }

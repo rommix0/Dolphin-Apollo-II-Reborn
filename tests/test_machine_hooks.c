@@ -4,6 +4,7 @@
 #include "test.h"
 #include "rom_fixture.h"
 #include "machine/machine.h"
+#include "engine/thunks.h"
 
 static uint8_t g_rom[MACHINE_ROM_SIZE];
 static machine g_m, g_c;
@@ -379,6 +380,26 @@ static void test_rom_call_unwound(void)
     CHECK_EQ(g_m.fault, MFAULT_NONE);
 }
 
+/* The emulator answers the firmware's SFR reads (fw_sfr8, M4.4b spec 2.4) for UART_STATUS $E7 only, through the
+   CPU's bus: transmitter ready (bit 1, always) and receive full (bit 0), and reading it changes nothing. Any other
+   SFR reads $FF without reaching the bus: UART_RX $E5, whose read would clear receive full, keeps its byte. */
+static void test_host_read_sfr(void)
+{
+    static fw_bridge b;
+    load_main(0xC100);
+    CHECK(fw_bridge_init(&b, &g_m));
+    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_STATUS), 0x02);
+    CHECK(m50734_uart_receive(&g_m.sfr, 0x41));
+    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_STATUS), 0x03);
+    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_STATUS), 0x03);   /* still full: the read cleared nothing */
+    CHECK(g_m.sfr.uart_rx_full);
+    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_RX), 0xFF);       /* not read: the received byte stays */
+    CHECK(g_m.sfr.uart_rx_full);
+    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_STATUS), 0x03);
+    CHECK_EQ(g_m.unmodelled_count, 0);
+    CHECK(!b.f.fault);
+}
+
 void suite_machine_hooks(void)
 {
     test_mapper();
@@ -394,4 +415,5 @@ void suite_machine_hooks(void)
     test_irq_hold(true);
     test_irq_hold(false);
     test_rom_call_real_rom();
+    test_host_read_sfr();
 }

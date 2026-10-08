@@ -1,6 +1,7 @@
 #include "tn_convert.h"
 #include "cmd_run.h"
 #include "lts.h"
+#include "par_addr.h"
 #include "pros_make.h"
 #include "tn_rules.h"
 #include "data/fw_data.h"

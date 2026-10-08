@@ -3,6 +3,7 @@
 #include <string.h>
 #include "test.h"
 #include "firmware/fw.h"
+#include "firmware/fw_ops.h"
 
 static fw_image g_img;
 static uint8_t g_ram[FW_RAM_SIZE];
@@ -29,6 +30,113 @@ static fw_call_result host_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t b
     r->a = 0x42;
     g_budget = budget;
     return g_call_result;
+}
+
+static void *g_sfr_ctx;
+static uint8_t g_sfr_addr;
+static int g_sfr_calls;
+
+static uint8_t host_sfr(void *ctx, uint8_t addr)
+{
+    g_sfr_ctx = ctx;
+    g_sfr_addr = addr;
+    g_sfr_calls++;
+    return (uint8_t)(addr ^ 0x5A);
+}
+
+/* fw_sfr8 (M4.4b spec 2.4): an SFR byte through the host's read_sfr; no host, no read_sfr or an address below
+   $DA is a fault, reads $FF and does not reach the host. */
+static void test_sfr8(void)
+{
+    fw f;
+    int ctx;
+    fw_init(&f, g_ram, &g_img, NULL);
+    CHECK_EQ(fw_sfr8(&f, 0xE7), 0xFF);                     /* no host */
+    CHECK(f.fault);
+    CHECK_EQ(f.fault_addr, 0x00E7);
+
+    fw_host no_sfr = { NULL, host_call, host_window };   /* a host without read_sfr */
+    fw_init(&f, g_ram, &g_img, &no_sfr);
+    CHECK_EQ(fw_sfr8(&f, 0xE7), 0xFF);
+    CHECK(f.fault);
+    CHECK_EQ(f.fault_addr, 0x00E7);
+
+    fw_host sfr = { &ctx, host_call, host_window, host_sfr };
+    g_sfr_calls = 0;
+    fw_init(&f, g_ram, &g_img, &sfr);
+    CHECK_EQ(fw_sfr8(&f, 0xD9), 0xFF);                     /* RAM, not an SFR */
+    CHECK(f.fault);
+    CHECK_EQ(f.fault_addr, 0x00D9);
+    CHECK_EQ(g_sfr_calls, 0);
+
+    fw_init(&f, g_ram, &g_img, &sfr);
+    CHECK_EQ(fw_sfr8(&f, 0xE7), 0xE7 ^ 0x5A);              /* UART_STATUS: the host's answer */
+    CHECK_EQ(fw_sfr8(&f, 0xDA), 0xDA ^ 0x5A);              /* the first SFR */
+    CHECK_EQ(fw_sfr8(&f, 0xFF), 0xFF ^ 0x5A);              /* the last */
+    CHECK_EQ(g_sfr_calls, 3);
+    CHECK_EQ(g_sfr_addr, 0xFF);
+    CHECK(g_sfr_ctx == &ctx);
+    CHECK(!f.fault);
+}
+
+/* fw_wr_ind_y (M4.4b spec 2.6, STA (zp),Y): v at the zero-page pointer plus y, the carry reaching the high byte;
+   a target of $4000 or above, or an SFR, is a fault and writes nothing. */
+static void test_wr_ind_y(void)
+{
+    static uint8_t before[FW_RAM_SIZE];
+    fw f;
+    memset(g_ram, 0, sizeof g_ram);
+    fw_init(&f, g_ram, &g_img, NULL);
+    fw_wr16(&f, ISR_FILL_PTR, 0x13FE);
+    fw_wr_ind_y(&f, (uint8_t)ISR_FILL_PTR, 5, 0xA5);      /* $13FE + 5 = $1403 */
+    CHECK_EQ(g_ram[0x1403], 0xA5);
+    CHECK_EQ(g_ram[0x1303], 0x00);                         /* not $1303: the carry went into the high byte */
+    CHECK_EQ(fw_ind_y(&f, (uint8_t)ISR_FILL_PTR, 5), 0xA5);
+    CHECK(!f.fault);
+
+    fw_wr16(&f, ISR_FILL_PTR, 0x3FFE);
+    fw_wr_ind_y(&f, (uint8_t)ISR_FILL_PTR, 1, 0x11);      /* $3FFF: the last RAM byte */
+    CHECK_EQ(g_ram[0x3FFF], 0x11);
+    CHECK(!f.fault);
+    memcpy(before, g_ram, sizeof before);
+    fw_wr_ind_y(&f, (uint8_t)ISR_FILL_PTR, 2, 0x22);      /* $4000: ROM */
+    CHECK(f.fault);
+    CHECK_EQ(f.fault_addr, 0x4000);
+    CHECK(memcmp(g_ram, before, sizeof before) == 0);
+
+    fw_init(&f, g_ram, &g_img, NULL);
+    fw_wr16(&f, ISR_FILL_PTR, 0x00E0);
+    memcpy(before, g_ram, sizeof before);
+    fw_wr_ind_y(&f, (uint8_t)ISR_FILL_PTR, 7, 0x33);      /* $E7: an SFR */
+    CHECK(f.fault);
+    CHECK_EQ(f.fault_addr, 0x00E7);
+    CHECK(memcmp(g_ram, before, sizeof before) == 0);
+}
+
+/* util_shl3 $C657 (ASL A x 3) and util_shl4 $C656 (ASL A, then util_shl3): 8-bit, the high bits shifted out. */
+static void test_shl(void)
+{
+    CHECK_EQ(util_shl3(0x01), 0x08);
+    CHECK_EQ(util_shl3(0x10), 0x80);
+    CHECK_EQ(util_shl3(0x21), 0x08);   /* $108: bit 8 lost */
+    CHECK_EQ(util_shl4(0x01), 0x10);
+    CHECK_EQ(util_shl4(0x0F), 0xF0);
+    CHECK_EQ(util_shl4(0x11), 0x10);   /* $110: bit 8 lost */
+    CHECK_EQ(util_shl4(0x80), 0x00);   /* the first ASL already loses it */
+}
+
+/* fw_fault: a fault at a ROM address where the ROM would never return (Tasks 2 and 3). Without a trap it returns
+   with the fault set; the first fault's address is kept. */
+static void test_fault(void)
+{
+    fw f;
+    fw_init(&f, g_ram, &g_img, NULL);
+    CHECK(!f.fault);
+    fw_fault(&f, 0xC1A1);
+    CHECK(f.fault);
+    CHECK_EQ(f.fault_addr, 0xC1A1);
+    fw_fault(&f, 0xBBA7);
+    CHECK_EQ(f.fault_addr, 0xC1A1);
 }
 
 void suite_fw(void)
@@ -103,4 +211,9 @@ void suite_fw(void)
     CHECK_EQ(TN_POS, 0x0051);
     CHECK_EQ(CMD_TEXT, 0x1A00);
     CHECK_EQ(LTS_MATCH_POS, 0x004F);
+
+    test_sfr8();
+    test_wr_ind_y();
+    test_shl();
+    test_fault();
 }

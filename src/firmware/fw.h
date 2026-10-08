@@ -122,6 +122,8 @@ typedef struct fw_host {
     fw_call_result (*rom_call)(void *ctx, uint16_t addr, fw_regs *regs, uint64_t budget);
     /* P2 bit 7, the lower-ROM window, as SEB7/CLB7 $F0 set and clear it. */
     void (*set_low_window)(void *ctx, bool on);
+    /* Reads an SFR ($DA-$FF) as the CPU would, for the registers the firmware polls (UART_STATUS $E7). */
+    uint8_t (*read_sfr)(void *ctx, uint8_t addr);
 } fw_host;
 
 /* Converted ROM data at its original addresses (built by src/firmware/data/fw_data.c). */
@@ -162,6 +164,15 @@ uint8_t fw_rom8(fw *f, uint16_t addr);
 uint8_t fw_mem8(fw *f, uint16_t addr);
 /* (zp),Y: the byte at the little-endian pointer in zero page zp, plus y. */
 uint8_t fw_ind_y(fw *f, uint8_t zp, uint8_t y);
+/* STA (zp),Y: writes v at the little-endian pointer in zero page zp, plus y. A target that is not RAM ($4000 and
+   above, or an SFR $DA-$FF) is a fault and nothing is written. */
+void fw_wr_ind_y(fw *f, uint8_t zp, uint8_t y, uint8_t v);
+/* An SFR byte, read through the host. Without a host or read_sfr, or for an address below $DA, a fault: it
+   longjmps to f->trap when set, else reads $FF. */
+uint8_t fw_sfr8(fw *f, uint8_t addr);
+/* A fault at addr where the ROM would never return (a loop with no exit): it longjmps to f->trap when set, else
+   returns with f->fault and f->fault_addr set, like a fault of fw_rom8. */
+void fw_fault(fw *f, uint16_t addr);
 /* SEB7/CLB7 P2: sets the window and tells the host. */
 void fw_set_low_window(fw *f, bool on);
 /* Calls a routine still in ROM through the host, within budget cycles. True when it returned. Without a host, or

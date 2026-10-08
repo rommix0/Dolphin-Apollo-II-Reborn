@@ -3,6 +3,7 @@
 #include "cmd_handlers.h"
 #include "cmd_apply.h"
 #include "cmd_match.h"
+#include "fw_ops.h"
 #include "tn_rules.h"
 #include "data/fw_data.h"
 

@@ -741,3 +741,20 @@ const uint8_t fw_frm_snapshot_map[10] = {
     FRAME_PITCH, FRAME_AHF, FRAME_A3, FRAME_A2, FRAME_A1,
     FRAME_ALF, FRAME_FN, FRAME_F1, FRAME_F2, FRAME_F3,
 };
+
+/* par_slot_map ($B797): per parameter P1..P10 (read as $B796,X with X = 1-10: par_track_sequential $C169,
+   $C177, $C19B, par_track_overlap $C216) the frame byte its track writes through isr_fill_ptr. The pitch track
+   writes b10 itself (par_step_tracks, LDY #10). $B796 is not read, and the six zero bytes after the map
+   (unused_B7A1) are not converted. */
+const uint8_t fw_par_slot_map[10] = {
+    FRAME_FN,    /* P1 */
+    FRAME_F1,    /* P2 */
+    FRAME_F2,    /* P3 */
+    FRAME_F3,    /* P4 */
+    FRAME_ALF,   /* P5 */
+    FRAME_A1,    /* P6 */
+    FRAME_A2,    /* P7 */
+    FRAME_A3,    /* P8 */
+    FRAME_AHF,   /* P9 */
+    FRAME_V,     /* P10 voicing */
+};

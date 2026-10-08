@@ -21,6 +21,7 @@ typedef struct {
     uint16_t addr;
     uint8_t outputs;          /* FW_OUT_* */
     machine_hook_fn thunk;    /* user = the fw_bridge bound to that machine */
+    bool waits;               /* waits on the timer interrupt (the frame loop): checked by diff_play, not diff_lts */
 } fw_replacement;
 
 extern const fw_replacement fw_replacements[];

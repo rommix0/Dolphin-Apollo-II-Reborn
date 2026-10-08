@@ -7,7 +7,7 @@
 
 typedef struct { uint32_t from, to; } range;   /* [from, to) in CPU addresses */
 static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9804, 0xA397 }, { 0xACC7, 0xACE8 }, { 0xB773, 0xB77D },
-                               { 0xB7A7, 0xB7B1 }, { 0xC67B, 0xC9B8 }, { 0xD44A, 0xF77B } };
+                               { 0xB797, 0xB7A1 }, { 0xB7A7, 0xB7B1 }, { 0xC67B, 0xC9B8 }, { 0xD44A, 0xF77B } };
 static const range k_low[] = { { 0x4010, 0x7832 } };
 
 static bool bit(const uint8_t *ok, uint32_t i) { return (ok[i >> 3] >> (i & 7)) & 1; }
@@ -91,6 +91,8 @@ static void test_counts(void)
     CHECK_EQ(fw_par_voice_a[59].rank, 31);   /* the pause */
     CHECK_EQ(fw_par_target_bias[3], 26);     /* P4 F3 */
     CHECK_EQ(fw_frm_snapshot_map[0], FRAME_PITCH);
+    CHECK_EQ(fw_par_slot_map[0], FRAME_FN);                  /* P1 */
+    CHECK_EQ(fw_par_slot_map[9], FRAME_V);                   /* P10 */
     unsigned sound_segments = 0, sound_longest = 0, sound_refs = 0;
     for (int x = 0; x < CMD_SOUND_EFFECTS; x++) {
         const fw_cmd_sound_effect *s = &fw_cmd_sound_effects[x];
@@ -124,8 +126,9 @@ static void test_against_rom(const fw_image *img, const uint8_t *rom)
             fprintf(stderr, "  LOW $%04X: converted %02X, ROM %02X\n", a, img->low[a - 0x4000], rom[a - 0x4000]);
     }
     printf("  %u converted bytes compared with the ROM, %u differ\n", compared, bad);
-    CHECK_EQ(compared, 47692);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567),
-                                    M4.3a's prosody data (2,319) and M4.4a's playback data (9,495) */
+    CHECK_EQ(compared, 47702);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567),
+                                    M4.3a's prosody data (2,319), M4.4a's playback data (9,495) and M4.4b's
+                                    par_slot_map (10) */
     CHECK_EQ(bad, 0);
 }
 

@@ -110,6 +110,7 @@ typedef struct { const uint8_t *phoneme, *duration, *pitch, *flags; } fw_cmd_sou
 #define CMD_SOUND_TABLE     0x9F74   /* ptr[17][4]: per @T effect its phoneme, duration, pitch-target and flag arrays */
 #define CMD_SOUND_DATA      0x9FFC   /* the @T segment arrays (395 bytes) */
 #define FRM_SNAPSHOT_MAP    0xB773   /* byte[10]: frame byte offset per snapshot entry */
+#define PAR_SLOT_MAP        0xB797   /* byte[10]: frame byte per parameter P1..P10 (read as $B796,X, X = 1-10) */
 #define PAR_TARGET_BIAS     0xB7A7   /* byte[10]: per parameter P1..P10 */
 
 /* lts_char_class bits */
@@ -141,7 +142,7 @@ typedef struct { const uint8_t *phoneme, *duration, *pitch, *flags; } fw_cmd_sou
 #define PHF_VOICED      0x01
 
 /* The bytes of a DSP frame (frame20: ghidra740/annotations/types.txt; parent spec 1.4): the values of
-   frm_snapshot_map */
+   frm_snapshot_map and par_slot_map */
 #define FRAME_ALF       0    /* b0 low-frequency amplitude */
 #define FRAME_FN        1    /* b1 nasal (low) resonance frequency */
 #define FRAME_A1        2
@@ -195,6 +196,7 @@ extern const uint8_t fw_cmd_speed_map_data[9][32];
 extern const uint8_t fw_ph_lengthen_steps[31];
 extern const fw_par_phoneme fw_par_voice_a[PAR_PHONEMES], fw_par_voice_b[PAR_PHONEMES];
 extern const uint8_t fw_par_target_bias[10], fw_frm_snapshot_map[10];
+extern const uint8_t fw_par_slot_map[10];
 extern const uint8_t fw_cmd_sound_flags[CMD_SOUND_MAX];
 extern const fw_cmd_sound_effect fw_cmd_sound_effects[CMD_SOUND_EFFECTS];
 extern const fw_cmd_sound fw_cmd_sound_table[CMD_SOUND_EFFECTS];

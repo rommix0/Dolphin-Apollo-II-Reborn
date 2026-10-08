@@ -4,8 +4,6 @@
    and tables are read from the converted data; the text from RAM (stale bytes after the clause included). */
 #include "fw.h"
 
-static inline uint8_t util_shl4(uint8_t a) { return (uint8_t)(a << 4); }   /* ROM util_shl4 $C656, inlined */
-
 /* $C50D: cmd_case_map[c] (upper case; control codes, DEL and many codes above $7F become spaces). */
 uint8_t cmd_upcase(fw *f, uint8_t c);
 /* $C520: the value of an argument character after cmd_upcase: '0'-'9' -> 0-9, 'A'-'Z' -> 10-35, ':'-'@' -> 35;

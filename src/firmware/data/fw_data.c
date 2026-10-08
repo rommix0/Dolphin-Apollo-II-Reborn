@@ -338,8 +338,9 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
         check_end(&e, "ph_lengthen_steps", PH_LENGTHEN_STEPS + 31, PAR_VOICE_A_COUNT);
     }
     /* 9. The playback data (M4.4a spec 3): the two voice tables, each after its count byte (step 7) and filling the
-       space up to the next table; par_target_bias and frm_snapshot_map; the @T sound effects end to end in
-       cmd_sound_data, exactly filling it, and cmd_sound_table computed from where their arrays landed. */
+       space up to the next table; par_target_bias, frm_snapshot_map and (M4.4b spec 3) par_slot_map; the @T sound
+       effects end to end in cmd_sound_data, exactly filling it, and cmd_sound_table computed from where their
+       arrays landed. */
     {
         if (fw_par_voice_a_count != PAR_PHONEMES || fw_par_voice_b_count != PAR_PHONEMES)
             fail(&e, "the voice counts are %u and %u, the tables have %u phonemes", (unsigned)fw_par_voice_a_count,
@@ -353,6 +354,9 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
             if (fw_frm_snapshot_map[k] > FRAME_PITCH)
                 fail(&e, "frm_snapshot_map entry %d: frame byte %u", k + 1, (unsigned)fw_frm_snapshot_map[k]);
             put(&e, false, FRM_SNAPSHOT_MAP + (uint32_t)k, fw_frm_snapshot_map[k]);
+            if (fw_par_slot_map[k] > FRAME_V)   /* b10, the pitch, is the pitch track's */
+                fail(&e, "par_slot_map entry %d: frame byte %u", k + 1, (unsigned)fw_par_slot_map[k]);
+            put(&e, false, PAR_SLOT_MAP + (uint32_t)k, fw_par_slot_map[k]);
         }
         const uint8_t *arr[1 + 3 * CMD_SOUND_EFFECTS];
         uint16_t addr[1 + 3 * CMD_SOUND_EFFECTS];
