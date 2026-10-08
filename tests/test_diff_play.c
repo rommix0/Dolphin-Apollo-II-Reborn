@@ -15,10 +15,13 @@
    The receive interrupt's two effects that no corpus text reaches are injected into both copies, on the first call
    of each routine in each run whose ROM copy swapped the buffers at least twice. A reply due: ser_status_due = 1 in
    the frame callback of the second swap (ser_tx_service from $B89C at every pass after it). A mute: ser_abort bit 0
-   set at the first frm_finish_frame ($B9B5) after the second swap, so that par_play's next abort test ($B8A2) ends
-   it (the end path from $B8A5). Not at the swap itself: there the ROM sees the mute before or after the frame flag
-   depending on the instruction the interrupt lands on (at $B8A8, between the two tests, it builds one more frame),
-   which the C, taking no time between its tests, cannot reproduce. A hook on copy A counts the calls that executed
+   set at the first isr_par_ready entry ($C5D6, ROM in both copies) after the second swap at which isr_frame_flag
+   bit 0 is clear: the frame built after that swap has been finished and the flag cleared, so that par_play's next
+   abort test ($B8A2, right after its JSR isr_par_ready at $B89F) ends it (the end path from $B8A5). Not at the swap
+   itself: there the ROM sees the mute before or after the frame flag depending on the instruction the interrupt
+   lands on (at $B8A8, between the two tests, it builds one more frame), which the C, taking no time between its
+   tests, cannot reproduce. Nor at frm_finish_frame ($B9B5), the point used until M4.5: once par_play calls the C
+   frame builder (M4.5), its C copy never executes $B9B5. A hook on copy A counts the calls that executed
    $B8A5 and $B89C. No copy runs past the routine's return: after a ser_status_due injection the ROM never reaches
    idle again (boot_get_clause waits for the host at $A6D4).
    A self-check runs the ROM routine in copy B too, on hello, both injections included: it proves the comparison
@@ -32,6 +35,7 @@
 #include "engine/rom_engine.h"
 #include "engine/thunks.h"
 #include "firmware/par_addr.h"
+#include "firmware/tn_convert.h"
 
 #define PLAY_BUDGET        1000000000ULL   /* copy A: the longest call (seg_wrap_word, 1,774 frames) is 35.5 M cycles */
 #define PLAY_CALL_SITE     0xB2C7          /* boot_play_body: JSR par_play */
@@ -61,7 +65,7 @@ typedef struct {
     inject_kind inject;
     bool ref;
     size_t swaps;
-    bool abort_due;    /* the abort injection waits for the next frm_finish_frame */
+    bool abort_due;    /* the abort injection waits for the next isr_par_ready with isr_frame_flag bit 0 clear */
     bool differs;      /* copy B: the first difference is in why */
     char why[160];
 } recorder;
@@ -158,12 +162,12 @@ static void on_swap(void *user, const uint8_t frame[APOLLO_FRAME_BYTES])
     }
 }
 
-/* $B9B5, frm_finish_frame (ROM in both copies): the abort injection, at the first frame finished after the second
-   swap. */
+/* $C5D6, isr_par_ready (ROM in both copies): the abort injection, at its first entry after the second swap with
+   isr_frame_flag bit 0 clear (the frame built after the swap is finished). */
 static bool inject_abort(machine *m, void *user)
 {
     recorder *rec = user;
-    if (rec->abort_due) {
+    if (rec->abort_due && !(m->ram[ISR_FRAME_FLAG] & 1)) {
         m->ram[SER_ABORT] |= 1;
         rec->abort_due = false;
     }
@@ -249,14 +253,14 @@ static size_t check_call(machine *m, watch *w, unsigned call, inject_kind inject
     g_hit_abort = g_hit_reply = false;
     CHECK(machine_hook(&g_a, PLAY_ABORT, hit_abort, NULL));
     CHECK(machine_hook(&g_a, PLAY_REPLY, hit_reply, NULL));
-    CHECK(machine_hook(&g_a, ROM_FRM_FINISH_FRAME, inject_abort, &ra));
+    CHECK(machine_hook(&g_a, ROM_ISR_PAR_READY, inject_abort, &ra));
     machine_set_outputs(&g_a, on_swap, &ra);
     bool a_ok = machine_finish_routine(&g_a, PLAY_BUDGET);
     g_ref_n = ra.swaps;
     g_reached_abort += g_hit_abort;
     g_reached_reply += g_hit_reply;
     machine_clone(&g_b, m);
-    CHECK(machine_hook(&g_b, ROM_FRM_FINISH_FRAME, inject_abort, &rb));
+    CHECK(machine_hook(&g_b, ROM_ISR_PAR_READY, inject_abort, &rb));
     machine_set_outputs(&g_b, on_swap, &rb);
     bool b_ok = w->run_b(&g_b, w);
     if (!a_ok)

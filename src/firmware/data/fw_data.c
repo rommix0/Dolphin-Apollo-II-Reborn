@@ -394,6 +394,28 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
         }
         check_end(&e, "cmd_sound_table", CMD_SOUND_TABLE + 8 * CMD_SOUND_EFFECTS, CMD_SOUND_DATA);
     }
+    /* 10. The frame builder's data (M4.5 spec 3): two tables expanded from their formulas, frm_product_limit[e] =
+       255 / e (truncated), the largest level difference d whose product d * e fits a byte (entry 0, which nothing
+       reads, is FRM_PRODUCT_LIMIT_0), and frm_b14_15_lo/hi[i] = the low and the high byte of the b14-b15 word
+       FRM_B14_15_STEP * i, ending where frm_snapshot_map starts; frm_template, ending where par_slot_map starts;
+       frm_source_codes and frm_filter_codes, back to back. */
+    {
+        for (uint32_t i = 0; i < 256; i++) {
+            put(&e, false, FRM_PRODUCT_LIMIT + i, (uint8_t)(i ? 255 / i : FRM_PRODUCT_LIMIT_0));
+            uint16_t w = (uint16_t)(FRM_B14_15_STEP * i);
+            put(&e, false, FRM_B14_15_LO + i, (uint8_t)w);
+            put(&e, false, FRM_B14_15_HI + i, (uint8_t)(w >> 8));
+        }
+        check_end(&e, "frm_b14_15_hi", FRM_B14_15_HI + 256, FRM_SNAPSHOT_MAP);
+        for (uint32_t b = 0; b < FRAME_SIZE; b++)
+            put(&e, false, FRM_TEMPLATE + b, fw_frm_template[b]);
+        check_end(&e, "frm_template", FRM_TEMPLATE + FRAME_SIZE, PAR_SLOT_MAP);
+        for (uint32_t k = 0; k < 4; k++)
+            put(&e, false, FRM_SOURCE_CODES + k, fw_frm_source_codes[k]);
+        check_end(&e, "frm_source_codes", FRM_SOURCE_CODES + 4, FRM_FILTER_CODES);
+        for (uint32_t k = 0; k < 2; k++)
+            put(&e, false, FRM_FILTER_CODES + k, fw_frm_filter_codes[k]);
+    }
     return e.ok;
 }
 

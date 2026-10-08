@@ -113,6 +113,16 @@ typedef struct { const uint8_t *phoneme, *duration, *pitch, *flags; } fw_cmd_sou
 #define PAR_SLOT_MAP        0xB797   /* byte[10]: frame byte per parameter P1..P10 (read as $B796,X, X = 1-10) */
 #define PAR_TARGET_BIAS     0xB7A7   /* byte[10]: per parameter P1..P10 */
 
+/* Pinned addresses of the frame builder's data (ghidra740/annotations: frame.txt; M4.5 spec 3) */
+#define FRM_PRODUCT_LIMIT   0xB473   /* byte[256]: per F1 excess e, 255 / e (a formula the encoder expands) */
+#define FRM_B14_15_LO       0xB573   /* byte[256]: per product index i, the low byte of FRM_B14_15_STEP * i */
+#define FRM_B14_15_HI       0xB673   /* byte[256]: its high byte */
+#define FRM_TEMPLATE        0xB783   /* byte[FRAME_SIZE]: the rest-frame template (read as $B782,Y, Y = 1-20) */
+#define FRM_SOURCE_CODES    0xBAEC   /* byte[4]: b16 per frm_source_index */
+#define FRM_FILTER_CODES    0xBAF0   /* byte[2]: b17 per frm_filter_index */
+#define FRM_PRODUCT_LIMIT_0 72       /* frm_product_limit[0], which nothing reads (e >= 1 where it is indexed) */
+#define FRM_B14_15_STEP     82       /* the b14-b15 word per product index (parent spec 1.4, rev 6) */
+
 /* lts_char_class bits */
 #define CC_LETTER       0x80   /* also the apostrophe and the underscore */
 #define CC_VOWEL        0x40   /* A E I O U Y (also the underscore and lower-case x) */
@@ -142,7 +152,7 @@ typedef struct { const uint8_t *phoneme, *duration, *pitch, *flags; } fw_cmd_sou
 #define PHF_VOICED      0x01
 
 /* The bytes of a DSP frame (frame20: ghidra740/annotations/types.txt; parent spec 1.4): the values of
-   frm_snapshot_map and par_slot_map */
+   frm_snapshot_map and par_slot_map, and the bytes the frame builder writes (M4.5) */
 #define FRAME_ALF       0    /* b0 low-frequency amplitude */
 #define FRAME_FN        1    /* b1 nasal (low) resonance frequency */
 #define FRAME_A1        2
@@ -154,6 +164,15 @@ typedef struct { const uint8_t *phoneme, *duration, *pitch, *flags; } fw_cmd_sou
 #define FRAME_AHF       8    /* b8 high-frequency amplitude */
 #define FRAME_V         9    /* b9 degree of voicing */
 #define FRAME_PITCH     10   /* b10 pitch code */
+#define FRAME_MARK_SPACE 11  /* b11 mark-space ratio (@M) */
+#define FRAME_B12       12   /* b12, always $17 */
+#define FRAME_FLAGS     13   /* b13 transition flags */
+#define FRAME_B14       14   /* b14-b15: a little-endian word (frm_b14_15_lo/hi) */
+#define FRAME_B15       15
+#define FRAME_SOURCE    16   /* b16 voicing source (@$) */
+#define FRAME_FILTER    17   /* b17 voice filter (@$) */
+#define FRAME_END_MARKER 18  /* b18-b19, always $FF $FF */
+#define FRAME_SIZE      20
 
 extern const fw_rule_table tn_rules_ctrl, tn_rules_punct, tn_rules_digits, tn_rules_punct2, lts_rules_letters,
     tn_rules_symbols3, tn_rules_lower, tn_rules_symbols4, tn_rules_high;
@@ -197,6 +216,7 @@ extern const uint8_t fw_ph_lengthen_steps[31];
 extern const fw_par_phoneme fw_par_voice_a[PAR_PHONEMES], fw_par_voice_b[PAR_PHONEMES];
 extern const uint8_t fw_par_target_bias[10], fw_frm_snapshot_map[10];
 extern const uint8_t fw_par_slot_map[10];
+extern const uint8_t fw_frm_template[FRAME_SIZE], fw_frm_source_codes[4], fw_frm_filter_codes[2];
 extern const uint8_t fw_cmd_sound_flags[CMD_SOUND_MAX];
 extern const fw_cmd_sound_effect fw_cmd_sound_effects[CMD_SOUND_EFFECTS];
 extern const fw_cmd_sound fw_cmd_sound_table[CMD_SOUND_EFFECTS];

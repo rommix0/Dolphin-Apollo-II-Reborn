@@ -21,7 +21,7 @@
 #define DIFF_FULL_CALLS 1000      /* every call up to this many per routine and corpus file ... */
 #define DIFF_STRIDE     64        /* ... then every 64th */
 #define DIFF_BUDGET     10000000ULL
-#define DIFF_MAX        64
+#define DIFF_MAX        72
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
 /* Extra text, for this test only (not goldens): words whose rules use the % & @ context symbols. */
