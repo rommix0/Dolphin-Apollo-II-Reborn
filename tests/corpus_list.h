@@ -17,8 +17,11 @@
    floored at 4 under @F0, where the microprosody's + 5 and - 5 would wrap; @B0, @B2, @B3 and @B5, with a pause
    dominating a vowel (a voicing value 0), and a P10 target that @u937- makes 8; and a @T effect at @W9, whose
    duration 40 the speed map caps at 31.
-   The last one (M4.4b) is seg_256 two words longer, with a @B5 before its last word: an event at segment 259
-   ($0103), whose low byte par_play meets first on page 0 (the high-byte test at $B88D). */
+   The next one (M4.4b) is seg_256 two words longer, with a @B5 before its last word: an event at segment 259
+   ($0103), whose low byte par_play meets first on page 0 (the high-byte test at $B88D).
+   The last two (M4.5) reach the frame builder's rare paths: @u offsets that raise F1 by 16 and lower A1 by 16, so
+   that F1 >= 33 and ALF - A1 > 4 in the same frame (the b14-b15 product, its saturated index $FF, and F1 = 33);
+   and @M3F under @R7 @FF, a mark-space ratio above the cap 160 - 2 x b10 at the highest pitch codes. */
 #define CORPUS_NAMES \
     "hello", "prose", "numbers", "punctuation", "letters_k_to_z", "abbreviations", \
     "voice_b", "presets", "source_filter", "mark_space", "breathy", "pitch", "speed", \
@@ -29,5 +32,6 @@
     "seg_wrap_word", \
     "long_words", "linking_r", "syllabic_stress", \
     "pitch_extremes", "voicing_levels", "fast_effect", \
-    "late_event"
+    "late_event", \
+    "formant_extremes", "mark_space_cap"
 #endif
