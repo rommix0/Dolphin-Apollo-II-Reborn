@@ -433,6 +433,7 @@ void suite_diff_play(void)
             add_watch(r->name, r->addr, r);
     }
     printf("  %zu routines wait on the timer interrupt\n", g_nwatch);
+    CHECK_EQ(g_nwatch, 2);   /* par_play and boot_loop_play (M4.4b spec 2.5) */
     if (g_nwatch > 0) {
         g_reached_abort = g_reached_reply = 0;
         run_corpus(rom, len);

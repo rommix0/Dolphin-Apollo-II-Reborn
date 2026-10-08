@@ -1,7 +1,7 @@
 #include "tn_convert.h"
 #include "cmd_run.h"
 #include "lts.h"
-#include "par_addr.h"
+#include "par_play.h"
 #include "pros_make.h"
 #include "tn_rules.h"
 #include "data/fw_data.h"
@@ -107,13 +107,13 @@ void tn_convert_clause(fw *f)
             }
         }
         /* $B1FF: speak tn_phonetic, then convert on from here with an empty buffer. The C pros_make_segments
-           (M4.3b) leaves in r what the ROM's leaves (pros_phrase_gen's A, X and Y) for boot_loop_play. The entry Y
-           here is 0, the ROM has the last character's: it reaches only isr_par_ready, which never reads it, and
-           $CBB3 reloads Y, so no RAM differs (M4.3b spec 6). */
+           (M4.3b) leaves in r what the ROM's leaves (pros_phrase_gen's A, X and Y) for the C boot_loop_play
+           (M4.4b). The entry Y here is 0, the ROM has the last character's: it reaches only isr_par_ready, which
+           never reads it, and $CBB3 reloads Y, so no RAM differs (M4.3b spec 6). */
         fw_wr8(f, TN_RESUME_POS, x);
         fw_regs r = { fw_rd8(f, TN_PHON_LEN), x, 0, 0 };
         pros_make_segments(f, &r);
-        fw_rom_call(f, ROM_BOOT_LOOP_PLAY, &r, FW_ROM_CALL_SPEECH_BUDGET);
+        boot_loop_play(f, &r);
         f->tn_flushes++;
     }
 }

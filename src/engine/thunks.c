@@ -21,6 +21,7 @@
 #include "firmware/par_boundary.h"
 #include "firmware/par_start.h"
 #include "firmware/par_track.h"
+#include "firmware/par_play.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -129,6 +130,25 @@ static void cmd_apply_speaker_regs(fw *f, cpu740 *c)
     c->a = cmd_apply_speaker(f, &x, &y);
     c->x = x;
     c->y = y;
+}
+
+/* boot_loop_play $A7D4: A, X, Y in; none is read (A is loaded first; X and Y flow into isr_par_hold, which keeps
+   them, and par_play_start, which writes Y and keeps X). Out: A = $6B and X, Y untouched when it does not play
+   ($A7DE RTS); else the A, X and Y isr_speech_stop leaves (its RTS at $B3A3). The C's ROM calls overwrite the
+   machine's registers, so all three are set from the C. Nothing reads them after a call: boot_reset ($A687) jumps
+   to boot_loop_text, whose boot_get_clause writes X and A first ($A697 LDX #1, $A699 LDA #$20);
+   boot_selftest_sound ($A7BA) returns to $A657 (BBS0 boot_dip, then LDX #0 or JMP $A66B: LDM, CLI, the isr_par_*
+   calls that keep the registers, and cmd_apply_speaker, whose par_setup_voice reads none); cmd_say_phonetic
+   ($A87C, unreachable) returns; the C tn_convert_clause (and the ROM's $B207 JMP $B1E9) writes X first (LDX #0).
+   No caller reads a flag. It waits on the timer interrupt (par_play), so diff_play checks it, not diff_lts.
+   Declared: A, X, Y. */
+static void boot_loop_play_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    boot_loop_play(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
 }
 
 /* cmd_run_due $A880: X in. X out unchanged (every handler ends at cmd_run_done's PLA/TAX). Y out = cmd_next,
@@ -255,6 +275,23 @@ static void par_setup_voice_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
     par_setup_voice(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* par_play $B877: A, X, Y in; none is read before it is written (X at $B877 LDX cmd_ev_next; A and Y reach only
+   ROM calls and C routines that write them first: isr_par_ready and ser_tx_service keep them, par_step_tracks
+   starts with LDX #$0A, cmd_run_event with LDA cmd_ev_next). Out: as cmd_ev_sound_end leaves them, kept by the last
+   isr_par_ready ($B8F7) to the RTS at $B8FA. The C's ROM calls overwrite the machine's registers, so all three are
+   set from the C. Its one caller, boot_play_body ($B2C7), calls isr_volume_half next, which loads A first ($B46C
+   LDA cmd_volume) and reads no X or Y; no caller reads a flag. The hook fires on the JSR only: once it has run,
+   par_play's own JMP par_play ($B892, $B8AE, $B914) never runs. It waits on the timer interrupt, so diff_play checks
+   it, not diff_lts. Declared: A, X, Y. */
+static void par_play_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    par_play(f, &r);
     c->a = r.a;
     c->x = r.x;
     c->y = r.y;
@@ -869,6 +906,7 @@ static void ph_lengthen_count_regs(fw *f, cpu740 *c)
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
 THUNK(cmd_apply_speaker)
+THUNK(boot_loop_play)
 THUNK(cmd_run_due)
 THUNK(cmd_scan_clause)
 THUNK(cmd_match_table)
@@ -884,6 +922,7 @@ THUNK(tn_append_phonetic)
 THUNK(lts_convert_char)
 THUNK(tn_convert_clause)
 THUNK(par_setup_voice)
+THUNK(par_play)
 THUNK(pros_microprosody)
 THUNK(par_play_start)
 THUNK(par_reset_tracks)
@@ -934,6 +973,7 @@ THUNK(ph_lengthen_count)
 
 const fw_replacement fw_replacements[] = {
     { "cmd_apply_speaker",  0xA78C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_apply_speaker },
+    { "boot_loop_play",     0xA7D4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_loop_play, true },
     { "cmd_run_due",        0xA880, FW_OUT_X | FW_OUT_Y, t_cmd_run_due },
     { "cmd_scan_clause",    0xACFA, 0,                   t_cmd_scan_clause },
     { "cmd_match_table",    0xADBF, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_match_table },
@@ -949,6 +989,7 @@ const fw_replacement fw_replacements[] = {
     { "lts_convert_char",   0xB172, 0,                   t_lts_convert_char },
     { "tn_convert_clause",  0xB1E6, 0,                   t_tn_convert_clause },
     { "par_setup_voice",    0xB3A4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_setup_voice },
+    { "par_play",           0xB877, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_play, true },
     { "pros_microprosody",  0xB983, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_microprosody },
     { "par_play_start",     0xBAF2, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_play_start },
     { "par_reset_tracks",   0xBB35, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_reset_tracks },

@@ -1,0 +1,174 @@
+#include "par_play.h"
+#include "cmd_play_event.h"
+#include "fw_ops.h"
+#include "par_addr.h"
+#include "par_start.h"
+#include "par_track.h"
+
+#define SFR_UART_STATUS  0xE7   /* UART_STATUS (an SFR): bit 1 = the transmitter is ready */
+#define UART_TX_READY    0x02   /* $B895 BBC1 UART_STATUS */
+
+/* ---- par_play $B877 ---- */
+
+/* DEC par_frames_left ($B8BB, $B8EF, $B8FB): mod 256, so 0 becomes $FF. Returns the new count (its Z flag). */
+static uint8_t count_frame(fw *f)
+{
+    uint8_t n = (uint8_t)(fw_rd8(f, PAR_FRAMES_LEFT) - 1);
+    fw_wr8(f, PAR_FRAMES_LEFT, n);
+    return n;
+}
+
+/* $B8C9-$B8CC, $B8E6-$B8E9: isr_par_ready until the timer interrupt has swapped the buffers and set isr_frame_flag
+   bit 0. A failed ROM call ends the wait: under a thunk the fault has longjmped out already, and without a trap (a
+   unit test) the flag would never come. */
+static void wait_frame_flag(fw *f, fw_regs r)
+{
+    do
+        fw_par_ready(f, r);
+    while (!(fw_rd8(f, ISR_FRAME_FLAG) & 1) && !f->fault);
+}
+
+/* $B877-$B892: an event is due when cmd_ev_next < cmd_ev_count (CPX / BCS, unsigned) and par_seg_index =
+   cmd_ev_pos, low byte, then high byte (CMP / BNE). cmd_run_event runs it with X = cmd_ev_next and A = the
+   high byte of par_seg_index, and the JMP par_play ($B892) tests again. False when none is due: X = cmd_ev_next,
+   and A = the last byte loaded, or as before when the BCS left first. */
+static bool run_due_event(fw *f, fw_regs *r)
+{
+    r->x = fw_rd8(f, CMD_EV_NEXT);
+    if (r->x >= fw_rd8(f, CMD_EV_COUNT))
+        return false;
+    r->a = fw_rd8(f, PAR_SEG_INDEX);
+    if (r->a != fw_rd8(f, CMD_EV_POS))
+        return false;
+    r->a = fw_rd8(f, PAR_SEG_INDEX + 1);
+    if (r->a != fw_rd8(f, CMD_EV_POS + 1))
+        return false;
+    cmd_run_event(f, r);
+    return true;
+}
+
+/* $B895-$B89C: the reply output, when the transmitter is ready (UART_STATUS bit 1, BBC1) and a status byte is due
+   (TST ser_status_due, the whole byte). */
+static void serve_reply(fw *f, fw_regs *r)
+{
+    if ((fw_sfr8(f, SFR_UART_STATUS) & UART_TX_READY) && fw_rd8(f, SER_STATUS_DUE) != 0)
+        fw_rom_call(f, ROM_SER_TX_SERVICE, r, FW_ROM_CALL_BUDGET);
+}
+
+/* $B8B1-$B907, with isr_frame_flag set: Y = pros_seg_count's low byte, or its high byte when that is 0 (LDY / BNE,
+   twice). With no segment left, false ($B8BB). Otherwise DEC par_frames_left; when it reaches 0, par_next_segment
+   and A = the new par_frames_left, and when that is 0 too, the test again from $B8B1 (BEQ $B906). True when a frame
+   of the segment follows ($B908). */
+static bool segment_frame(fw *f, fw_regs *r)
+{
+    for (;;) {
+        r->y = fw_rd8(f, PROS_SEG_COUNT);
+        if (r->y == 0) {
+            r->y = fw_rd8(f, PROS_SEG_COUNT + 1);
+            if (r->y == 0)
+                return false;
+        }
+        if (count_frame(f) != 0)
+            return true;
+        par_next_segment(f, r);
+        r->a = fw_rd8(f, PAR_FRAMES_LEFT);
+        if (r->a != 0)
+            return true;
+    }
+}
+
+/* $B908-$B911: isr_par_ready, par_step_tracks, frm_finish_frame (it saves and restores A, X and Y), then LDM #0:
+   the whole of isr_frame_flag cleared, the frame is ready for the next swap. */
+static void segment_step(fw *f, fw_regs *r)
+{
+    fw_par_ready(f, *r);
+    par_step_tracks(f, r);
+    fw_rom_call(f, ROM_FRM_FINISH_FRAME, r, FW_ROM_CALL_BUDGET);
+    fw_wr8(f, ISR_FRAME_FLAG, 0);
+}
+
+/* $B8BB-$B8CF, once no segment is left: DEC par_frames_left; until it reaches 0, par_step_tracks, frm_finish_frame,
+   the flag cleared, and a wait for the next swap. No events, no reply service, no abort test. */
+static void last_frames(fw *f, fw_regs *r)
+{
+    while (count_frame(f) != 0) {
+        par_step_tracks(f, r);
+        fw_rom_call(f, ROM_FRM_FINISH_FRAME, r, FW_ROM_CALL_BUDGET);
+        fw_wr8(f, ISR_FRAME_FLAG, 0);
+        wait_frame_flag(f, *r);
+    }
+}
+
+/* $B8D2-$B8FA, the end: isr_wait_frame; par_frames_left = 3; per rest frame frm_copy_rest_frame, frm_snapshot,
+   frm_clamp_mark_space and frm_transition_flags, a wait for the swap, the flag cleared (LDM #0) and DEC
+   par_frames_left (BNE $B8DA). Then cmd_ev_sound_end (a @T effect cut short is undone) and isr_par_ready. */
+static void rest_frames(fw *f, fw_regs *r)
+{
+    fw_rom_call(f, ROM_ISR_WAIT_FRAME, r, FW_ROM_CALL_BUDGET);
+    r->a = PAR_REST_FRAMES;
+    fw_wr8(f, PAR_FRAMES_LEFT, r->a);
+    do {
+        fw_rom_call(f, ROM_FRM_COPY_REST_FRAME, r, FW_ROM_CALL_BUDGET);
+        fw_rom_call(f, ROM_FRM_SNAPSHOT, r, FW_ROM_CALL_BUDGET);
+        fw_rom_call(f, ROM_FRM_CLAMP_MARK_SPACE, r, FW_ROM_CALL_BUDGET);
+        fw_rom_call(f, ROM_FRM_TRANSITION_FLAGS, r, FW_ROM_CALL_BUDGET);
+        wait_frame_flag(f, *r);
+        fw_wr8(f, ISR_FRAME_FLAG, 0);
+    } while (count_frame(f) != 0);
+    cmd_ev_sound_end(f, r);
+    fw_par_ready(f, *r);
+}
+
+void par_play(fw *f, fw_regs *r)
+{
+    for (;;) {                                 /* par_play $B877: one pass */
+        if (f->fault)
+            return;                            /* a failed ROM call without a trap: the ROM would not get past it */
+        if (run_due_event(f, r))
+            continue;                          /* $B892 JMP par_play */
+        serve_reply(f, r);
+        fw_par_ready(f, *r);                   /* $B89F */
+        if (fw_rd8(f, SER_ABORT) & 1)          /* $B8A2 BBC0 ser_abort */
+            break;                             /* $B8A5 JMP $B8D2: a mute */
+        if (!(fw_rd8(f, ISR_FRAME_FLAG) & 1)) {   /* $B8A8 BBS0 isr_frame_flag */
+            fw_par_ready(f, *r);               /* $B8AB, then $B8AE JMP par_play */
+            continue;
+        }
+        if (!segment_frame(f, r)) {
+            last_frames(f, r);
+            break;
+        }
+        segment_step(f, r);                    /* then $B914 JMP par_play */
+    }
+    rest_frames(f, r);
+}
+
+/* ---- boot_loop_play $A7D4 ---- */
+
+/* $B2B3-$B2D8, boot_play_body (JMP from $A7DB): hold the host, set up playback, start the DSP with a frame's wait,
+   ramp the volume in (half, a frame, then cmd_volume), play, ramp it out (half, a frame, then 0) and stop the DSP.
+   The registers flow from call to call as the ROM's do; A is loaded only for the two isr_set_volume calls. */
+static void play_body(fw *f, fw_regs *r)
+{
+    fw_rom_call(f, ROM_ISR_PAR_HOLD, r, FW_ROM_CALL_BUDGET);
+    par_play_start(f, r);
+    fw_rom_call(f, ROM_ISR_SPEECH_START, r, FW_ROM_CALL_BUDGET);
+    fw_rom_call(f, ROM_ISR_VOLUME_HALF, r, FW_ROM_CALL_BUDGET);
+    fw_rom_call(f, ROM_ISR_WAIT_FRAME, r, FW_ROM_CALL_BUDGET);
+    r->a = fw_rd8(f, CMD_VOLUME);
+    fw_rom_call(f, ROM_ISR_SET_VOLUME, r, FW_ROM_CALL_BUDGET);
+    par_play(f, r);
+    fw_rom_call(f, ROM_ISR_VOLUME_HALF, r, FW_ROM_CALL_BUDGET);
+    fw_rom_call(f, ROM_ISR_WAIT_FRAME, r, FW_ROM_CALL_BUDGET);
+    r->a = 0;
+    fw_rom_call(f, ROM_ISR_SET_VOLUME, r, FW_ROM_CALL_BUDGET);
+    fw_rom_call(f, ROM_ISR_SPEECH_STOP, r, FW_ROM_CALL_BUDGET);
+}
+
+void boot_loop_play(fw *f, fw_regs *r)
+{
+    r->a = fw_rd8(f, FW_UTT_CONTENT);          /* $A7D4 LDA $6B / BEQ $A7DE */
+    if (r->a == 0 || (fw_rd8(f, SER_ABORT) & 1))   /* $A7D8 BBS0 ser_abort,$A7DE */
+        return;                                /* $A7DE RTS */
+    play_body(f, r);
+}

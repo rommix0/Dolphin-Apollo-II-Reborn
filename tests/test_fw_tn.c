@@ -23,7 +23,10 @@ static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
 
 /* Records every call with tn_phon_len at that moment. cmd_run_next ($A893) plays the ROM's bookkeeping
-   (cmd_next += 1, cmd_next_pos = cmd_positions[cmd_next]); the other helpers leave the registers unchanged. */
+   (cmd_next += 1, cmd_next_pos = cmd_positions[cmd_next]); the other helpers leave the registers unchanged.
+   isr_par_ready also sets isr_frame_flag bit 0 (a frame is due at every wait of the C par_play), and
+   isr_speech_start sets ser_abort bit 0 (a mute as the DSP starts), so the C boot_loop_play of the mid-clause
+   flush plays no segment: par_play goes from its first pass to the three rest frames. */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     fw *f = ctx;
@@ -43,9 +46,33 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         fw_wr8(f, CMD_NEXT_POS, fw_rd8(f, (uint16_t)(CMD_POSITIONS + n)));
         return FW_CALL_RETURNED;
     }
-    if (addr == ROM_ISR_PAR_READY || addr == ROM_BOOT_LOOP_PLAY)
+    switch (addr) {
+    case ROM_ISR_PAR_READY:
+        fw_wr8(f, ISR_FRAME_FLAG, 1);
         return FW_CALL_RETURNED;
-    return FW_CALL_FAILED;
+    case ROM_ISR_SPEECH_START:
+        fw_wr8(f, SER_ABORT, 1);
+        return FW_CALL_RETURNED;
+    case ROM_ISR_PAR_HOLD:
+    case ROM_ISR_VOLUME_HALF:
+    case ROM_ISR_WAIT_FRAME:
+    case ROM_ISR_SET_VOLUME:
+    case ROM_ISR_SPEECH_STOP:
+    case ROM_FRM_COPY_REST_FRAME:
+    case ROM_FRM_SNAPSHOT:
+    case ROM_FRM_CLAMP_MARK_SPACE:
+    case ROM_FRM_TRANSITION_FLAGS:
+        return FW_CALL_RETURNED;
+    default:
+        return FW_CALL_FAILED;
+    }
+}
+
+/* UART_STATUS: the transmitter ready (bit 1), nothing received. */
+static uint8_t mock_read_sfr(void *ctx, uint8_t addr)
+{
+    (void)ctx;
+    return addr == 0xE7 ? 0x02 : 0x00;
 }
 
 static void mock_window(void *ctx, bool on)
@@ -60,6 +87,7 @@ static void setup_n(const char *text, size_t n)
     g_host.ctx = &g_f;
     g_host.rom_call = mock_rom_call;
     g_host.set_low_window = mock_window;
+    g_host.read_sfr = mock_read_sfr;
     g_window = false;
     g_ncalls = 0;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
@@ -203,8 +231,10 @@ static void test_digit_to_rules(void)
 }
 
 /* The mid-clause flush ($B1FF): the C pros_make_segments (M4.3b) turns the 250 symbols into segments, with its
-   isr_par_ready calls (the strict budget), and the ROM boot_loop_play gets the registers it leaves, as the ROM's
-   would; then the conversion goes on from tn_resume_pos with an empty buffer. */
+   isr_par_ready calls (the strict budget), and the C boot_loop_play (M4.4b) gets the registers it leaves, as the
+   ROM's would: it plays (FW_UTT_CONTENT is $FF), so its first ROM call, isr_par_hold, has them; the C
+   par_play_start sets up the first segment; the mock's mute at isr_speech_start ends the C par_play at its first
+   pass. Then the conversion goes on from tn_resume_pos with an empty buffer. */
 static void test_flush(void)
 {
     char text[255];
@@ -219,25 +249,47 @@ static void test_flush(void)
     CHECK(memcmp(g_ram + TN_PHONETIC, text + 250, 5) == 0);
     CHECK_EQ(g_ram[TN_POS], 255);
     CHECK_EQ(count(ROM_PROS_MAKE_SEGMENTS), 0);           /* the C pros_make_segments, not the ROM's */
-    CHECK_EQ(count(ROM_BOOT_LOOP_PLAY), 1);
+    CHECK_EQ(count(ROM_BOOT_LOOP_PLAY), 0);               /* the C boot_loop_play, not the ROM's */
+    CHECK_EQ(g_ram[FW_UTT_CONTENT], 0xFF);
     CHECK_EQ(g_ram[PROS_POS], TN_PHONETIC_FLUSH);         /* pros_phrase_gen walked the 250 symbols ... */
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 368);         /* ... into 369 segments (the index of the last) */
     /* the conversion 251 + 5 (one per character, the flush's included), pros_mark_stress 251 (the start and one per
        position), pros_mark_phrases 249 (positions 249 to 1), pros_phrase_gen 251 (positions 0 to 250) + 367 (one per
-       segment but the two end pauses) */
-    CHECK_EQ(count(ROM_ISR_PAR_READY), 1374);
+       segment but the two end pauses), par_play 5 (its pass, one wait per rest frame, its last call) */
+    CHECK_EQ(count(ROM_ISR_PAR_READY), 1379);
     CHECK(g_ncalls <= MAX_CALLS);
-    for (unsigned i = 0; i < g_ncalls && i < MAX_CALLS; i++) {
-        if (g_calls[i].addr != ROM_BOOT_LOOP_PLAY)
-            continue;
-        CHECK_EQ(g_calls[i].a, 0x71);                     /* pros_phrase_gen's A: pros_seg_count's low byte before
-                                                             its DEC, */
-        CHECK_EQ(g_calls[i].x, TN_PHONETIC_FLUSH);        /* X = pros_pos (tn_phon_len), */
-        CHECK_EQ(g_calls[i].y, 0x70);                     /* Y = the second end pause's: as the ROM leaves them */
-        CHECK_EQ(g_calls[i].phon_len, TN_PHONETIC_FLUSH);
-        CHECK_EQ(g_calls[i].budget, FW_ROM_CALL_SPEECH_BUDGET);
-        CHECK_EQ(g_ncalls - i, 6);                        /* then isr_par_ready at text[250..254] */
-    }
+    /* boot_loop_play's ROM calls, then isr_par_ready at text[250..254] */
+    static const uint16_t k_play[] = {
+        ROM_ISR_PAR_HOLD, ROM_ISR_SPEECH_START, ROM_ISR_VOLUME_HALF, ROM_ISR_WAIT_FRAME, ROM_ISR_SET_VOLUME,
+        ROM_ISR_PAR_READY, ROM_ISR_WAIT_FRAME,                                     /* par_play: the pass, the end */
+        ROM_FRM_COPY_REST_FRAME, ROM_FRM_SNAPSHOT, ROM_FRM_CLAMP_MARK_SPACE, ROM_FRM_TRANSITION_FLAGS,
+        ROM_ISR_PAR_READY,
+        ROM_FRM_COPY_REST_FRAME, ROM_FRM_SNAPSHOT, ROM_FRM_CLAMP_MARK_SPACE, ROM_FRM_TRANSITION_FLAGS,
+        ROM_ISR_PAR_READY,
+        ROM_FRM_COPY_REST_FRAME, ROM_FRM_SNAPSHOT, ROM_FRM_CLAMP_MARK_SPACE, ROM_FRM_TRANSITION_FLAGS,
+        ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,
+        ROM_ISR_VOLUME_HALF, ROM_ISR_WAIT_FRAME, ROM_ISR_SET_VOLUME, ROM_ISR_SPEECH_STOP,
+        ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,
+    };
+    unsigned n = sizeof k_play / sizeof k_play[0];
+    CHECK(g_ncalls >= n && g_ncalls <= MAX_CALLS);
+    if (g_ncalls < n || g_ncalls > MAX_CALLS)
+        return;
+    unsigned first = g_ncalls - n;
+    for (unsigned i = 0; i < n; i++)
+        CHECK_EQ(g_calls[first + i].addr, k_play[i]);
+    CHECK_EQ(g_calls[first].a, 0xFF);                     /* boot_loop_play's LDA $6B ($A7D4); */
+    CHECK_EQ(g_calls[first].x, TN_PHONETIC_FLUSH);        /* X = pros_pos (tn_phon_len) and */
+    CHECK_EQ(g_calls[first].y, 0x70);                     /* Y = the second end pause's, as pros_phrase_gen leaves
+                                                             them */
+    CHECK_EQ(g_calls[first].phon_len, TN_PHONETIC_FLUSH);
+    CHECK_EQ(g_calls[first + 4].a, g_ram[CMD_VOLUME]);   /* isr_set_volume(cmd_volume) ($B2C2) */
+    CHECK_EQ(g_calls[first + 25].a, 0);                   /* isr_set_volume(0) ($B2D0) */
+    CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0xFFFF);          /* par_play_start: no event queued */
+    CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 0);                  /* the three rest frames counted down */
+    CHECK_EQ(g_ram[ISR_FRAME_FLAG], 1);                   /* set by the last isr_par_ready calls */
+    for (unsigned i = first; i < g_ncalls; i++)
+        CHECK_EQ(g_calls[i].budget, FW_ROM_CALL_BUDGET);
     check_helper_budgets();
     CHECK(!g_f.fault);
 }
