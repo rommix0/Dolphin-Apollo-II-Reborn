@@ -48,8 +48,10 @@ and tn_append_phonetic (M4.1), the command parser: the @ command matcher, the cl
 and every deferred command handler (M4.2), the segment generator: phoneme expansion, the phrase generator,
 the segment appenders and the declination (M4.3a), the stress and phrase passes with pros_make_segments
 (M4.3b), so all of prosody before playback, the playback set-up: segment reading, pitch scaling, the
-boundary and dominance pass, track planning and the voice set-up (M4.4a), and the frame loop: par_play, the track
-steppers, the command events and boot_loop_play (M4.4b); the rest still runs on the emulated CPU.
+boundary and dominance pass, track planning and the voice set-up (M4.4a), the frame loop: par_play, the track
+steppers, the command events and boot_loop_play (M4.4b), and the frame builder: the rest frame, the snapshot, the
+mark-space clamp, the formant raise and the b13-b17 bytes (M4.5); the rest (the boot, serial, bank and interrupt
+code) still runs on the emulated CPU.
 The hybrid engine must reproduce every golden frame stream byte for byte (`build.bat test golden_hybrid`),
 `build.bat test diff_lts` compares each ported routine with the ROM at real call sites, and
 `build.bat test diff_play` compares the two that wait on the timer interrupt (par_play, boot_loop_play) with the
