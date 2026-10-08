@@ -279,7 +279,7 @@ static void tn_convert_clause_regs(fw *f, cpu740 *c)
 }
 
 /* par_setup_voice $B3A4: A, X, Y in; none is read (Y reaches frm_build_rest_frame, whose first instruction is
-   LDY #$14 at $B41D). A = $0B, X = 9 and Y = $0B out, as its ROM calls leave them: frm_build_rest_frame's loop ends
+   LDY #$14 at $B41D). A = $0B, X = 9 and Y = $0B out, as the frame builder leaves them: frm_build_rest_frame's loop ends
    at X = 9 ($B436 CPX #8), frm_clamp_mark_space ends with LDA #$0B and Y = $0A + 1 ($B930-$B954); the C calls the C
    frame builder (M4.5), and all three are set from the C. Its one ROM caller, cmd_apply_pitch ($A845),
    restores A (PLA at $A848) and returns; X and Y reach RAM: cmd_apply_speaker ($A798) calls cmd_apply_speed, which
@@ -429,8 +429,8 @@ static void pros_microprosody_regs(fw *f, cpu740 *c)
 /* par_play_start $BAF2: A, X, Y in; none is read (X passes through untouched, A and Y are loaded). A = 0
    ($BB2C), X = the entry X, Y = pros_seg_phoneme[0] ($BB0A TAY) out. Its one ROM caller, boot_play_body ($B2B6),
    calls isr_speech_start next, which writes X ($B323 LDX #0) and A ($B32B LDA) before reading them; Y is not read
-   before par_play's LDY pros_seg_count ($B8B1). No caller reads a flag. It fires in "all" mode (boot_loop_play
-   stays ROM until M4.4b). Declared: A, X, Y. */
+   before par_play's LDY pros_seg_count ($B8B1). No caller reads a flag. It does not fire in "all" mode: the C
+   boot_loop_play calls the C (M4.4b), so it fires only while the ROM boot_loop_play runs. Declared: A, X, Y. */
 static void par_play_start_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
@@ -537,7 +537,8 @@ static void cmd_ev_set_volume_regs(fw *f, cpu740 *c)
    loaded). A, X and Y out as par_plan_tracks leaves them (A = its last result or 1, X = what the boundary pass
    left, Y = 0). Its one ROM caller, par_play ($B900), loads A next ($B903 LDA par_frames_left); then either
    $B8B1 LDY, or isr_par_ready (which preserves A, X and Y) and par_step_tracks, which loads X and Y before reading
-   them. No caller reads a flag. It fires in "all" mode (par_play stays ROM until M4.4b). Declared: A, X, Y. */
+   them. No caller reads a flag. It does not fire in "all" mode: the C par_play calls the C (M4.4b), so it fires only while the ROM par_play runs.
+   Declared: A, X, Y. */
 static void par_next_segment_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };

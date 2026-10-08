@@ -22,13 +22,11 @@
 
 #define MAX_CALLS 1024
 
-/* One ROM call: its address, registers and budget, and the frame buffer pointers as the C left them at the call. */
+/* One ROM call: its address, registers and budget, and par_frames_left at the call. */
 typedef struct {
     uint16_t addr;
     uint8_t a, x, y;
     uint64_t budget;
-    uint16_t play, fill;
-    uint8_t phase;
     uint8_t frames;   /* par_frames_left at the call */
 } rom_call_record;
 
@@ -58,9 +56,6 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         c->x = r->x;
         c->y = r->y;
         c->budget = budget;
-        c->play = fw_rd16(&g_f, ISR_PLAY_PTR);
-        c->fill = fw_rd16(&g_f, ISR_FILL_PTR);
-        c->phase = g_ram[ISR_SWAP_PHASE];
         c->frames = g_ram[PAR_FRAMES_LEFT];
     }
     g_ncalls++;

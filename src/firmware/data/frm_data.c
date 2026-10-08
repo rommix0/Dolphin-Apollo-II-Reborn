@@ -1,7 +1,6 @@
 /* Converted from the Apollo 2 ROM (M4.5 spec section 3), then reviewed: the frame builder's three small tables.
    Its two formula tables (frm_product_limit, frm_b14_15_lo/hi) are expanded by the encoder (fw_data.c, step 10).
    tests/test_firmware_data.c re-encodes it and compares it byte for byte with the ROM. */
-#include <stddef.h>
 #include "fw_data.h"
 
 /* frm_template ($B783, read as $B782,Y with Y = 20 down to 1 by frm_build_rest_frame): the rest frame before the

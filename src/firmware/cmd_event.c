@@ -1,7 +1,7 @@
 /* The deferred handlers that queue a command event instead of changing a setting (M4.2 spec 2.1): @T, @A, @B
    and the deferred part of @I+. An event is keyed by the phonetic position tn_phon_len and runs at playback
-   (cmd_run_event $BB74, still ROM). Entered as the ROM handlers are: x = the argument's boot_clause index,
-   a = boot_clause[x]. */
+   (cmd_run_event $BB74, C since M4.4b: cmd_play_event.c). Entered as the ROM handlers are: x = the argument's
+   boot_clause index, a = boot_clause[x]. */
 #include "cmd_handlers.h"
 #include "cmd_addr.h"
 #include "cmd_match.h"

@@ -2,7 +2,7 @@
 #define FW_PAR_START_H
 /* The playback set-up's top level (ROM $B3A4-$B41C, $BAF2-$BB73, $BCF3-$BD06 and $C0D2-$C0FE), decompiled (M4.4a
    spec 2.1, 2.2): the voice set-up, the utterance start, and the per-segment step that the frame loop par_play
-   (ROM until M4.4b) calls. Each routine takes the registers at entry in r and leaves in r the A, X and Y that the
+   (C since M4.4b) calls. Each routine takes the registers at entry in r and leaves in r the A, X and Y that the
    ROM leaves at its RTS. r->p is not used: no caller reads a flag. */
 #include "fw.h"
 
