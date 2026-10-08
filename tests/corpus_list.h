@@ -13,10 +13,12 @@
    The next three (M4.3b) reach the stress and phrase passes' rare paths: a word of five or more syllables;
    the linking R before a vowel; and a stressed syllabic consonant at the nucleus, with the accent still set
    after a stress toggle, and a linking R after a vowel that counted no syllable.
-   The last three (M4.4a) reach the playback set-up's rare paths: @R7 with the pitch capped at $FF under @FF and
+   The next three (M4.4a) reach the playback set-up's rare paths: @R7 with the pitch capped at $FF under @FF and
    floored at 4 under @F0, where the microprosody's + 5 and - 5 would wrap; @B0, @B2, @B3 and @B5, with a pause
    dominating a vowel (a voicing value 0), and a P10 target that @u937- makes 8; and a @T effect at @W9, whose
-   duration 40 the speed map caps at 31. */
+   duration 40 the speed map caps at 31.
+   The last one (M4.4b) is seg_256 two words longer, with a @B5 before its last word: an event at segment 259
+   ($0103), whose low byte par_play meets first on page 0 (the high-byte test at $B88D). */
 #define CORPUS_NAMES \
     "hello", "prose", "numbers", "punctuation", "letters_k_to_z", "abbreviations", \
     "voice_b", "presets", "source_filter", "mark_space", "breathy", "pitch", "speed", \
@@ -26,5 +28,6 @@
     "phrase_pauses", "baseline", "phonetic_stress", "phrase_127", "seg_256", "seg_wrap_phrase", \
     "seg_wrap_word", \
     "long_words", "linking_r", "syllabic_stress", \
-    "pitch_extremes", "voicing_levels", "fast_effect"
+    "pitch_extremes", "voicing_levels", "fast_effect", \
+    "late_event"
 #endif
