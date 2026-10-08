@@ -9,6 +9,7 @@
 #include "engine/thunks.h"
 #include "firmware/cmd_addr.h"
 #include "firmware/cmd_play_event.h"
+#include "firmware/frm_build.h"
 #include "firmware/fw_ops.h"
 #include "firmware/par_addr.h"
 #include "firmware/par_boundary.h"
@@ -43,10 +44,10 @@ static unsigned g_flag_every;    /* the mock timer interrupt sets isr_frame_flag
 static unsigned g_abort_at;      /* the mock receive interrupt sets ser_abort bit 0 at this one (0: never) */
 static uint8_t g_uart_status;    /* UART_STATUS as the mock reads it */
 
-/* Records every ROM call. The three frame routines par_setup_voice calls (M4.5) and isr_set_volume (M4.6, called by
-   cmd_ev_set_volume) return the registers the ROM ones leave; so do the interrupt, serial and frame routines that
-   par_play and boot_loop_play call (M4.5, M4.6), with what the timer and receive interrupts would do between the
-   frame loop's tests (g_flag_every, g_abort_at); any other call fails. */
+/* Records every ROM call. isr_set_volume (M4.6, called by cmd_ev_set_volume) returns the registers the ROM one
+   leaves; so do the interrupt, serial and frame routines that par_play and boot_loop_play call (M4.5, M4.6), with
+   what the timer and receive interrupts would do between the frame loop's tests (g_flag_every, g_abort_at); any
+   other call fails (par_setup_voice calls the C frame builder since M4.5). */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     (void)ctx;
@@ -64,11 +65,6 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
     }
     g_ncalls++;
     switch (addr) {
-    case ROM_FRM_BUILD_REST_FRAME:   /* $B428-$B444: LDY #$3B; LDX #1, INX / INX until X >= 8 (9); LDA par_params_ptr+1 */
-        r->a = g_ram[PAR_PARAMS_PTR + 1];
-        r->x = 9;
-        r->y = 0x3B;
-        return FW_CALL_RETURNED;
     case ROM_FRM_COPY_REST_FRAME:    /* $B445-$B44F: LDA $2000,Y for Y = $13..0, DEY / BPL: Y = $FF; X untouched */
         r->a = g_ram[FRM_REST_FRAME];
         r->y = 0xFF;
@@ -1224,28 +1220,18 @@ static void test_play_start(void)
     }
 }
 
-/* Record i's frame buffer pointers: isr_play_ptr, isr_fill_ptr and isr_swap_phase as the C set them (LDM) before
-   the call. */
-static void check_buffers(unsigned i, uint16_t play, uint16_t fill, uint8_t phase)
-{
-    CHECK(i < g_ncalls && i < MAX_CALLS);
-    if (i >= g_ncalls || i >= MAX_CALLS)
-        return;
-    CHECK_EQ(g_calls[i].play, play);
-    CHECK_EQ(g_calls[i].fill, fill);
-    CHECK_EQ(g_calls[i].phase, phase);
-}
-
-/* par_setup_voice on a table at `table` with n phonemes: the pointers and the stride, then the five ROM calls in
-   order with the registers the ROM has at each JSR and the buffers set before each; out, the last call's A and Y and
-   frm_build_rest_frame's X. The entry A and X are not read; the entry Y reaches frm_build_rest_frame. */
+/* par_setup_voice on a table at `table` with n phonemes: the pointers and the stride; then the C frame builder (M4.5),
+   which makes no ROM call: frm_rest_frame = frm_template with b1, b3, b5, b7 = row $3B of the four target rows from
+   par_params_ptr (5N apart, read as the C reads them); both frame buffers = the rest frame with b11 = @M (0) raised
+   to the floor 11 (b10 is the template's 32: the cap 96 and the bound 47 - 64, which is skipped); isr_play_ptr =
+   isr_frame_b, isr_fill_ptr = isr_frame_a and isr_swap_phase = 1 at the end; FW_TMP_75 = 2 x 32. Out, the last
+   call's A and Y and frm_build_rest_frame's X. The entry A and X are not read, nor Y (LDY #$14 first). */
 static void setup_voice_case(uint16_t table, uint8_t n)
 {
     setup();
     g_ram[PAR_COUNT] = n;
     fw_wr16(&g_f, PAR_TABLE_PTR, table);
     fw_wr16(&g_f, PAR_PARAM_STRIDE, 0x5A5A);
-    g_ram[FRM_REST_FRAME] = 0x77;                     /* frm_rest_frame[0]: frm_copy_rest_frame's exit A */
     fw_regs r = { 0x90, 0x31, 0x42, 0 };
     par_setup_voice(&g_f, &r);
     uint16_t params = (uint16_t)(table + 2 * n), stride = (uint16_t)(5 * n);
@@ -1254,28 +1240,32 @@ static void setup_voice_case(uint16_t table, uint8_t n)
     CHECK_EQ(fw_rd16(&g_f, PAR_RANK_PTR), table);
     CHECK_EQ(fw_rd16(&g_f, PAR_ROW2_PTR), table + n);
     CHECK_EQ(fw_rd16(&g_f, PAR_PARAMS_PTR), params);
-    CHECK_EQ(fw_rd16(&g_f, PAR_ROW_PTR), params);     /* left on P1's target row, as frm_build_rest_frame needs */
+    CHECK_EQ(fw_rd16(&g_f, PAR_ROW_PTR), params);     /* moved by frm_build_rest_frame, then set back to P1's row */
     CHECK_EQ(fw_rd16(&g_f, PAR_PARAM_STRIDE), stride);
-    CHECK_EQ(g_ncalls, 5);
-    check_call(0, ROM_FRM_BUILD_REST_FRAME, (uint8_t)(stride >> 8), 0, 0x42);   /* A = the stride's high byte
-                                                                                   ($B3F2), X = 0 (the shift loop) */
-    check_buffers(0, ISR_FRAME_A, ISR_FRAME_B, 2);
-    check_call(1, ROM_FRM_COPY_REST_FRAME, (uint8_t)(params >> 8), 9, 0x3B);    /* frm_build_rest_frame's exit */
-    check_buffers(1, ISR_FRAME_A, ISR_FRAME_B, 2);
-    check_call(2, ROM_FRM_CLAMP_MARK_SPACE, 0x77, 9, 0xFF);                     /* frm_copy_rest_frame's exit */
-    check_buffers(2, ISR_FRAME_A, ISR_FRAME_B, 2);
-    check_call(3, ROM_FRM_COPY_REST_FRAME, 0x0B, 9, 0x0B);                      /* frm_clamp_mark_space's exit */
-    check_buffers(3, ISR_FRAME_B, ISR_FRAME_A, 1);
-    check_call(4, ROM_FRM_CLAMP_MARK_SPACE, 0x77, 9, 0xFF);
-    check_buffers(4, ISR_FRAME_B, ISR_FRAME_A, 1);
+    CHECK_EQ(g_ncalls, 0);
+    for (unsigned b = 0; b < FRAME_SIZE; b++) {
+        uint8_t v = fw_frm_template[b];
+        if (b == FRAME_FN || b == FRAME_F1 || b == FRAME_F2 || b == FRAME_F3)
+            v = fw_mem8(&g_f, (uint16_t)(params + (b >> 1) * stride + FRM_PAUSE_PHONEME));
+        CHECK_EQ(g_ram[FRM_REST_FRAME + b], v);
+        if (b == FRAME_MARK_SPACE)
+            v = FRM_MARK_SPACE_FLOOR;
+        CHECK_EQ(g_ram[ISR_FRAME_A + b], v);
+        CHECK_EQ(g_ram[ISR_FRAME_B + b], v);
+    }
+    CHECK_EQ(fw_rd16(&g_f, ISR_PLAY_PTR), ISR_FRAME_B);
+    CHECK_EQ(fw_rd16(&g_f, ISR_FILL_PTR), ISR_FRAME_A);
+    CHECK_EQ(g_ram[ISR_SWAP_PHASE], 1);
+    CHECK_EQ(g_ram[FW_TMP_75], 64);
     CHECK_EQ(r.a, 0x0B);
     CHECK_EQ(r.x, 9);
     CHECK_EQ(r.y, 0x0B);
     CHECK(!g_f.fault);
 }
 
-/* Voice A (N = 86: stride 430 = $01AE, 4N = 344 sets the high byte through ROL) and a RAM table of 255 phonemes
-   ($10F0: both par_next_row calls carry into the high byte; 4N = $3FC, + N carries: stride $04FB). */
+/* Voice A (N = 86: stride 430 = $01AE, 4N = 344 sets the high byte through ROL; the pause row gives FN 32, F1 32,
+   F2 23, F3 31) and a RAM table of 255 phonemes ($10F0: both par_next_row calls carry into the high byte; 4N = $3FC,
+   + N carries: stride $04FB; the pause row's four bytes are RAM at $1329, $1824, $1D1F, $221A). */
 static void test_setup_voice(void)
 {
     setup_voice_case(PAR_VOICE_A, PAR_PHONEMES);

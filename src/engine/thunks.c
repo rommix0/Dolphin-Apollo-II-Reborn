@@ -22,6 +22,7 @@
 #include "firmware/par_start.h"
 #include "firmware/par_track.h"
 #include "firmware/par_play.h"
+#include "firmware/frm_build.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -279,8 +280,8 @@ static void tn_convert_clause_regs(fw *f, cpu740 *c)
 
 /* par_setup_voice $B3A4: A, X, Y in; none is read (Y reaches frm_build_rest_frame, whose first instruction is
    LDY #$14 at $B41D). A = $0B, X = 9 and Y = $0B out, as its ROM calls leave them: frm_build_rest_frame's loop ends
-   at X = 9 ($B436 CPX #8), frm_clamp_mark_space ends with LDA #$0B and Y = $0A + 1 ($B930-$B954). The C's ROM calls
-   overwrite the machine's registers, so all three are set from the C. Its one ROM caller, cmd_apply_pitch ($A845),
+   at X = 9 ($B436 CPX #8), frm_clamp_mark_space ends with LDA #$0B and Y = $0A + 1 ($B930-$B954); the C calls the C
+   frame builder (M4.5), and all three are set from the C. Its one ROM caller, cmd_apply_pitch ($A845),
    restores A (PLA at $A848) and returns; X and Y reach RAM: cmd_apply_speaker ($A798) calls cmd_apply_speed, which
    keeps A and Y and does not touch X, and after boot_reset's second call ($A675) bank_load_ramcode stores them
    (STY $78, STX $76 at $A601/$A603). No caller reads a flag. The C cmd_apply_pitch calls the C directly, so the
@@ -289,6 +290,35 @@ static void par_setup_voice_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
     par_setup_voice(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* frm_build_rest_frame $B41D: nothing in (LDY #$14 first; X and A are loaded before they are read). A =
+   par_params_ptr's high byte, X = 9 and Y = $3B out (the RTS at $B444). Its one ROM caller, par_setup_voice ($B404),
+   calls frm_copy_rest_frame next, which loads Y and A first ($B445 LDY #$13, $B447 LDA) and leaves X; so do the
+   frm_clamp_mark_space and frm_copy_rest_frame calls after it ($B40A, $B416, $B419), so X reaches par_setup_voice's
+   callers (its thunk). No caller reads a flag. The C par_setup_voice calls the C (M4.5), so the hook fires only
+   while the ROM par_setup_voice runs. Declared: A, X, Y. */
+static void frm_build_rest_frame_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    frm_build_rest_frame(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* frm_copy_rest_frame $B445: X passes through (Y and A are loaded first). A = frm_rest_frame[0], X untouched and Y =
+   $FF out. par_setup_voice ($B407, $B416) calls frm_clamp_mark_space next, which loads Y and A first ($B930 LDY
+   #$0A, $B932 LDA) and leaves X, so X reaches par_setup_voice's callers (its thunk); par_play ($B8DA) calls
+   frm_snapshot next, which loads Y, A and X first ($B917 LDY, $B919 LDA, $B922 LDX). No caller reads a flag.
+   Declared: A, X, Y. */
+static void frm_copy_rest_frame_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    frm_copy_rest_frame(f, &r);
     c->a = r.a;
     c->x = r.x;
     c->y = r.y;
@@ -306,6 +336,49 @@ static void par_play_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
     par_play(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* frm_snapshot $B917: nothing in (LDY #$0A first, then LDA; LDX #$0A at $B922). A = the producer frame's b10, X = 0
+   and Y = 10 (frm_snapshot_map[0], the last entry read) out. par_play ($B8DD) and frm_finish_frame ($B9BA) call
+   frm_clamp_mark_space next, which loads Y and A first and leaves X: in frm_finish_frame X is loaded again at $B9C5
+   (LDX frm_source_index) after frm_raise_formants, which keeps it; in par_play it passes frm_transition_flags,
+   the waits (isr_par_ready, PHA / PLA) and the next frm_copy_rest_frame, which keep it, or cmd_ev_sound_end and
+   the last isr_par_ready, which return it as par_play's exit X (its thunk). No caller reads a flag. Declared: A,
+   X, Y. */
+static void frm_snapshot_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    frm_snapshot(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* frm_clamp_mark_space $B930: X passes through (Y and A are loaded first). A = $0B, X untouched and Y = 11 out.
+   par_setup_voice calls frm_copy_rest_frame after $B40A (LDY and LDA first, X kept) and returns after $B419, so A,
+   X and Y reach its callers (its thunk); par_play ($B8E0) calls frm_transition_flags next, which loads A and Y first
+   ($BA3F LDA #0, $BA44 LDY #9) and keeps X; frm_finish_frame ($B9BD) calls frm_raise_formants next, which loads Y and
+   A first and keeps X, then loads X ($B9C5). No caller reads a flag. Declared: A, X, Y. */
+static void frm_clamp_mark_space_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    frm_clamp_mark_space(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* frm_raise_formants $B95D: X passes through (Y and A are loaded first; par_clamp keeps X). A = b10 - 32 and Y = 10
+   when that has bit 7 set (the RTS at $B966), else A = the new F2 and Y = 5; X untouched. Its one caller,
+   frm_finish_frame ($B9C0), loads Y, X and A next ($B9C3 LDY #$10, $B9C5 LDX, $B9C8 LDA): none is read. No caller
+   reads a flag. Declared: A, X, Y. */
+static void frm_raise_formants_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    frm_raise_formants(f, &r);
     c->a = r.a;
     c->x = r.x;
     c->y = r.y;
@@ -464,8 +537,8 @@ static void par_next_row_regs(fw *f, cpu740 *c)
    (frm_build_rest_frame $B434 INX; par_read_segment $BDA0 CPX #$0B; par_boundary_jump's next par_store_boundary,
    $BEB5 STA $16ED,X) and Y (the (par_row_ptr),Y loads at $B42C, $BD83, $BEA7); each loads A before reading it
    ($B43A, $BD83/$BDA4, $BEA7 LDA; or RTS at $BEB4 into par_boundary_pass's RTS and par_plan_tracks, which loads
-   it first). No caller reads a flag (INX, CPX, DEC follow). Reached from ROM in every mode through
-   frm_build_rest_frame (M4.5). Declared: A, X, Y. */
+   it first). No caller reads a flag (INX, CPX, DEC follow). Every caller is C since M4.5 (frm_build_rest_frame), so
+   the hook fires only while a caller runs as ROM (the "alone" modes). Declared: A, X, Y. */
 static void par_next_param_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
@@ -479,8 +552,8 @@ static void par_next_param_regs(fw *f, cpu740 *c)
    ($2C),Y); par_read_segment reads X ($BD92 CPX #$0A, $BD99 STA $17BF,X) and A (there, or through
    par_scale_voicing), and Y at the next $BD83; par_read_dominance reads A ($BF78 STA par_dominated_target) and X
    ($BF83 CPX #9); par_boundary_value hands A and X to par_store_boundary ($C0C2 JMP $C0AE; $BEB5 STA $16ED,X). No
-   caller reads a flag (STA, CPX or JMP follow). Reached from ROM in every mode through frm_raise_formants (M4.5).
-   Declared: A, X, Y. */
+   caller reads a flag (STA, CPX or JMP follow). Every caller is C since M4.5 (frm_raise_formants), so the hook
+   fires only while a caller runs as ROM (the "alone" modes). Declared: A, X, Y. */
 static void par_clamp_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
@@ -936,7 +1009,12 @@ THUNK(tn_append_phonetic)
 THUNK(lts_convert_char)
 THUNK(tn_convert_clause)
 THUNK(par_setup_voice)
+THUNK(frm_build_rest_frame)
+THUNK(frm_copy_rest_frame)
 THUNK(par_play)
+THUNK(frm_snapshot)
+THUNK(frm_clamp_mark_space)
+THUNK(frm_raise_formants)
 THUNK(pros_microprosody)
 THUNK(par_play_start)
 THUNK(par_reset_tracks)
@@ -1003,7 +1081,12 @@ const fw_replacement fw_replacements[] = {
     { "lts_convert_char",   0xB172, 0,                   t_lts_convert_char },
     { "tn_convert_clause",  0xB1E6, 0,                   t_tn_convert_clause },
     { "par_setup_voice",    0xB3A4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_setup_voice },
+    { "frm_build_rest_frame", 0xB41D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_build_rest_frame },
+    { "frm_copy_rest_frame", 0xB445, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_copy_rest_frame },
     { "par_play",           0xB877, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_play, true },
+    { "frm_snapshot",       0xB917, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_snapshot },
+    { "frm_clamp_mark_space", 0xB930, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_clamp_mark_space },
+    { "frm_raise_formants", 0xB95D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_raise_formants },
     { "pros_microprosody",  0xB983, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_microprosody },
     { "par_play_start",     0xBAF2, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_play_start },
     { "par_reset_tracks",   0xBB35, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_reset_tracks },

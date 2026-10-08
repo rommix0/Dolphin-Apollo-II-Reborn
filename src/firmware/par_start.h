@@ -32,12 +32,12 @@ void par_play_start(fw *f, fw_regs *r);
 /* $B3A4: the voice set-up for the voice table at par_table_ptr with par_count (N) phonemes. par_row_len = N.
    par_table_copy (never read), par_rank_ptr and par_row_ptr = the table. Two par_next_row calls give par_row2_ptr
    (never read) = table + N and par_params_ptr = table + 2N. par_param_stride = 5N in 16 bits. Then the rest frames:
-   with isr_play_ptr = isr_frame_a, isr_fill_ptr = isr_frame_b and isr_swap_phase = 2, the ROM frm_build_rest_frame,
+   with isr_play_ptr = isr_frame_a, isr_fill_ptr = isr_frame_b and isr_swap_phase = 2, frm_build_rest_frame,
    frm_copy_rest_frame and frm_clamp_mark_space; with the two buffers swapped and isr_swap_phase = 1,
-   frm_copy_rest_frame and frm_clamp_mark_space again. These M4.5 routines are called through fw_rom_call with the
-   registers the ROM has at each JSR.
-   r in: Y passes through to frm_build_rest_frame, which does not read it (A and X are written first). r out: the
-   registers the last ROM call leaves: A = Y = $0B (frm_clamp_mark_space) and X = 9 (frm_build_rest_frame's). */
+   frm_copy_rest_frame and frm_clamp_mark_space again. These are the C frame builder's (M4.5), called directly with
+   the registers flowing from one to the next as the ROM's do.
+   r in: Y passes through to frm_build_rest_frame, which does not read it (LDY #$14 first). r out: the
+   registers the last call leaves: A = Y = $0B (frm_clamp_mark_space) and X = 9 (frm_build_rest_frame's). */
 void par_setup_voice(fw *f, fw_regs *r);
 
 #endif

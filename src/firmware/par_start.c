@@ -1,6 +1,6 @@
 #include "par_start.h"
+#include "frm_build.h"
 #include "fw_ops.h"
-#include "par_addr.h"
 #include "par_boundary.h"
 #include "par_segment.h"
 #include "pros_play.h"
@@ -201,7 +201,8 @@ static void param_stride(fw *f, fw_regs *r)
 }
 
 /* $B3F5-$B40C: LDM isr_play_ptr = isr_frame_a (high byte first), isr_fill_ptr = isr_frame_b, isr_swap_phase = 2.
-   Then the rest frame is built at frm_rest_frame, copied to the fill frame, and its b11 clamped. */
+   Then the rest frame is built at frm_rest_frame, copied to the fill frame, and its b11 clamped (the C frame
+   builder, M4.5). */
 static void first_rest_frame(fw *f, fw_regs *r)
 {
     fw_wr8(f, ISR_PLAY_PTR + 1, ISR_FRAME_A >> 8);
@@ -209,9 +210,9 @@ static void first_rest_frame(fw *f, fw_regs *r)
     fw_wr8(f, ISR_FILL_PTR + 1, ISR_FRAME_B >> 8);
     fw_wr8(f, ISR_FILL_PTR, ISR_FRAME_B & 0xFF);
     fw_wr8(f, ISR_SWAP_PHASE, ISR_SWAP_PHASE_FILL_B);
-    fw_rom_call(f, ROM_FRM_BUILD_REST_FRAME, r, FW_ROM_CALL_BUDGET);    /* returns X = 9 */
-    fw_rom_call(f, ROM_FRM_COPY_REST_FRAME, r, FW_ROM_CALL_BUDGET);
-    fw_rom_call(f, ROM_FRM_CLAMP_MARK_SPACE, r, FW_ROM_CALL_BUDGET);
+    frm_build_rest_frame(f, r);                /* returns X = 9 */
+    frm_copy_rest_frame(f, r);
+    frm_clamp_mark_space(f, r);
 }
 
 /* $B40D-$B41B: LDM the low bytes swapped (isr_play_ptr = isr_frame_b, isr_fill_ptr = isr_frame_a) and
@@ -221,8 +222,8 @@ static void second_rest_frame(fw *f, fw_regs *r)
     fw_wr8(f, ISR_PLAY_PTR, ISR_FRAME_B & 0xFF);
     fw_wr8(f, ISR_FILL_PTR, ISR_FRAME_A & 0xFF);
     fw_wr8(f, ISR_SWAP_PHASE, ISR_SWAP_PHASE_FILL_A);
-    fw_rom_call(f, ROM_FRM_COPY_REST_FRAME, r, FW_ROM_CALL_BUDGET);
-    fw_rom_call(f, ROM_FRM_CLAMP_MARK_SPACE, r, FW_ROM_CALL_BUDGET);    /* leaves A = Y = $0B */
+    frm_copy_rest_frame(f, r);
+    frm_clamp_mark_space(f, r);                /* leaves A = Y = $0B */
 }
 
 void par_setup_voice(fw *f, fw_regs *r)
