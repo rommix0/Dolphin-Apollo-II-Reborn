@@ -35,6 +35,13 @@ static bool window_on(const machine *m) { return (m50734_port_pins(&m->sfr, 2) &
 static fw_call_result host_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     fw_bridge *b = ctx;
+    if (b->deadline) {   /* the outermost thunk's bound: at most the cycles left, none once it has passed */
+        uint64_t now = b->m->cpu.cycles;
+        if (now >= b->deadline)
+            return FW_CALL_FAILED;
+        if (budget > b->deadline - now)
+            budget = b->deadline - now;
+    }
     machine_regs mr = { r->a, r->x, r->y, b->m->cpu.p };   /* the routine starts with the machine's flags */
     machine_call_result res = machine_rom_call(b->m, addr, &mr, budget);
     r->a = mr.a;
@@ -71,6 +78,7 @@ bool fw_bridge_init(fw_bridge *b, machine *m)
     b->m = m;
     b->thunk_calls = 0;
     b->unwinds = 0;
+    b->deadline = 0;
     b->host.ctx = b;
     b->host.rom_call = host_rom_call;
     b->host.set_low_window = host_set_low_window;
@@ -85,7 +93,9 @@ typedef void (*thunk_regs)(fw *f, cpu740 *c);
 
 /* The frame every thunk shares: set the fault trap (saving an outer thunk's, as a ROM call from C can reach
    another thunk on the same bridge), sync the window, run the routine; then restore the trap and either leave the
-   machine where an unwound ROM call left it, report the fault, or emulate the RTS. */
+   machine where an unwound ROM call left it, report the fault, or emulate the RTS. The outermost thunk (no deadline
+   active) also bounds the whole call: b->deadline = its entry cycles + FW_ROM_CALL_SPEECH_BUDGET, cleared however it
+   ends, so that a C wait that never ends (par_play's, a whole utterance inside one hook call) faults (thunks.h). */
 static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
 {
     if (m != b->m) {   /* registers come from m, RAM and host calls from b->m: they must be one machine */
@@ -96,12 +106,17 @@ static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
     b->thunk_calls++;
     uint16_t entry = m->cpu.pc;
     uint8_t entry_sp = m->cpu.s;
+    bool outermost = b->deadline == 0;
+    if (outermost)
+        b->deadline = m->cpu.cycles + FW_ROM_CALL_SPEECH_BUDGET;
     jmp_buf trap, *saved = b->f.trap;
     b->f.trap = &trap;
     b->f.low_window = window_on(m);
     if (setjmp(trap) == 0)
         regs(&b->f, &m->cpu);
     b->f.trap = saved;
+    if (outermost)
+        b->deadline = 0;
     if (b->f.unwound) {   /* a ROM call reset the stack: the C is abandoned, the machine goes on where the ROM went */
         b->f.unwound = false;
         b->unwinds++;
@@ -132,16 +147,15 @@ static void cmd_apply_speaker_regs(fw *f, cpu740 *c)
     c->y = y;
 }
 
-/* boot_loop_play $A7D4: A, X, Y in; none is read (A is loaded first; X and Y flow into isr_par_hold, which keeps
-   them, and par_play_start, which writes Y and keeps X). Out: A = $6B and X, Y untouched when it does not play
-   ($A7DE RTS); else the A, X and Y isr_speech_stop leaves (its RTS at $B3A3). The C's ROM calls overwrite the
-   machine's registers, so all three are set from the C. Nothing reads them after a call: boot_reset ($A687) jumps
-   to boot_loop_text, whose boot_get_clause writes X and A first ($A697 LDX #1, $A699 LDA #$20);
-   boot_selftest_sound ($A7BA) returns to $A657 (BBS0 boot_dip, then LDX #0 or JMP $A66B: LDM, CLI, the isr_par_*
-   calls that keep the registers, and cmd_apply_speaker, whose par_setup_voice reads none); cmd_say_phonetic
-   ($A87C, unreachable) returns; the C tn_convert_clause (and the ROM's $B207 JMP $B1E9) writes X first (LDX #0).
-   No caller reads a flag. It waits on the timer interrupt (par_play), so diff_play checks it, not diff_lts.
-   Declared: A, X, Y. */
+/* boot_loop_play $A7D4: A, X, Y in; none is read (A is loaded first; X and Y flow into isr_par_hold, which keeps them,
+   and par_play_start, which writes Y and keeps X). Out: A = the byte at FW_UTT_CONTENT ($6B) and X, Y untouched when
+   it does not play ($A7DE RTS); else the A, X and Y isr_speech_stop leaves (its RTS at $B3A3). The C's ROM calls
+   overwrite the machine's registers, so all three are set from the C. Nothing reads them after a call: boot_reset
+   ($A687) jumps to boot_loop_text, whose boot_get_clause writes X and A first ($A697 LDX #1, $A699 LDA #$20);
+   boot_selftest_sound ($A7BA) returns to $A657 (BBS0 boot_dip, then LDX #0 or JMP $A66B: LDM, CLI, the isr_par_* calls
+   that keep the registers, and cmd_apply_speaker, whose par_setup_voice reads none); cmd_say_phonetic ($A87C,
+   unreachable) returns; the C tn_convert_clause (and the ROM's $B207 JMP $B1E9) writes X first (LDX #0). No caller
+   reads a flag. It waits on the timer interrupt (par_play), so diff_play checks it, not diff_lts. Declared: A, X, Y. */
 static void boot_loop_play_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };

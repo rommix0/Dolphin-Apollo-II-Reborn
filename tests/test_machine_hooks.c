@@ -5,6 +5,8 @@
 #include "rom_fixture.h"
 #include "machine/machine.h"
 #include "engine/thunks.h"
+#include "firmware/par_addr.h"
+#include "firmware/tn_convert.h"
 
 static uint8_t g_rom[MACHINE_ROM_SIZE];
 static machine g_m, g_c;
@@ -400,6 +402,101 @@ static void test_host_read_sfr(void)
     CHECK(!b.f.fault);
 }
 
+/* The bridge's cycle deadline (thunks.h): a ROM call from C gets at most the cycles left before b->deadline, and
+   none once it has passed; the call fails and fw_rom_call faults, as a call that does not return within its own
+   budget does. 0 = no deadline. */
+static void test_bridge_deadline(void)
+{
+    static fw_bridge b;
+    static const uint8_t spin[] = { 0x4C, 0x00, 0xC3 };   /* $C300: JMP $C300 */
+    load_main(0xC100);
+    put(0xC300, spin, sizeof spin);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    CHECK(fw_bridge_init(&b, &g_m));
+    CHECK_EQ(b.deadline, 0);
+    fw_regs r = { 3, 0, 0, 0 };
+    CHECK(fw_rom_call(&b.f, 0xC100, &r, FW_ROM_CALL_BUDGET));   /* no deadline: it returns */
+    CHECK_EQ(r.a, 12);
+    CHECK(!b.f.fault);
+
+    uint64_t c0 = g_m.cpu.cycles;
+    b.deadline = c0;   /* passed: the call fails without running an instruction */
+    r.a = 3;
+    CHECK(!fw_rom_call(&b.f, 0xC100, &r, FW_ROM_CALL_BUDGET));
+    CHECK(b.f.fault);
+    CHECK_EQ(b.f.fault_addr, 0xC100);
+    CHECK_EQ(g_m.cpu.cycles, c0);
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+
+    b.f.fault = false;
+    b.deadline = g_m.cpu.cycles + 5000;   /* a spin with the speech budget ends at the deadline */
+    CHECK(!fw_rom_call(&b.f, 0xC300, &r, FW_ROM_CALL_SPEECH_BUDGET));
+    CHECK(b.f.fault);
+    CHECK_EQ(b.f.fault_addr, 0xC300);
+    CHECK(g_m.cpu.cycles >= b.deadline);
+    CHECK(g_m.cpu.cycles < b.deadline + 8);   /* only the JMP that crossed it */
+}
+
+static uint64_t g_seen_deadline;
+
+/* An observer at isr_par_ready $C5D6: records the bridge's deadline at its first call and sets ser_abort bit 0. */
+static bool hook_par_ready_abort(machine *m, void *user)
+{
+    const fw_bridge *b = user;
+    if (!g_seen_deadline)
+        g_seen_deadline = b->deadline;
+    m->ram[SER_ABORT] |= 1;
+    return false;
+}
+
+/* A fresh real-ROM machine (the timer off: isr_frame_flag is never set) with the par_play thunk hooked, entered at
+   $B877 as a JSR from $9000 would enter it. */
+static void enter_par_play(const uint8_t *rom, size_t len, fw_bridge *b)
+{
+    CHECK(machine_init(&g_m, rom, len, NULL));
+    CHECK(fw_bridge_init(b, &g_m));
+    CHECK(fw_install(&g_m, b, "par_play"));
+    g_m.ram[0x100 + g_m.cpu.s--] = 0x90;   /* return address $9002 (pushed as $9002 - 1) */
+    g_m.ram[0x100 + g_m.cpu.s--] = 0x01;
+    g_m.cpu.pc = ROM_PAR_PLAY;
+}
+
+/* A waits thunk whose flag never comes faults instead of hanging. The outermost thunk sets the deadline (entry
+   cycles + FW_ROM_CALL_SPEECH_BUDGET) and clears it when it ends: here par_play aborts at its first isr_par_ready and
+   isr_wait_frame $B465 waits out its own budget. A deadline already set (as by an outer thunk) is left alone, and
+   par_play's isr_par_ready loop, every call of which returns, ends at it with a fault at isr_par_ready. */
+static void test_waits_thunk_deadline(void)
+{
+    static fw_bridge b;
+    size_t len;
+    const uint8_t *rom = test_rom(&len);
+    if (!rom)
+        SKIP("ROM not found (set APOLLO2_ROM)");
+
+    enter_par_play(rom, len, &b);
+    CHECK(machine_hook(&g_m, ROM_ISR_PAR_READY, hook_par_ready_abort, &b));
+    g_seen_deadline = 0;
+    uint64_t c0 = g_m.cpu.cycles;
+    CHECK(!machine_step(&g_m));
+    CHECK_EQ(g_seen_deadline, c0 + FW_ROM_CALL_SPEECH_BUDGET);
+    CHECK_EQ(b.deadline, 0);   /* cleared by the outermost thunk */
+    CHECK_EQ(g_m.fault, MFAULT_FIRMWARE);
+    CHECK_EQ(g_m.fault_addr, ROM_ISR_WAIT_FRAME);
+    CHECK_EQ(g_m.cpu.pc, ROM_PAR_PLAY);
+
+    enter_par_play(rom, len, &b);
+    uint64_t deadline = g_m.cpu.cycles + 300000;
+    b.deadline = deadline;
+    CHECK(!machine_step(&g_m));
+    CHECK_EQ(b.deadline, deadline);   /* not the outermost: left alone */
+    CHECK_EQ(g_m.fault, MFAULT_FIRMWARE);
+    CHECK_EQ(g_m.fault_addr, ROM_ISR_PAR_READY);
+    CHECK(g_m.cpu.cycles >= deadline);
+    CHECK(g_m.cpu.cycles < deadline + 100);
+    CHECK_EQ(g_m.cpu.pc, ROM_PAR_PLAY);
+    CHECK(b.thunk_calls >= 1);
+}
+
 void suite_machine_hooks(void)
 {
     test_mapper();
@@ -416,4 +513,6 @@ void suite_machine_hooks(void)
     test_irq_hold(false);
     test_rom_call_real_rom();
     test_host_read_sfr();
+    test_bridge_deadline();
+    test_waits_thunk_deadline();
 }

@@ -170,8 +170,9 @@ void fw_wr_ind_y(fw *f, uint8_t zp, uint8_t y, uint8_t v);
 /* An SFR byte, read through the host. Without a host or read_sfr, or for an address below $DA, a fault: it
    longjmps to f->trap when set, else reads $FF. */
 uint8_t fw_sfr8(fw *f, uint8_t addr);
-/* A fault at addr where the ROM would never return (a loop with no exit): it longjmps to f->trap when set, else
-   returns with f->fault and f->fault_addr set, like a fault of fw_rom8. */
+/* A fault at addr where the ROM would never return (a loop with no exit), like a fault of fw_rom8: it sets f->fault
+   (keeping the first fault_addr), then longjmps to f->trap when set, else returns. run_thunk relies on the flag being
+   set after the longjmp. */
 void fw_fault(fw *f, uint16_t addr);
 /* SEB7/CLB7 P2: sets the window and tells the host. */
 void fw_set_low_window(fw *f, bool on);

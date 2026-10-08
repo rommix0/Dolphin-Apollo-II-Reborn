@@ -18,6 +18,8 @@
    - util_interp_quot = q, A = util_interp_cur + q (8 bits).
    util_interp_steps = 0 with d not 0 makes the ROM loop forever (SBC #0 with the carry set, ADC #0 with it clear):
    the C reports a fault at ROM_UTIL_INTERP_STEP instead (fw_fault) and returns with nothing written.
+   util_interp_step writes nothing, but without a trap its C callers (track_step) go on to store the A it leaves;
+   every thunk sets the trap.
    r in: A, Y. r out: A = the value; X unchanged; Y = 0 (Y = 1 or 2), Y - 2 (d = 0), q (otherwise). */
 void util_interp_step(fw *f, fw_regs *r);
 

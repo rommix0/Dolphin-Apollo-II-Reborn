@@ -2067,7 +2067,10 @@ static unsigned check_rest_frames(unsigned i, unsigned waits)
     static const uint16_t k_frame[] = {
         ROM_FRM_COPY_REST_FRAME, ROM_FRM_SNAPSHOT, ROM_FRM_CLAMP_MARK_SPACE, ROM_FRM_TRANSITION_FLAGS,
     };
-    uint16_t k[1 + 3 * (4 + 2) + 1];
+    uint16_t k[1 + 3 * (4 + 2) + 1];   /* enough for waits <= 2 */
+    CHECK(waits <= 2);
+    if (waits > 2)
+        return 0;
     unsigned n = 0, per = 4 + waits;
     k[n++] = ROM_ISR_WAIT_FRAME;
     for (unsigned j = 0; j < 3; j++) {
