@@ -74,6 +74,37 @@ uint8_t fw_sfr8(fw *f, uint8_t addr)
     return 0xFF;
 }
 
+void fw_wr_sfr8(fw *f, uint8_t addr, uint8_t v)
+{
+    if (addr >= 0xDA && f->host && f->host->write_sfr) {
+        f->host->write_sfr(f->host->ctx, addr, v);
+        return;
+    }
+    fault(f, addr);
+}
+
+/* SEB/CLB: one read, then one write of the changed value. */
+static void sfr_rmw(fw *f, uint8_t addr, uint8_t set, uint8_t clear)
+{
+    if (addr >= 0xDA && f->host && f->host->read_sfr && f->host->write_sfr) {
+        uint8_t v = f->host->read_sfr(f->host->ctx, addr);
+        f->host->write_sfr(f->host->ctx, addr, (uint8_t)((v | set) & ~clear));
+        return;
+    }
+    fault(f, addr);
+}
+
+void fw_sfr_seb(fw *f, uint8_t addr, unsigned bit) { sfr_rmw(f, addr, (uint8_t)(1u << bit), 0); }
+void fw_sfr_clb(fw *f, uint8_t addr, unsigned bit) { sfr_rmw(f, addr, 0, (uint8_t)(1u << bit)); }
+bool fw_sfr_bit(fw *f, uint8_t addr, unsigned bit) { return ((fw_sfr8(f, addr) >> bit) & 1) != 0; }
+
+void fw_wait(fw *f, fw_wait_kind kind)
+{
+    if (f->host && f->host->wait && f->host->wait(f->host->ctx, kind))
+        return;
+    fault(f, FW_WAIT_UART_TX_LOOP);   /* the only kind (M4.6b and M4.6c add theirs) */
+}
+
 void fw_fault(fw *f, uint16_t addr) { fault(f, addr); }
 
 void fw_set_low_window(fw *f, bool on)

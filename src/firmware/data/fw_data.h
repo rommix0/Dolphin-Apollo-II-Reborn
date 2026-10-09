@@ -123,6 +123,10 @@ typedef struct { const uint8_t *phoneme, *duration, *pitch, *flags; } fw_cmd_sou
 #define FRM_PRODUCT_LIMIT_0 72       /* frm_product_limit[0], which nothing reads (e >= 1 where it is indexed) */
 #define FRM_B14_15_STEP     82       /* the b14-b15 word per product index (parent spec 1.4, rev 6) */
 
+/* Pinned address of the serial code's data (ghidra740/annotations: serial.txt; M4.6a spec 4.6) */
+#define SER_HEX_CHARS       0xC561   /* char[16]: the hex digit per nibble; ser_tx_hex's code follows at $C571 */
+#define SER_HEX_CHARS_END   0xC571
+
 /* lts_char_class bits */
 #define CC_LETTER       0x80   /* also the apostrophe and the underscore */
 #define CC_VOWEL        0x40   /* A E I O U Y (also the underscore and lower-case x) */
@@ -217,6 +221,7 @@ extern const fw_par_phoneme fw_par_voice_a[PAR_PHONEMES], fw_par_voice_b[PAR_PHO
 extern const uint8_t fw_par_target_bias[10], fw_frm_snapshot_map[10];
 extern const uint8_t fw_par_slot_map[10];
 extern const uint8_t fw_frm_template[FRAME_SIZE], fw_frm_source_codes[4], fw_frm_filter_codes[2];
+extern const char fw_ser_hex_chars[17];   /* the 16 digits, then C's terminating 0 (not encoded) */
 extern const uint8_t fw_cmd_sound_flags[CMD_SOUND_MAX];
 extern const fw_cmd_sound_effect fw_cmd_sound_effects[CMD_SOUND_EFFECTS];
 extern const fw_cmd_sound fw_cmd_sound_table[CMD_SOUND_EFFECTS];

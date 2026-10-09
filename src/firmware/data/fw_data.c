@@ -416,6 +416,14 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
         for (uint32_t k = 0; k < 2; k++)
             put(&e, false, FRM_FILTER_CODES + k, fw_frm_filter_codes[k]);
     }
+    /* 11. The serial code's data (M4.6a spec 4.6): ser_hex_chars, the 16 digits without C's terminating 0, ending
+       where ser_tx_hex's code starts. */
+    {
+        uint32_t at = SER_HEX_CHARS;
+        for (const char *s = fw_ser_hex_chars; *s; s++)
+            put(&e, false, at++, (uint8_t)*s);
+        check_end(&e, "ser_hex_chars", at, SER_HEX_CHARS_END);
+    }
     return e.ok;
 }
 

@@ -351,6 +351,16 @@ void machine_return(machine *m)
     m->cpu.pc = (uint16_t)((lo | hi << 8) + 1);
 }
 
+void machine_return_interrupt(machine *m)
+{
+    uint8_t p = m->ram[0x100 + (uint8_t)(m->cpu.s + 1)];
+    uint8_t lo = m->ram[0x100 + (uint8_t)(m->cpu.s + 2)];
+    uint8_t hi = m->ram[0x100 + (uint8_t)(m->cpu.s + 3)];
+    m->cpu.s = (uint8_t)(m->cpu.s + 3);
+    m->cpu.p = (uint8_t)(p | CPU740_B);
+    m->cpu.pc = (uint16_t)(lo | hi << 8);
+}
+
 void machine_hold_irqs(machine *m, bool hold)
 {
     m->irq_hold = hold;

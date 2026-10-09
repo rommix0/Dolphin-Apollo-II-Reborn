@@ -7,8 +7,8 @@
 
 typedef struct { uint32_t from, to; } range;   /* [from, to) in CPU addresses */
 static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9804, 0xA397 }, { 0xACC7, 0xACE8 }, { 0xB473, 0xB77D },
-                               { 0xB783, 0xB7A1 }, { 0xB7A7, 0xB7B1 }, { 0xBAEC, 0xBAF2 }, { 0xC67B, 0xC9B8 },
-                               { 0xD44A, 0xF77B } };
+                               { 0xB783, 0xB7A1 }, { 0xB7A7, 0xB7B1 }, { 0xBAEC, 0xBAF2 }, { 0xC561, 0xC571 },
+                               { 0xC67B, 0xC9B8 }, { 0xD44A, 0xF77B } };
 static const range k_low[] = { { 0x4010, 0x7832 } };
 
 static bool bit(const uint8_t *ok, uint32_t i) { return (ok[i >> 3] >> (i & 7)) & 1; }
@@ -131,9 +131,10 @@ static void test_against_rom(const fw_image *img, const uint8_t *rom)
             fprintf(stderr, "  LOW $%04X: converted %02X, ROM %02X\n", a, img->low[a - 0x4000], rom[a - 0x4000]);
     }
     printf("  %u converted bytes compared with the ROM, %u differ\n", compared, bad);
-    CHECK_EQ(compared, 48496);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567),
+    CHECK_EQ(compared, 48512);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567),
                                     M4.3a's prosody data (2,319), M4.4a's playback data (9,495), M4.4b's
-                                    par_slot_map (10) and M4.5's frame builder data (794) */
+                                    par_slot_map (10), M4.5's frame builder data (794) and M4.6a's ser_hex_chars
+                                    (16) */
     CHECK_EQ(bad, 0);
 }
 

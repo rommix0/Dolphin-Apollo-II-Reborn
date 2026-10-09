@@ -2,6 +2,7 @@
    each alone. The rendered audio of hybrid equals the rom engine's (criterion 8). The C tn_convert_clause must
    take its mid-clause flush on long_clause (all-routines mode and tn_convert_clause alone; M4.1 spec 5.2).
    On bank_select, @=1 enters a bank: where the C runs the dispatch, its call chain must unwind (M4.2 spec 5.3).
+   A routine no corpus text enters (diff_probed, M4.6a spec 4.4) runs no thunk alone; diff_serial compares it.
    Also the fault path of a thunk: a firmware fault stops the run instead of continuing on wrong data. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,7 @@
 #include "test.h"
 #include "corpus_list.h"
 #include "rom_fixture.h"
+#include "diff_state.h"
 #include "engine/hybrid_engine.h"
 #include "engine/thunks.h"
 #include "firmware/tn_convert.h"
@@ -66,8 +68,8 @@ static bool runs_c_dispatch(const char *only)
 }
 
 /* The whole corpus in one mode. Matching the goldens proves nothing if no C ever ran, so the mode must have run
-   its thunks at least once over the corpus; and where the C tn_convert_clause runs, long_clause must have taken
-   its mid-clause flush (M4.1 spec 5.2). */
+   its thunks at least once over the corpus (unless it is a routine the corpus never enters); and where the C
+   tn_convert_clause runs, long_clause must have taken its mid-clause flush (M4.1 spec 5.2). */
 static void check_corpus(const uint8_t *rom, size_t len, const char *only)
 {
     g_thunk_calls = 0;
@@ -93,7 +95,7 @@ static void check_corpus(const uint8_t *rom, size_t len, const char *only)
         free(text);
     }
     check(rom, len, only, "boot", "", true);
-    if (g_thunk_calls == 0) {
+    if (g_thunk_calls == 0 && !(only && diff_is_probed(only))) {
         fprintf(stderr, "  hybrid (%s): no thunk ran over the whole corpus\n", only ? only : "all");
         g_test_failures++;
     }

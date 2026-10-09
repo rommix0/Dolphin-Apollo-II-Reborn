@@ -55,7 +55,6 @@
 #define ROM_PAR_TRACK_END          0xC26C   /* called by par_track_overlap $C1F8 */
 #define ROM_PAR_SCALE_DURATION     0xC29C   /* called by par_boundary_cur_dom $BF03, $BF0E; par_boundary_next_dom
                                                $BF48, $BF53 */
-#define ROM_SER_TX_SERVICE         0xC581   /* M4.6; called by par_play $B89C (and boot_get_clause $A6D7) */
 #define ROM_ISR_PAR_HOLD           0xC5DE   /* M4.6; called by boot_loop_play $B2B3 (and boot_reset $A66F,
                                                boot_get_clause $A6E4, boot_queue_string $C617) */
 #define ROM_UTIL_SHL4              0xC656   /* called by cmd_apply_pitch $A835, $A83F; cmd_set_formant $A952;

@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include "fw_data.h"
 #include "../cmd_addr.h"
+#include "../ser_addr.h"
 #include "../pros_seg.h"   /* PROS_SEG_FLAGS_GEN */
 
 /* cmd_imm_patterns ($989C): the immediate commands, matched at interrupt level by cmd_imm_match.

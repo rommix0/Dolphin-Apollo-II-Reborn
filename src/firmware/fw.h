@@ -114,6 +114,13 @@ typedef struct { uint8_t a, x, y, p; } fw_regs;
    stack past the call's own frame (bank_enter, M4.2 spec 3), so it can never return. */
 typedef enum { FW_CALL_FAILED = 0, FW_CALL_RETURNED, FW_CALL_UNWOUND } fw_call_result;
 
+/* The hardware waits (M4.6a spec 3.3): one kind per ROM wait loop. The hybrid host runs the loop on the emulated
+   CPU; a native host waits natively. */
+typedef enum fw_wait_kind {
+    FW_WAIT_UART_TX = 0,   /* until the UART can transmit: ser_tx_wait, BBC1 UART_STATUS until bit 1 is set */
+} fw_wait_kind;
+#define FW_WAIT_UART_TX_LOOP  0xC500   /* ser_tx_wait: the ROM loop of FW_WAIT_UART_TX (BBC1 $E7,$C500 / RTS) */
+
 /* The machine or native host. In hybrid runs it is the emulator (src/engine/thunks.c). */
 typedef struct fw_host {
     void *ctx;
@@ -122,8 +129,12 @@ typedef struct fw_host {
     fw_call_result (*rom_call)(void *ctx, uint16_t addr, fw_regs *regs, uint64_t budget);
     /* P2 bit 7, the lower-ROM window, as SEB7/CLB7 $F0 set and clear it. */
     void (*set_low_window)(void *ctx, bool on);
-    /* Reads an SFR ($DA-$FF) as the CPU would, for the registers the firmware polls (UART_STATUS $E7). */
+    /* Reads an SFR ($DA-$FF) as the CPU's read would, side effects included (UART_RX $E5 clears receive full). */
     uint8_t (*read_sfr)(void *ctx, uint8_t addr);
+    /* Writes an SFR ($DA-$FF) as the CPU's write would (M4.6a spec 3.1). */
+    void (*write_sfr)(void *ctx, uint8_t addr, uint8_t value);
+    /* Waits for the hardware (M4.6a spec 3.3). False when the wait did not end (a fault). */
+    bool (*wait)(void *ctx, fw_wait_kind kind);
 } fw_host;
 
 /* Converted ROM data at its original addresses (built by src/firmware/data/fw_data.c). */
@@ -167,9 +178,22 @@ uint8_t fw_ind_y(fw *f, uint8_t zp, uint8_t y);
 /* STA (zp),Y: writes v at the little-endian pointer in zero page zp, plus y. A target that is not RAM ($4000 and
    above, or an SFR $DA-$FF) is a fault and nothing is written. */
 void fw_wr_ind_y(fw *f, uint8_t zp, uint8_t y, uint8_t v);
-/* An SFR byte, read through the host. Without a host or read_sfr, or for an address below $DA, a fault: it
-   longjmps to f->trap when set, else reads $FF. */
+/* An SFR byte, read through the host (LDA, CMP and the like). Without a host or read_sfr, or for an address below
+   $DA, a fault: it longjmps to f->trap when set, else reads $FF. */
 uint8_t fw_sfr8(fw *f, uint8_t addr);
+/* STA/LDM to an SFR: v written through the host. Without a host or write_sfr, or below $DA, a fault (nothing
+   written). */
+void fw_wr_sfr8(fw *f, uint8_t addr, uint8_t v);
+/* SEB bit,addr / CLB bit,addr on an SFR: a read, then a write of the value with the bit set or cleared, as the CPU
+   does them (cpu740.c, M_SEB/M_CLB): a port reads its pins, so an input pin's level reaches the latch. Without a
+   host, read_sfr or write_sfr, or below $DA, a fault (nothing read or written). */
+void fw_sfr_seb(fw *f, uint8_t addr, unsigned bit);
+void fw_sfr_clb(fw *f, uint8_t addr, unsigned bit);
+/* BBS bit,addr / BBC bit,addr on an SFR: the bit of one read (fw_sfr8, its faults included). */
+bool fw_sfr_bit(fw *f, uint8_t addr, unsigned bit);
+/* Waits for the hardware through the host (JSR ser_tx_wait for FW_WAIT_UART_TX). Without a host or wait, or when the
+   wait fails, a fault at the kind's ROM loop (FW_WAIT_UART_TX_LOOP). */
+void fw_wait(fw *f, fw_wait_kind kind);
 /* A fault at addr where the ROM would never return (a loop with no exit), like a fault of fw_rom8: it sets f->fault
    (keeping the first fault_addr), then longjmps to f->trap when set, else returns. run_thunk relies on the flag being
    set after the longjmp. */

@@ -382,10 +382,11 @@ static void test_rom_call_unwound(void)
     CHECK_EQ(g_m.fault, MFAULT_NONE);
 }
 
-/* The emulator answers the firmware's SFR reads (fw_sfr8, M4.4b spec 2.4) for UART_STATUS $E7 only, through the
-   CPU's bus: transmitter ready (bit 1, always) and receive full (bit 0), and reading it changes nothing. Any other
-   SFR reads $FF without reaching the bus: UART_RX $E5, whose read would clear receive full, keeps its byte. */
-static void test_host_read_sfr(void)
+/* The emulator answers the firmware's SFR reads and writes (M4.6a spec 3.1) through the CPU's bus, side effects
+   included: UART_STATUS $E7 is transmitter ready (bit 1, always) and receive full (bit 0), and reading it changes
+   nothing; a read of UART_RX $E5 clears receive full; a write of UART_TX $E4 is a transmitted byte. SEB and CLB on P0
+   read the pins, so an input pin's level reaches the latch, as the CPU's SEB and CLB do; BBS reads the pin. */
+static void test_host_sfr(void)
 {
     static fw_bridge b;
     load_main(0xC100);
@@ -393,13 +394,81 @@ static void test_host_read_sfr(void)
     CHECK_EQ(fw_sfr8(&b.f, M50734_UART_STATUS), 0x02);
     CHECK(m50734_uart_receive(&g_m.sfr, 0x41));
     CHECK_EQ(fw_sfr8(&b.f, M50734_UART_STATUS), 0x03);
-    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_STATUS), 0x03);   /* still full: the read cleared nothing */
-    CHECK(g_m.sfr.uart_rx_full);
-    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_RX), 0xFF);       /* not read: the received byte stays */
-    CHECK(g_m.sfr.uart_rx_full);
-    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_STATUS), 0x03);
+    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_STATUS), 0x03);   /* still full: reading the status cleared nothing */
+    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_RX), 0x41);
+    CHECK(!g_m.sfr.uart_rx_full);                        /* the read of the byte did */
+    CHECK_EQ(fw_sfr8(&b.f, M50734_UART_STATUS), 0x02);
+    fw_wr_sfr8(&b.f, M50734_UART_TX, 0x4D);
+    CHECK_EQ(g_m.sfr.uart_tx_count, 1);
+    CHECK_EQ(g_m.sfr.uart_tx_last, 0x4D);
+    g_m.sfr.port_dir[0] = 0x78;                          /* serial mode (boot_init_ports): P0.0-2 and P0.7 inputs */
+    g_m.sfr.port_in[0] = 0x04;                           /* the host line P0.2 high */
+    fw_sfr_seb(&b.f, M50734_P0, 5);
+    CHECK_EQ(g_m.sfr.port_latch[0], 0x24);               /* the pins ($04) read, bit 5 set, written to the latch */
+    fw_sfr_clb(&b.f, M50734_P0, 2);
+    CHECK_EQ(g_m.sfr.port_latch[0], 0x20);
+    CHECK(fw_sfr_bit(&b.f, M50734_P0, 2));               /* an input: the pin, not the latch */
+    CHECK(fw_sfr_bit(&b.f, M50734_P0, 5));               /* an output: the latch */
     CHECK_EQ(g_m.unmodelled_count, 0);
     CHECK(!b.f.fault);
+}
+
+/* The firmware's hardware wait (M4.6a spec 3.3): FW_WAIT_UART_TX runs ser_tx_wait at $C500 (BBC1 UART_STATUS,$C500 /
+   RTS, here in the synthetic ROM) on the emulated CPU through a ROM call: A, X, Y, SP and the PC as they were, the
+   loop's cycles spent (BBC1 not taken, the transmitter being ready, then RTS). Once the bridge deadline has passed
+   it fails, and fw_wait faults at $C500. */
+static void test_host_wait(void)
+{
+    static fw_bridge b;
+    static const uint8_t tx_wait[] = { 0x37, 0xE7, 0xFD, 0x60 };   /* $C500: BBC1 $E7,$C500 / RTS */
+    load_main(0xC100);
+    put(FW_WAIT_UART_TX_LOOP, tx_wait, sizeof tx_wait);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    CHECK(fw_bridge_init(&b, &g_m));
+    g_m.cpu.a = 0x11;
+    g_m.cpu.x = 0x22;
+    g_m.cpu.y = 0x33;
+    uint64_t c0 = g_m.cpu.cycles;
+    fw_wait(&b.f, FW_WAIT_UART_TX);
+    CHECK(!b.f.fault);
+    CHECK_EQ(g_m.cpu.a, 0x11);
+    CHECK_EQ(g_m.cpu.x, 0x22);
+    CHECK_EQ(g_m.cpu.y, 0x33);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK_EQ(g_m.cpu.cycles - c0, 11);   /* BBC1 zp not taken (5), RTS (6) */
+
+    b.deadline = g_m.cpu.cycles;         /* passed: the wait fails without running an instruction */
+    fw_wait(&b.f, FW_WAIT_UART_TX);
+    CHECK(b.f.fault);
+    CHECK_EQ(b.f.fault_addr, FW_WAIT_UART_TX_LOOP);
+    CHECK_EQ(g_m.cpu.cycles - c0, 11);
+}
+
+/* machine_return_interrupt is the CPU's RTI (M4.6a spec 3.2): from the same interrupt frame (the PC $9007, then P with
+   N, Z and C set and B clear, as take_irq pushes them), an RTI executed at $C100 and the call leave the same PC, SP
+   and P (B set, I as pulled). */
+static void test_return_interrupt(void)
+{
+    static const uint8_t rti[] = { 0x40 };
+    load_main(0xC100);
+    put(0xC100, rti, sizeof rti);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    g_m.ram[0x1FF] = 0x90;
+    g_m.ram[0x1FE] = 0x07;
+    g_m.ram[0x1FD] = CPU740_N | CPU740_Z | CPU740_C;
+    g_m.cpu.s = 0xFC;
+    g_m.cpu.p = CPU740_I;
+    g_m.cpu.pc = 0xC100;
+    machine_clone(&g_c, &g_m);
+    CHECK(machine_step(&g_m));
+    machine_return_interrupt(&g_c);
+    CHECK_EQ(g_m.cpu.pc, 0x9007);
+    CHECK_EQ(g_c.cpu.pc, 0x9007);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    CHECK_EQ(g_c.cpu.s, 0xFF);
+    CHECK_EQ(g_m.cpu.p, CPU740_N | CPU740_Z | CPU740_C | CPU740_B);
+    CHECK_EQ(g_c.cpu.p, g_m.cpu.p);
 }
 
 /* The bridge's cycle deadline (thunks.h): a ROM call from C gets at most the cycles left before b->deadline, and
@@ -512,7 +581,9 @@ void suite_machine_hooks(void)
     test_irq_hold(true);
     test_irq_hold(false);
     test_rom_call_real_rom();
-    test_host_read_sfr();
+    test_host_sfr();
+    test_host_wait();
+    test_return_interrupt();
     test_bridge_deadline();
     test_waits_thunk_deadline();
 }

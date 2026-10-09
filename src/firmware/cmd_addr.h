@@ -32,10 +32,6 @@
 #define ROM_CMD_SET_SPEAKER       0xAA61   /* "K#" */
 #define ROM_CMD_IGNORE            0xABDC   /* "G#" (listed twice in cmd_table), "I^", "+*" */
 
-/* Immediate command handlers: cmd_imm_match's JMP (cmd_imm_vector) at interrupt level (stay in ROM) */
-#define ROM_CMD_IMM_INDEX_ADD     0xC483   /* "I+" */
-#define ROM_CMD_IMM_INDEX_QUERY   0xC495   /* "I?" */
-
 /* Command event handlers: queued in cmd_ev_handlers by the event producers, run at playback by cmd_run_event
    (stay in ROM) */
 #define ROM_CMD_EV_INDEX          0xBBA0   /* cmd_mark_index */
@@ -44,10 +40,8 @@
 #define ROM_CMD_EV_SET_VOICING    0xBCEA   /* cmd_set_voicing */
 #define ROM_CMD_EV_SET_VOLUME     0xBCED   /* cmd_set_volume */
 
-/* ROM routines the C calls through fw_rom_call (isr_par_ready: ROM_ISR_PAR_READY in tn_convert.h) */
+/* ROM routines the C calls through fw_rom_call (isr_par_ready: ROM_ISR_PAR_READY in tn_convert.h; the serial
+   routines and the immediate handlers: ser_addr.h) */
 #define ROM_CMD_RUN_NEXT          0xA893   /* dispatch cmd_handlers[cmd_next] (the dispatcher's fallback); X kept */
-#define ROM_SER_TX_PUT            0xC4DD   /* queue A as a reply byte; A, X, Y preserved */
-#define ROM_SER_TX_HEX            0xC571   /* queue A as two ASCII hex digits, low nibble first; A preserved */
-#define ROM_SER_TX_RECORDS        0xC5A4   /* queue the record reply ser_reply_id/_count/_size/_ptr describe */
 
 #endif

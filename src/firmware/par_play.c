@@ -4,6 +4,7 @@
 #include "fw_ops.h"
 #include "par_addr.h"
 #include "par_start.h"
+#include "ser_addr.h"
 #include "par_track.h"
 
 #define SFR_UART_STATUS  0xE7   /* UART_STATUS (an SFR): bit 1 = the transmitter is ready */

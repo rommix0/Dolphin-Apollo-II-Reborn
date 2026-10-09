@@ -18,6 +18,7 @@
 #include "firmware/par_start.h"
 #include "firmware/par_track.h"
 #include "firmware/pros_play.h"
+#include "firmware/ser_addr.h"
 #include "firmware/data/fw_data.h"
 
 #define MAX_CALLS 1024

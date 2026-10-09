@@ -63,14 +63,31 @@ static void host_set_low_window(void *ctx, bool on)
     m->bus.write(m->bus.ctx, M50734_P2, (uint8_t)(on ? v | P2_LOWER_WINDOW : v & ~P2_LOWER_WINDOW));
 }
 
-/* The firmware's SFR read. Only UART_STATUS $E7, the one register it polls (par_play $B895), is read, as the CPU's
-   LDA reads it, through the bus; it has no side effect (m50734.c: bit 1, transmitter ready, always set; bit 0,
-   receive full). Any other SFR reads $FF without reaching the bus, so that no read side effect (UART_RX $E5 clears
-   receive full) can happen behind the ROM's back. */
+/* The firmware's SFR read and write (M4.6a spec 3.1): through the bus, as the CPU's read and write, side effects
+   included (a read of UART_RX $E5 clears receive full; an unmodelled SFR is logged as the CPU's access would be).
+   The C reads and writes each SFR where and in the order the ROM does. */
 static uint8_t host_read_sfr(void *ctx, uint8_t addr)
 {
     machine *m = ((fw_bridge *)ctx)->m;
-    return addr == M50734_UART_STATUS ? m->bus.read(m->bus.ctx, addr) : 0xFF;
+    return m->bus.read(m->bus.ctx, addr);
+}
+
+static void host_write_sfr(void *ctx, uint8_t addr, uint8_t value)
+{
+    machine *m = ((fw_bridge *)ctx)->m;
+    m->bus.write(m->bus.ctx, addr, value);
+}
+
+/* The firmware's hardware wait (M4.6a spec 3.3): the kind's ROM loop runs on the emulated CPU as host code (for
+   FW_WAIT_UART_TX, ser_tx_wait $C500: BBC1 UART_STATUS,$C500 / RTS), through host_rom_call with the machine's own
+   A, X and Y, so with interrupts live, the ROM's cycles and the bridge deadline. $C500 is never hooked. */
+static bool host_wait(void *ctx, fw_wait_kind kind)
+{
+    fw_bridge *b = ctx;
+    if (kind != FW_WAIT_UART_TX)
+        return false;
+    fw_regs r = { b->m->cpu.a, b->m->cpu.x, b->m->cpu.y, 0 };
+    return host_rom_call(b, FW_WAIT_UART_TX_LOOP, &r, FW_ROM_CALL_BUDGET) == FW_CALL_RETURNED;
 }
 
 bool fw_bridge_init(fw_bridge *b, machine *m)
@@ -84,6 +101,8 @@ bool fw_bridge_init(fw_bridge *b, machine *m)
     b->host.rom_call = host_rom_call;
     b->host.set_low_window = host_set_low_window;
     b->host.read_sfr = host_read_sfr;
+    b->host.write_sfr = host_write_sfr;
+    b->host.wait = host_wait;
     fw_init(&b->f, m->ram, img, &b->host);
     return img != NULL;
 }

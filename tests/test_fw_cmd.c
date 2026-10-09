@@ -10,6 +10,7 @@
 #include "firmware/cmd_run.h"
 #include "firmware/frm_build.h"
 #include "firmware/par_addr.h"
+#include "firmware/ser_addr.h"
 #include "firmware/tn_convert.h"
 #include "firmware/data/fw_data.h"
 

@@ -3,7 +3,7 @@
    ROM has them at each JSR. Entered as the ROM handlers are: x = the argument's boot_clause index,
    a = boot_clause[x]. */
 #include "cmd_handlers.h"
-#include "cmd_addr.h"
+#include "ser_addr.h"
 #include "data/fw_data.h"
 
 /* A ser_tx_* routine with A, X, Y in; returns the registers it leaves (it pushes and pulls all three). */
