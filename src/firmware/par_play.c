@@ -4,11 +4,10 @@
 #include "fw_ops.h"
 #include "par_addr.h"
 #include "par_start.h"
-#include "ser_addr.h"
 #include "par_track.h"
+#include "ser.h"
 
-#define SFR_UART_STATUS  0xE7   /* UART_STATUS (an SFR): bit 1 = the transmitter is ready */
-#define UART_TX_READY    0x02   /* $B895 BBC1 UART_STATUS */
+#define UART_TX_READY    0x02   /* $B895 BBC1 UART_STATUS: the transmitter is ready */
 
 /* ---- par_play $B877 ---- */
 
@@ -54,7 +53,7 @@ static bool run_due_event(fw *f, fw_regs *r)
 static void serve_reply(fw *f, fw_regs *r)
 {
     if ((fw_sfr8(f, SFR_UART_STATUS) & UART_TX_READY) && fw_rd8(f, SER_STATUS_DUE) != 0)
-        fw_rom_call(f, ROM_SER_TX_SERVICE, r, FW_ROM_CALL_BUDGET);
+        ser_tx_service(f, r);
 }
 
 /* $B8B1-$B907, with isr_frame_flag set: Y = pros_seg_count's low byte, or its high byte when that is 0 (LDY / BNE,

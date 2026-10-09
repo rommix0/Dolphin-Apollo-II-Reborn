@@ -1,16 +1,15 @@
 /* The deferred handlers that reply on the serial line (M4.2 spec 2.2): @E, @c? and @L. The reply goes into the
-   transmit ring through the ROM ser_tx_* routines (the serial subsystem, M4.6), called with A, X and Y as the
-   ROM has them at each JSR. Entered as the ROM handlers are: x = the argument's boot_clause index,
-   a = boot_clause[x]. */
+   transmit ring through the C ser_tx_* routines (ser.c, M4.6a), called with A, X and Y as the ROM has them at each
+   JSR. Entered as the ROM handlers are: x = the argument's boot_clause index, a = boot_clause[x]. */
 #include "cmd_handlers.h"
-#include "ser_addr.h"
+#include "ser.h"
 #include "data/fw_data.h"
 
 /* A ser_tx_* routine with A, X, Y in; returns the registers it leaves (it pushes and pulls all three). */
-static fw_regs ser_call(fw *f, uint16_t addr, uint8_t a, uint8_t x, uint8_t y)
+static fw_regs ser_call(fw *f, void (*fn)(fw *, fw_regs *), uint8_t a, uint8_t x, uint8_t y)
 {
     fw_regs r = { a, x, y, 0 };
-    fw_rom_call(f, addr, &r, FW_ROM_CALL_BUDGET);
+    fn(f, &r);
     return r;
 }
 
@@ -18,7 +17,7 @@ static fw_regs ser_call(fw *f, uint16_t addr, uint8_t a, uint8_t x, uint8_t y)
    routines only save and restore it, so it reaches the dead stack alone and is passed for exactness. */
 void cmd_echo(fw *f, uint8_t x, uint8_t a)
 {
-    ser_call(f, ROM_SER_TX_PUT, a, x, cmd_handler_y(f));
+    ser_call(f, ser_tx_put, a, x, cmd_handler_y(f));
 }
 
 /* $C632: a = the setting letter, compared raw. If cmd_query_table lists it: reply the letter (ser_tx_put), then
@@ -37,11 +36,11 @@ static void cmd_reply_setting(fw *f, uint8_t a, uint8_t x)
             break;
         y = (uint8_t)(y + 2);
     }
-    fw_regs r = ser_call(f, ROM_SER_TX_PUT, a, x, y);               /* A = the table letter = $75 */
+    fw_regs r = ser_call(f, ser_tx_put, a, x, y);                   /* A = the table letter = $75 */
     uint8_t zp = fw_rom8(f, (uint16_t)(CMD_QUERY_TABLE + 1 + r.y)); /* LDA $9990,Y */
     fw_wr8(f, TN_RESUME_POS, r.x);                                  /* STX $77 */
     uint8_t v = fw_mem8(f, zp);                                     /* TAX; LDA $00,X */
-    ser_call(f, ROM_SER_TX_HEX, v, fw_rd8(f, TN_RESUME_POS), r.y);  /* LDX $77 */
+    ser_call(f, ser_tx_hex, v, fw_rd8(f, TN_RESUME_POS), r.y);      /* LDX $77 */
 }
 
 /* $ABD3 @c?: x = the '?'; the letter before it is read as $1AFF,X (boot_clause[x - 1]; x = 0 reads
@@ -59,5 +58,5 @@ void cmd_list_languages(fw *f, uint8_t x, uint8_t a)
     fw_wr8(f, SER_REPLY_COUNT, 7);
     fw_wr8(f, SER_REPLY_SIZE, 14);
     fw_wr16(f, SER_REPLY_PTR, BANK_ID_TABLE);
-    ser_call(f, ROM_SER_TX_RECORDS, a, x, cmd_handler_y(f));   /* LDM leaves A = boot_clause[x] */
+    ser_call(f, ser_tx_records, a, x, cmd_handler_y(f));       /* LDM leaves A = boot_clause[x] */
 }

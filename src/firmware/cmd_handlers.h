@@ -34,7 +34,7 @@ void cmd_set_volume(fw *f, uint8_t x, uint8_t a);         /* $AB05 @A */
 void cmd_set_voicing(fw *f, uint8_t x, uint8_t a);        /* $AB70 @B */
 void cmd_mark_index(fw *f, uint8_t x, uint8_t a);         /* $AB2E @I+ (deferred part) */
 
-/* Replies (cmd_reply.c): queued in the serial transmit ring by the ROM ser_tx_* routines */
+/* Replies (cmd_reply.c): queued in the serial transmit ring by the C ser_tx_* routines (ser.c, M4.6a) */
 void cmd_echo(fw *f, uint8_t x, uint8_t a);               /* $AB99 @E */
 void cmd_query(fw *f, uint8_t x, uint8_t a);              /* $ABD3 @c? */
 void cmd_list_languages(fw *f, uint8_t x, uint8_t a);     /* $ABBE @L */

@@ -18,7 +18,6 @@
 #include "firmware/par_start.h"
 #include "firmware/par_track.h"
 #include "firmware/pros_play.h"
-#include "firmware/ser_addr.h"
 #include "firmware/data/fw_data.h"
 
 #define MAX_CALLS 1024
@@ -42,11 +41,12 @@ static unsigned g_ready_calls;   /* isr_par_ready calls so far */
 static unsigned g_flag_every;    /* the mock timer interrupt sets isr_frame_flag at every n-th of them (0: never) */
 static unsigned g_abort_at;      /* the mock receive interrupt sets ser_abort bit 0 at this one (0: never) */
 static uint8_t g_uart_status;    /* UART_STATUS as the mock reads it */
+static unsigned g_p0_reads;      /* reads of P0: the C ser_tx_service's test of the host line */
 
 /* Records every ROM call. isr_set_volume (M4.6, called by cmd_ev_set_volume) returns the registers the ROM one
-   leaves; so do the interrupt and serial routines that par_play and boot_loop_play call (M4.6), with what the timer
-   and receive interrupts would do between the frame loop's tests (g_flag_every, g_abort_at); any other call fails
-   (par_setup_voice and par_play call the C frame builder since M4.5). */
+   leaves; so do the interrupt routines that par_play and boot_loop_play call (M4.6), with what the timer and receive
+   interrupts would do between the frame loop's tests (g_flag_every, g_abort_at); any other call fails (par_setup_voice
+   and par_play call the C frame builder since M4.5, and the C ser_tx_service since M4.6a). */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     (void)ctx;
@@ -80,8 +80,6 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
             g_ram[SER_ABORT] |= 1;
         return FW_CALL_RETURNED;
     case ROM_ISR_PAR_HOLD:           /* $C5DE-$C5DF, $C5EA-$C5EB: PHA, BBC0 boot_dip, PLA: A, X, Y kept */
-    case ROM_SER_TX_SERVICE:         /* $C581-$C585, $C5A2-$C5A3: PHA, BBS0 boot_dip, BBC2 P0 (the host line low, as
-                                        in the machine), PLA: nothing sent, A, X, Y kept */
     case ROM_ISR_SPEECH_STOP:        /* $B398-$B3A3: LDM, LDM, isr_dsp_reset (PHP ... PLP), CLB0: A, X, Y kept */
         return FW_CALL_RETURNED;
     case ROM_ISR_WAIT_FRAME:         /* $B465-$B46B: BBC0 isr_frame_flag (the frame is due), LDM #0: A, X, Y kept */
@@ -99,10 +97,12 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
     }
 }
 
-/* UART_STATUS ($E7) as g_uart_status says; any other SFR reads 0. */
+/* UART_STATUS ($E7) as g_uart_status says; any other SFR reads 0: P0 ($F6, counted) with the host line P0.2 low, as
+   in the machine, so the C ser_tx_service returns at its BBC2 P0 ($C585) and sends nothing. */
 static uint8_t mock_read_sfr(void *ctx, uint8_t addr)
 {
     (void)ctx;
+    g_p0_reads += addr == 0xF6;
     return addr == 0xE7 ? g_uart_status : 0;
 }
 
@@ -119,6 +119,7 @@ static void setup(void)
     g_flag_every = 0;
     g_abort_at = 0;
     g_uart_status = 0x02;           /* the transmitter ready, nothing received (as the machine has it) */
+    g_p0_reads = 0;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
 }
 
@@ -2099,11 +2100,12 @@ static void test_play_tail(void)
 /* One segment's frames in the main loop, with an event and the reply service. read_setup's segment (index 3 to 4),
    whose duration byte (index 3) is 2, and whose next phoneme's rank $1E takes the boundary jump (test_next_segment);
    pros_seg_count 1, so it is the last. An @B6 is due at segment 3 (cmd_ev_pos = par_seg_index = 3, cmd_ev_count 1).
-   A reply is due (ser_status_due 1) and the transmitter ready (UART_STATUS bit 1): ser_tx_service at every pass.
+   A reply is due (ser_status_due 1) and the transmitter ready (UART_STATUS bit 1): the C ser_tx_service at every
+   pass, which reads P0 (the host line low) and keeps A, X and Y.
    The flag every 2nd isr_par_ready.
    Pass 1: the event (cmd_run_event with A = par_seg_index's high byte 0, X = cmd_ev_next 0): cmd_voicing = 6,
-   cmd_ev_next = 1; the test again: X = 1, not below cmd_ev_count. ser_tx_service gets the handler's A = 6 and Y
-   and X = 1; isr_par_ready twice (the flag comes). Pass 2: par_frames_left 1 -> 0 ($B8FB): par_next_segment (C):
+   cmd_ev_next = 1; the test again: X = 1, not below cmd_ev_count. ser_tx_service and isr_par_ready get the
+   handler's A = 6 and Y and X = 1; isr_par_ready twice (the flag comes). Pass 2: par_frames_left 1 -> 0 ($B8FB): par_next_segment (C):
    par_frames_left = 2, pros_seg_count 0, par_seg_index 4; A = 2 ($B903). $B908: isr_par_ready, par_step_tracks,
    frm_finish_frame. Pass 3: no flag, pass 4: the flag; no segment left: the tight loop, 2 -> 1: one frame; 1 -> 0:
    the end. */
@@ -2125,26 +2127,27 @@ static void test_play_segment(void)
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
     par_play(&g_f, &r);
     static const uint16_t k[] = {
-        ROM_SER_TX_SERVICE, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,                      /* pass 1 */
-        ROM_SER_TX_SERVICE, ROM_ISR_PAR_READY,                                         /* pass 2 */
+        ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,                                          /* pass 1 */
+        ROM_ISR_PAR_READY,                                                             /* pass 2 */
         ROM_ISR_PAR_READY,                                                             /* $B908 */
-        ROM_SER_TX_SERVICE, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,                      /* pass 3 */
-        ROM_SER_TX_SERVICE, ROM_ISR_PAR_READY,                                         /* pass 4 */
+        ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,                                          /* pass 3 */
+        ROM_ISR_PAR_READY,                                                             /* pass 4 */
         ROM_ISR_PAR_READY,                                                             /* the last frame: $B8C9 */
     };
-    check_order(0, k, 12);
-    check_play_call(0, ROM_SER_TX_SERVICE, 6, 1, 0x33, 1);       /* the handler's A, cmd_ev_next from $B877 */
-    check_play_call(4, ROM_ISR_PAR_READY, 6, 1, 0x33, 1);
-    CHECK_EQ(g_calls[5].frames, 2);                              /* par_next_segment's duration */
-    check_play_call(5, ROM_ISR_PAR_READY, 2, 10, 0, 2);          /* A = par_frames_left ($B903), par_next_segment's
+    check_order(0, k, 8);
+    CHECK_EQ(g_p0_reads, 4);                                     /* ser_tx_service at each of the four passes */
+    check_play_call(0, ROM_ISR_PAR_READY, 6, 1, 0x33, 1);        /* the handler's A, cmd_ev_next from $B877 */
+    check_play_call(2, ROM_ISR_PAR_READY, 6, 1, 0x33, 1);
+    CHECK_EQ(g_calls[3].frames, 2);                              /* par_next_segment's duration */
+    check_play_call(3, ROM_ISR_PAR_READY, 2, 10, 0, 2);          /* A = par_frames_left ($B903), par_next_segment's
                                                                     X = 10 and Y = 0 */
-    check_play_call(6, ROM_SER_TX_SERVICE, 0x18, 1, FRAME_PITCH, 2);    /* the pitch $55 to $70 over 2 frames:
+    check_play_call(4, ROM_ISR_PAR_READY, 0x18, 1, FRAME_PITCH, 2);     /* the pitch $55 to $70 over 2 frames:
                                                                        ($70 + $55) >> 1 = $62, b10 = $62 >> 2: A of
                                                                        par_step_tracks, kept by frm_finish_frame;
                                                                        X = cmd_ev_next ($B877) */
-    check_play_call(11, ROM_ISR_PAR_READY, 0x1C, 0, FRAME_PITCH, 1);    /* then over 1: $70, b10 = $1C */
-    CHECK_EQ(check_rest_frames(12, 2), 8);
-    CHECK_EQ(g_ncalls, 20);
+    check_play_call(7, ROM_ISR_PAR_READY, 0x1C, 0, FRAME_PITCH, 1);     /* then over 1: $70, b10 = $1C */
+    CHECK_EQ(check_rest_frames(8, 2), 8);
+    CHECK_EQ(g_ncalls, 16);
     CHECK_EQ(g_ram[CMD_VOICING], 6);
     CHECK_EQ(g_ram[CMD_EV_NEXT], 1);
     CHECK_EQ(fw_rd16(&g_f, PAR_SEG_INDEX), 4);
@@ -2179,7 +2182,7 @@ static void test_play_abort(void)
     CHECK_EQ(check_rest_frames(1, 1), 5);
     check_play_call(1, ROM_ISR_WAIT_FRAME, 0x11, 0, 0x33, 4);
     CHECK_EQ(g_ncalls, 6);
-    CHECK_EQ(count(ROM_SER_TX_SERVICE), 0);
+    CHECK_EQ(g_p0_reads, 0);                                     /* no ser_tx_service: it would read P0 */
     for (int b = 0; b < FRAME_SIZE; b++)
         CHECK_EQ(g_ram[ISR_FRAME_B + b], b == FRAME_MARK_SPACE ? 47 : 0);
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 5);

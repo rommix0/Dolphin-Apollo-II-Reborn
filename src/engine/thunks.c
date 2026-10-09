@@ -23,6 +23,7 @@
 #include "firmware/par_track.h"
 #include "firmware/par_play.h"
 #include "firmware/frm_build.h"
+#include "firmware/ser.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -861,6 +862,76 @@ static void cmd_hex_value_regs(fw *f, cpu740 *c)
     c->p = (uint8_t)(v == 0 ? c->p | CPU740_Z : c->p & ~CPU740_Z);
 }
 
+/* The registers in, a serial routine (ser.c), the registers out: the routines that take and leave A, X and Y. */
+static void ser_regs(fw *f, cpu740 *c, void (*fn)(fw *, fw_regs *))
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    fn(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* ser_tx_get $C4B5: nothing read in (LDA #$15 first; Y is loaded before it is read). A = the byte or NAK, Y = the new
+   count (0 when it was 0) or as it came (nothing pending), X untouched. isr_int1 ($C30D STA P1) and ser_tx_service
+   ($C58D JSR ser_tx_send, which sends A) read A; isr_int1 then pulls Y, X and A ($C336-$C33A), and ser_tx_service's
+   Y reaches its own callers (its thunk). The PLP restores the flags it came with: no caller reads one. Declared: A,
+   X, Y. */
+static void ser_tx_get_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_get); }
+
+/* ser_tx_put $C4DD: A in (read back from the stack, $C4E3). A, X and Y out as they came (pulled at $C4FA-$C4FE).
+   ser_tx_records reads Y and X next ($C5C1 INY, $C5C2 DEX); ser_tx_hex pulls A ($C57B, $C57F) and keeps X and Y to
+   its exit; cmd_imm_index_query loads A next ($C49A LDA, $C4AE LDA) and leaves X and Y to cmd_imm_done, which keeps
+   them; the C cmd_reply_setting reads X and Y after it. No caller reads a flag. Declared: A, X, Y. */
+static void ser_tx_put_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_put); }
+
+/* ser_tx_send $C504: A in. A, X and Y out as they came (PHP / PLP keep the flags). Its one caller, ser_tx_service
+   ($C590), loads A next (LDA ser_tx_pending) and passes X and Y to its own exit (its thunk). Declared: A, X, Y. */
+static void ser_tx_send_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_send); }
+
+/* ser_hex_digits $C53A: in, X and Y and its caller's last two pushes, the bytes at S+3 and S+4 at the hook (LDA
+   $0105,X / $0106,X after its two pushes and TSX: absolute,X, so the addresses are $0105 + (S - 2) and the next);
+   they become the digits in place. A = X, X and Y out (PLA / TAY / PLA / TAX). Its one caller, ser_tx_hex, pulls
+   the digits and A ($C577-$C57F) and passes X and Y through ser_tx_put to its own exit (its thunk). No caller reads
+   a flag. Declared: A, X, Y. */
+static void ser_hex_digits_regs(fw *f, cpu740 *c)
+{
+    uint16_t at = (uint16_t)(0x0105 + (uint8_t)(c->s - 2));
+    uint8_t pair[2] = { fw_rd8(f, at), fw_rd8(f, (uint16_t)(at + 1)) };
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    ser_hex_digits(f, &r, pair);
+    fw_wr8(f, at, pair[0]);
+    fw_wr8(f, (uint16_t)(at + 1), pair[1]);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* ser_hex_digit $C55A: A in. A = the digit, Y = A & $0F, X untouched. Its one caller, ser_hex_digits, stores A with
+   X ($C545 STA $0105,X, $C552 STA $0106,X) and restores Y at its end. No caller reads a flag. Declared: A, X, Y. */
+static void ser_hex_digit_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_hex_digit); }
+
+/* ser_tx_hex $C571: A in. A, X and Y out as they came (its first push pulled last; ser_hex_digits and ser_tx_put
+   keep X and Y). cmd_imm_index_query loads A next ($C49F LDA #'T'); ser_tx_records loads A ($C5B3) or Y ($C5B8 LDY
+   #0) and restores all three at its end; the C cmd_reply_setting returns. No caller reads a flag. Declared: A, X,
+   Y. */
+static void ser_tx_hex_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_hex); }
+
+/* ser_tx_service $C581: A, X, Y in (A pushed and pulled, X and Y passed to ser_tx_get and ser_tx_send). A and X out
+   as they came, Y as ser_tx_get leaves it when it ran. Its ROM caller boot_get_clause ($A6D7) goes back to $A6C2
+   (LDA ser_rx_write) and reads X, the clause length, at $A706 / $A70D (STA $1B00,X); Y is loaded first ($A6EB LDY
+   #0). The C par_play calls the C. No caller reads a flag. Declared: A, X, Y. */
+static void ser_tx_service_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_service); }
+
+/* ser_tx_records $C5A4: A, X and Y in and out (pushed at $C5A4-$C5A8, pulled at $C5D0-$C5D4). Its one caller, the C
+   cmd_list_languages, returns. Declared: A, X, Y. */
+static void ser_tx_records_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_records); }
+
+/* ser_tx_next_page $C5F5: Y in; Y = the next page out, A and X untouched. ser_tx_get ($C4C9) and ser_tx_put ($C4F3)
+   store Y (STY); then ser_tx_get loads Y ($C4CB LDY ser_tx_count) and ser_tx_put pulls Y, X and A. No caller reads a
+   flag. Declared: A, X, Y. */
+static void ser_tx_next_page_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_next_page); }
+
 /* util_shl4 $C656: A in; A << 4 out (8 bits); X and Y untouched. Callers read A: cmd_apply_pitch ($A838 ORA
    cmd_prosody, $A842 STA pros_pitch_centre), cmd_set_formant ($A955 STA $75), cmd_set_mark_space ($A9B0 STA $75),
    cmd_hex_byte ($B458 STA $1809); the first two of these read X next ($A957, $A9B2 INX), which util_shl4 leaves. No
@@ -1097,7 +1168,16 @@ THUNK(par_track_overlap)
 THUNK(par_track_start)
 THUNK(par_track_end)
 THUNK(par_scale_duration)
+THUNK(ser_tx_get)
+THUNK(ser_tx_put)
+THUNK(ser_tx_send)
 THUNK(cmd_hex_value)
+THUNK(ser_hex_digits)
+THUNK(ser_hex_digit)
+THUNK(ser_tx_hex)
+THUNK(ser_tx_service)
+THUNK(ser_tx_records)
+THUNK(ser_tx_next_page)
 THUNK(util_shl4)
 THUNK(util_shl3)
 THUNK(ph_append_phrase_pause)
@@ -1171,7 +1251,16 @@ const fw_replacement fw_replacements[] = {
     { "par_track_start",    0xC24A, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_start },
     { "par_track_end",      0xC26C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_end },
     { "par_scale_duration", 0xC29C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_duration },
+    { "ser_tx_get",         0xC4B5, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_get },
+    { "ser_tx_put",         0xC4DD, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_put },
+    { "ser_tx_send",        0xC504, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_send },
     { "cmd_hex_value",      0xC520, FW_OUT_A | FW_OUT_X | FW_OUT_Y | FW_OUT_Z, t_cmd_hex_value },
+    { "ser_hex_digits",     0xC53A, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_hex_digits },
+    { "ser_hex_digit",      0xC55A, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_hex_digit },
+    { "ser_tx_hex",         0xC571, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_hex },
+    { "ser_tx_service",     0xC581, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_service },
+    { "ser_tx_records",     0xC5A4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_records },
+    { "ser_tx_next_page",   0xC5F5, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_next_page },
     { "util_shl4",          0xC656, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_util_shl4 },
     { "util_shl3",          0xC657, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_util_shl3 },
     { "ph_append_phrase_pause", 0xC9B8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_phrase_pause },

@@ -10,7 +10,6 @@
 #include "firmware/cmd_run.h"
 #include "firmware/frm_build.h"
 #include "firmware/par_addr.h"
-#include "firmware/ser_addr.h"
 #include "firmware/tn_convert.h"
 #include "firmware/data/fw_data.h"
 
@@ -46,9 +45,9 @@ static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
 static uint8_t g_before[FW_RAM_SIZE];   /* RAM as a test left it: the C must not touch it before a ROM cmd_run_next */
 static unsigned g_touched;              /* ROM cmd_run_next calls that found RAM changed since g_before */
-static bool g_clobber;                  /* ser_tx_put returns X ^ $40 and Y = 2 */
 
-/* Records every ROM call and answers the routines the C calls as the ROM would; any other call fails. */
+/* Records every ROM call and answers the routines the C calls as the ROM would; any other call fails. The reply
+   handlers call the C ser_tx_* routines (M4.6a), which make no ROM call. */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     (void)ctx;
@@ -74,20 +73,12 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         memcpy(g_before, g_ram, sizeof g_ram);
         return FW_CALL_RETURNED;   /* X back as it was (cmd_run_done) */
     }
-    if (addr == ROM_SER_TX_PUT || addr == ROM_SER_TX_HEX || addr == ROM_SER_TX_RECORDS) {
-        /* the ser_tx_* routines push and pull A, X and Y: the registers come back as they went, unless g_clobber
-           proves that cmd_reply_setting carries on with the X and Y that ser_tx_put returns */
-        if (g_clobber && addr == ROM_SER_TX_PUT) {
-            r->x ^= 0x40;
-            r->y = 2;                              /* the 'B' entry of cmd_query_table */
-        }
-        return FW_CALL_RETURNED;
-    }
     /* isr_par_ready leaves A, X and Y as they were: the registers come back unchanged */
     return addr == ROM_ISR_PAR_READY ? FW_CALL_RETURNED : FW_CALL_FAILED;
 }
 
-/* Zeroed RAM, the mock host, the converted image, no calls recorded. */
+/* Zeroed RAM with the output ring empty at $3900 (as boot_clear_input_state leaves it, $AC09-$AC18), the mock
+   host, the converted image, no calls recorded. */
 static void setup(void)
 {
     memset(g_ram, 0, sizeof g_ram);
@@ -96,8 +87,9 @@ static void setup(void)
     g_host.set_low_window = NULL;   /* no command routine in C drives P2 (bank_cmd_select stays in ROM) */
     g_ncalls = 0;
     g_touched = 0;
-    g_clobber = false;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
+    fw_wr16(&g_f, SER_TX_READ, SER_TX_RING);
+    fw_wr16(&g_f, SER_TX_WRITE, SER_TX_RING);
 }
 
 /* Entry i of a pointer table (cmd_table, cmd_imm_table) in the converted data: the address of its pattern. */
@@ -689,17 +681,17 @@ static void test_ignore(void)
     CHECK_EQ(g_ncalls, 0);
 }
 
-/* Call i went to addr with A, X, Y and the strict budget. */
-static void check_call(unsigned i, uint16_t addr, uint8_t a, uint8_t x, uint8_t y)
+/* The reply the C ser_tx_* routines queued (M4.6a): its n bytes in the output ring from $3900, ser_tx_write after
+   them, ser_tx_read still at $3900, ser_tx_count = n, ser_tx_pending = 1, and no ROM call. */
+static void check_reply(const char *reply, unsigned n)
 {
-    CHECK(i < g_ncalls && i < MAX_CALLS);
-    if (i >= g_ncalls || i >= MAX_CALLS)
-        return;
-    CHECK_EQ(g_calls[i].addr, addr);
-    CHECK_EQ(g_calls[i].a, a);
-    CHECK_EQ(g_calls[i].x, x);
-    CHECK_EQ(g_calls[i].y, y);
-    CHECK_EQ(g_calls[i].budget, FW_ROM_CALL_BUDGET);
+    for (unsigned i = 0; i < n; i++)
+        CHECK_EQ(g_ram[SER_TX_RING + i], (uint8_t)reply[i]);
+    CHECK_EQ(fw_rd16(&g_f, SER_TX_WRITE), SER_TX_RING + n);
+    CHECK_EQ(fw_rd16(&g_f, SER_TX_READ), SER_TX_RING);
+    CHECK_EQ(g_ram[SER_TX_COUNT], n);
+    CHECK_EQ(g_ram[SER_TX_PENDING], 1);
+    CHECK_EQ(g_ncalls, 0);
 }
 
 /* The C par_setup_voice ran (M4.4a; with the C frame builder since M4.5, so no ROM call): the voice pointers and the
@@ -1090,8 +1082,7 @@ static void test_echo(void)
     put_clause(" @E! ");
     g_ram[CMD_NEXT] = 1;                           /* the dispatcher advanced it: Y = cmd_next - 1 = 0 */
     cmd_echo(&g_f, 3, g_ram[BOOT_CLAUSE + 3]);
-    CHECK_EQ(g_ncalls, 1);
-    check_call(0, ROM_SER_TX_PUT, '!', 3, 0);
+    check_reply("!", 1);
     CHECK(!g_f.fault);
 }
 
@@ -1105,25 +1096,19 @@ static void test_query_known(void)
     cmd_query(&g_f, 3, g_ram[BOOT_CLAUSE + 3]);    /* X = the '?'; the letter is boot_clause[X - 1] */
     CHECK_EQ(g_ram[FW_TMP_75], 'A');
     CHECK_EQ(g_ram[TN_RESUME_POS], 3);             /* X parked in $77 */
-    CHECK_EQ(g_ncalls, 2);
-    check_call(0, ROM_SER_TX_PUT, 'A', 3, 0);      /* Y = the table offset */
-    check_call(1, ROM_SER_TX_HEX, 6, 3, 0);        /* cmd_volume ($14) */
+    check_reply("A60", 3);                         /* the letter, then cmd_volume ($14) in hex, low digit first */
 
     setup();
     put_clause(" @$? ");                           /* the last entry: offset 34, cmd_source ($1C) */
     g_ram[CMD_SOURCE] = 0x42;
     cmd_query(&g_f, 3, '?');
-    CHECK_EQ(g_ncalls, 2);
-    check_call(0, ROM_SER_TX_PUT, '$', 3, 34);
-    check_call(1, ROM_SER_TX_HEX, 0x42, 3, 34);
+    check_reply("$24", 3);
 
     setup();                                       /* X = 0 reads $1AFF = cmd_text[255] */
     g_ram[CMD_TEXT + 255] = 'W';
     g_ram[CMD_SPEED] = 3;
     cmd_query(&g_f, 0, 0);
-    CHECK_EQ(g_ncalls, 2);
-    check_call(0, ROM_SER_TX_PUT, 'W', 0, 26);
-    check_call(1, ROM_SER_TX_HEX, 3, 0, 26);
+    check_reply("W30", 3);
     CHECK(!g_f.fault);
 }
 
@@ -1137,25 +1122,11 @@ static void test_query_unknown(void)
         cmd_query(&g_f, 3, '?');
         CHECK_EQ(g_ram[FW_TMP_75], (uint8_t)k_texts[i][2]);
         CHECK_EQ(g_ram[TN_RESUME_POS], 0x99);
+        CHECK_EQ(fw_rd16(&g_f, SER_TX_WRITE), SER_TX_RING);   /* no reply */
+        CHECK_EQ(g_ram[SER_TX_PENDING], 0);
         CHECK_EQ(g_ncalls, 0);
         CHECK(!g_f.fault);
     }
-}
-
-/* cmd_reply_setting carries on with the X and Y that ser_tx_put returns (the ROM relies on it preserving them) */
-static void test_query_returned_regs(void)
-{
-    setup();
-    put_clause(" @A? ");
-    g_clobber = true;
-    g_ram[CMD_VOLUME] = 6;
-    g_ram[CMD_VOICING] = 9;
-    cmd_query(&g_f, 3, '?');
-    CHECK_EQ(g_ram[TN_RESUME_POS], 0x43);          /* STX $77 after the call */
-    CHECK_EQ(g_ncalls, 2);
-    check_call(0, ROM_SER_TX_PUT, 'A', 3, 0);
-    check_call(1, ROM_SER_TX_HEX, 9, 0x43, 2);     /* LDA $9990,Y with the returned Y = 2: cmd_voicing ($13) */
-    CHECK(!g_f.fault);
 }
 
 static void test_list_languages(void)
@@ -1163,13 +1134,16 @@ static void test_list_languages(void)
     setup();
     put_clause(" @L ");
     g_ram[CMD_NEXT] = 1;
+    char want[104] = "L70E0";                      /* 'L', 7 and 14 in hex (low digit first) */
+    for (unsigned i = 0; i < 98; i++)
+        want[5 + i] = g_ram[BANK_ID_TABLE + i] = (char)('a' + i % 26);   /* 7 bank ids of 14 characters */
+    want[103] = '\r';
     cmd_list_languages(&g_f, 2, g_ram[BOOT_CLAUSE + 2]);
     CHECK_EQ(g_ram[SER_REPLY_ID], 'L');
-    CHECK_EQ(g_ram[SER_REPLY_COUNT], 7);
+    CHECK_EQ(g_ram[SER_REPLY_COUNT], 0);           /* counted down by ser_tx_records */
     CHECK_EQ(g_ram[SER_REPLY_SIZE], 14);
     CHECK_EQ(fw_rd16(&g_f, SER_REPLY_PTR), BANK_ID_TABLE);
-    CHECK_EQ(g_ncalls, 1);
-    check_call(0, ROM_SER_TX_RECORDS, 'L', 2, 0);
+    check_reply(want, 104);
     CHECK(!g_f.fault);
 }
 
@@ -1238,7 +1212,6 @@ void suite_fw_cmd(void)
     test_echo();
     test_query_known();
     test_query_unknown();
-    test_query_returned_regs();
     test_list_languages();
     test_run_due_all_rows();
 }
