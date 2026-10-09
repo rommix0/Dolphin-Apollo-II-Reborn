@@ -24,6 +24,7 @@
 #include "firmware/par_play.h"
 #include "firmware/frm_build.h"
 #include "firmware/ser.h"
+#include "firmware/cmd_imm.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -872,6 +873,31 @@ static void ser_regs(fw *f, cpu740 *c, void (*fn)(fw *, fw_regs *))
     c->y = r.y;
 }
 
+/* ser_rx_byte $C37E: A in (the byte); X and Y passed to cmd_imm_match or ser_rx_put. A, X and Y out as the path
+   taken leaves them (the mute: A = ser_rx_write's high byte; the command character: Y = 0; else as cmd_imm_match or
+   ser_rx_put leaves them; X kept on every path). Its one caller, isr_int1 ($C32E, $C356, $C36F), pulls Y, X and A
+   next ($C336-$C33A after SEI / SEB0 / PLP / NOP; $C35B-$C37A after PLP / NOP and the UART and port writes) and reads
+   no flag. Declared: A, X, Y. */
+static void ser_rx_byte_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_rx_byte); }
+
+/* ser_rx_put $C3CC: A in. A and X out as they came, Y = 0 or the new page ($C3DC STY). ser_rx_byte returns; its
+   caller pulls the registers. ser_rx_flush_cmd reads X next ($C40C INX) and loads A first ($C404 LDA $2020,X);
+   boot_queue_string reloads Y first ($C625 LDY $78) and loads A ($C61C). No caller reads a flag. Declared: A, X,
+   Y. */
+static void ser_rx_put_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_rx_put); }
+
+/* ser_rx_flush_cmd $C3FA: A and X in and out as they came (pushed at $C3FA-$C3FC, pulled at $C40F-$C411); Y as its
+   last ser_rx_put leaves it. cmd_imm_match ($C449) and cmd_imm_index_add ($C492) go on at cmd_imm_done, which pulls
+   A after restoring zero page and keeps X and Y to cmd_imm_match's exit (its thunk). No caller reads a flag.
+   Declared: A, X, Y. */
+static void ser_rx_flush_cmd_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_rx_flush_cmd); }
+
+/* cmd_imm_match $C413: A in (the byte); X passed through; Y loaded first. A out as it came ($C481 PLA), X kept
+   (cmd_match_table, ser_rx_flush_cmd and both handlers keep it), Y = the matched entry's offset (a partial match,
+   $C450), as ser_rx_flush_cmd leaves it (no match, @I+) or 0 (@I?, $C466). Its one caller, ser_rx_byte, returns
+   ($C3AB RTS) to isr_int1, which pulls the registers. No caller reads a flag. Declared: A, X, Y. */
+static void cmd_imm_match_regs(fw *f, cpu740 *c) { ser_regs(f, c, cmd_imm_match); }
+
 /* ser_tx_get $C4B5: nothing read in (LDA #$15 first; Y is loaded before it is read). A = the byte or NAK, Y = the new
    count (0 when it was 0) or as it came (nothing pending), X untouched. isr_int1 ($C30D STA P1) and ser_tx_service
    ($C58D JSR ser_tx_send, which sends A) read A; isr_int1 then pulls Y, X and A ($C336-$C33A), and ser_tx_service's
@@ -926,6 +952,11 @@ static void ser_tx_service_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_servic
 /* ser_tx_records $C5A4: A, X and Y in and out (pushed at $C5A4-$C5A8, pulled at $C5D0-$C5D4). Its one caller, the C
    cmd_list_languages, returns. Declared: A, X, Y. */
 static void ser_tx_records_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_records); }
+
+/* ser_rx_next_page $C5EC: Y in; Y = the next page out, A and X untouched. ser_rx_put ($C3DC) stores Y and returns;
+   boot_get_clause ($A6F8) stores Y, then reads A (the byte it loaded, $A700 CMP #$0D) and X ($A706 / $A70D STA
+   $1B00,X). No caller reads a flag. Declared: A, X, Y. */
+static void ser_rx_next_page_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_rx_next_page); }
 
 /* ser_tx_next_page $C5F5: Y in; Y = the next page out, A and X untouched. ser_tx_get ($C4C9) and ser_tx_put ($C4F3)
    store Y (STY); then ser_tx_get loads Y ($C4CB LDY ser_tx_count) and ser_tx_put pulls Y, X and A. No caller reads a
@@ -1168,6 +1199,10 @@ THUNK(par_track_overlap)
 THUNK(par_track_start)
 THUNK(par_track_end)
 THUNK(par_scale_duration)
+THUNK(ser_rx_byte)
+THUNK(ser_rx_put)
+THUNK(ser_rx_flush_cmd)
+THUNK(cmd_imm_match)
 THUNK(ser_tx_get)
 THUNK(ser_tx_put)
 THUNK(ser_tx_send)
@@ -1177,6 +1212,7 @@ THUNK(ser_hex_digit)
 THUNK(ser_tx_hex)
 THUNK(ser_tx_service)
 THUNK(ser_tx_records)
+THUNK(ser_rx_next_page)
 THUNK(ser_tx_next_page)
 THUNK(util_shl4)
 THUNK(util_shl3)
@@ -1251,6 +1287,10 @@ const fw_replacement fw_replacements[] = {
     { "par_track_start",    0xC24A, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_start },
     { "par_track_end",      0xC26C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_end },
     { "par_scale_duration", 0xC29C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_duration },
+    { "ser_rx_byte",        0xC37E, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_byte },
+    { "ser_rx_put",         0xC3CC, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_put },
+    { "ser_rx_flush_cmd",   0xC3FA, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_flush_cmd },
+    { "cmd_imm_match",      0xC413, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_imm_match },
     { "ser_tx_get",         0xC4B5, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_get },
     { "ser_tx_put",         0xC4DD, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_put },
     { "ser_tx_send",        0xC504, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_send },
@@ -1260,6 +1300,7 @@ const fw_replacement fw_replacements[] = {
     { "ser_tx_hex",         0xC571, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_hex },
     { "ser_tx_service",     0xC581, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_service },
     { "ser_tx_records",     0xC5A4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_records },
+    { "ser_rx_next_page",   0xC5EC, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_next_page },
     { "ser_tx_next_page",   0xC5F5, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_next_page },
     { "util_shl4",          0xC656, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_util_shl4 },
     { "util_shl3",          0xC657, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_util_shl3 },

@@ -22,6 +22,25 @@
 #define P0_BUSY          5      /* P0.5: the busy line to the host */
 
 #define SER_NAK          0x15   /* ser_tx_get's answer when nothing is pending */
+#define SER_CTRL_A       0x01   /* a mute */
+#define SER_CTRL_X       0x18   /* a mute */
+
+/* $C37E: a received byte A, at interrupt level. Ctrl-A or Ctrl-X mutes (ser_rx_mute $C391): ser_abort and
+   cmd_index_reset bit 0 set, cmd_char = ser_cmd_char, ser_rx_idle and ser_rx_idle_saved bit 0 set, command mode off
+   (ser_cmd_mode bit 0), the input ring emptied (ser_rx_read = ser_rx_write), A = ser_rx_write's high byte. The
+   command character ser_cmd_char starts command mode (ser_rx_cmd_start $C3AC): ser_cmd_mode bit 0 set,
+   ser_rx_idle_saved = ser_rx_idle, ser_cmd_ptr = ser_cmd_buf, ser_cmd_table_ofs = 0, the 5 bytes of ser_cmd_buf
+   cleared, Y = 0. In command mode cmd_imm_match takes the byte, else ser_rx_put. X kept. */
+void ser_rx_byte(fw *f, fw_regs *r);
+/* $C3CC: A at ser_rx_write, which moves on (ser_rx_next_page at a page end); ser_rx_idle bit 0 cleared. Y = 0, or the
+   new page at a page end; A and X kept. */
+void ser_rx_put(fw *f, fw_regs *r);
+/* $C3FA: the command character and then ser_cmd_buf up to its first 0 queued as ordinary input (ser_rx_put); A and X
+   kept, Y as the last ser_rx_put leaves it. */
+void ser_rx_flush_cmd(fw *f, fw_regs *r);
+/* $C5EC: Y = the next page of the input ring, Y + 1 with $39 wrapping to $21 (the ring is $2100-$38FF); A and X
+   kept. */
+void ser_rx_next_page(fw *f, fw_regs *r);
 
 /* $C5F5: Y = the next page of the output ring, Y + 1 with $3A wrapping to $39 (the ring is the one page $3900);
    A and X kept. */

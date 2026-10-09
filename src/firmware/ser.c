@@ -1,9 +1,84 @@
 #include "ser.h"
+#include "cmd_imm.h"
 #include "fw_ops.h"
 #include "data/fw_data.h"
 
 #define SER_TX_PAGE       0x39   /* the output ring, $3900-$39FF */
+#define SER_RX_PAGE_FIRST 0x21   /* the input ring, $2100-$38FF */
+#define SER_RX_PAGE_END   0x39
+#define SER_CMD_BUF_LEN   5      /* the bytes ser_rx_cmd_start clears */
 #define SER_CR            0x0D   /* ser_tx_records' last byte */
+
+/* ---- the receive path ---- */
+
+void ser_rx_byte(fw *f, fw_regs *r)
+{
+    if (r->a == SER_CTRL_A || r->a == SER_CTRL_X) {              /* ser_rx_mute $C391 */
+        fw_seb(f, SER_ABORT, 0);
+        fw_seb(f, CMD_INDEX_RESET, 0);
+        fw_wr8(f, CMD_CHAR, fw_rd8(f, SER_CMD_CHAR));
+        fw_seb(f, SER_RX_IDLE, 0);
+        fw_seb(f, SER_RX_IDLE_SAVED, 0);
+        fw_clb(f, SER_CMD_MODE, 0);
+        fw_wr8(f, SER_RX_READ, fw_rd8(f, SER_RX_WRITE));
+        r->a = fw_rd8(f, SER_RX_WRITE + 1);
+        fw_wr8(f, SER_RX_READ + 1, r->a);
+        return;
+    }
+    if (r->a == fw_rd8(f, SER_CMD_CHAR)) {                       /* ser_rx_cmd_start $C3AC */
+        fw_seb(f, SER_CMD_MODE, 0);
+        r->y = fw_rd8(f, SER_RX_IDLE);
+        fw_wr8(f, SER_RX_IDLE_SAVED, r->y);
+        fw_wr16(f, SER_CMD_PTR, SER_CMD_BUF);                    /* LDM #$20 twice */
+        r->y = 0;
+        fw_wr8(f, SER_CMD_TABLE_OFS, 0);
+        for (uint16_t i = 0; i < SER_CMD_BUF_LEN; i++)
+            fw_wr8(f, (uint16_t)(SER_CMD_BUF + i), 0);
+        return;
+    }
+    if (fw_rd8(f, SER_CMD_MODE) & 1)                             /* BBS0 ser_cmd_mode */
+        cmd_imm_match(f, r);
+    else
+        ser_rx_put(f, r);
+}
+
+void ser_rx_put(fw *f, fw_regs *r)
+{
+    fw_clb(f, SER_RX_IDLE, 0);
+    r->y = 0;
+    fw_wr_ind_y(f, (uint8_t)SER_RX_WRITE, 0, r->a);              /* STA (ser_rx_write),Y */
+    uint8_t lo = (uint8_t)(fw_rd8(f, SER_RX_WRITE) + 1);         /* INC ser_rx_write; BEQ */
+    fw_wr8(f, SER_RX_WRITE, lo);
+    if (lo != 0)
+        return;
+    r->y = fw_rd8(f, SER_RX_WRITE + 1);                          /* $C3D7 */
+    ser_rx_next_page(f, r);
+    fw_wr8(f, SER_RX_WRITE + 1, r->y);
+}
+
+void ser_rx_flush_cmd(fw *f, fw_regs *r)
+{
+    fw_regs t = *r;                                              /* PHA / TXA / PHA ... PLA / TAX / PLA */
+    t.a = fw_rd8(f, SER_CMD_CHAR);
+    ser_rx_put(f, &t);
+    t.x = 0;
+    for (;;) {
+        t.a = fw_rd8(f, (uint16_t)(SER_CMD_BUF + t.x));          /* $C404 LDA $2020,X; BEQ */
+        if (t.a == 0)
+            break;
+        ser_rx_put(f, &t);
+        t.x++;
+    }
+    r->y = t.y;
+}
+
+void ser_rx_next_page(fw *f, fw_regs *r)
+{
+    (void)f;
+    r->y++;                                                      /* INY */
+    if (r->y == SER_RX_PAGE_END)                                 /* CPY #$39 */
+        r->y = SER_RX_PAGE_FIRST;
+}
 
 /* ---- the reply output ---- */
 

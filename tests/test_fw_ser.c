@@ -6,7 +6,9 @@
 #include <string.h>
 #include "test.h"
 #include "firmware/fw.h"
+#include "firmware/cmd_imm.h"
 #include "firmware/ser.h"
+#include "firmware/ser_addr.h"
 #include "firmware/data/fw_data.h"
 
 #define MAX_LOG     256
@@ -460,6 +462,277 @@ static void test_tx_records(void)
     CHECK(!g_f.fault);
 }
 
+/* The input ring's pointers. */
+static void rx_ring(uint16_t read, uint16_t write)
+{
+    fw_wr16(&g_f, SER_RX_READ, read);
+    fw_wr16(&g_f, SER_RX_WRITE, write);
+}
+
+/* ser_rx_next_page $C5EC: Y + 1, $39 wrapping to $21; A and X kept. */
+static void test_rx_next_page(void)
+{
+    setup();
+    fw_regs r = { 0x11, 0x22, 0x21, 0 };
+    ser_rx_next_page(&g_f, &r);
+    check_regs(&r, 0x11, 0x22, 0x22);
+    r.y = 0x38;
+    ser_rx_next_page(&g_f, &r);
+    check_regs(&r, 0x11, 0x22, 0x21);
+    CHECK_EQ(g_nlog, 0);
+}
+
+/* ser_rx_put $C3CC: the byte at ser_rx_write, which moves on; ser_rx_idle bit 0 cleared (its other bits kept); Y = 0,
+   or at a page end the new page: from $21FF to $2200 (Y = $22), from $38FF to $2100 (the wrap, Y = $21). A and X
+   kept; no SFR is touched. */
+static void test_rx_put(void)
+{
+    setup();
+    rx_ring(0x2100, 0x2105);
+    g_ram[SER_RX_IDLE] = 0x03;
+    fw_regs r = { 'h', 0x22, 0x33, 0 };
+    ser_rx_put(&g_f, &r);
+    check_regs(&r, 'h', 0x22, 0);
+    CHECK_EQ(g_ram[0x2105], 'h');
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2106);
+    CHECK_EQ(g_ram[SER_RX_IDLE], 0x02);
+    rx_ring(0x2100, 0x21FF);
+    ser_rx_put(&g_f, &r);
+    check_regs(&r, 'h', 0x22, 0x22);
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2200);
+    rx_ring(0x2100, 0x38FF);
+    ser_rx_put(&g_f, &r);
+    check_regs(&r, 'h', 0x22, 0x21);
+    CHECK_EQ(g_ram[0x38FF], 'h');
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2100);
+    CHECK_EQ(g_nlog, 0);
+    CHECK(!g_f.fault);
+}
+
+/* ser_rx_flush_cmd $C3FA: the command character, then ser_cmd_buf up to its first 0, as input; A and X kept, Y as
+   the last ser_rx_put leaves it. */
+static void test_rx_flush_cmd(void)
+{
+    setup();
+    rx_ring(0x2100, 0x2100);
+    g_ram[SER_CMD_CHAR] = '@';
+    memcpy(g_ram + SER_CMD_BUF, "I+\0Z", 4);
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    ser_rx_flush_cmd(&g_f, &r);
+    check_regs(&r, 0x11, 0x22, 0);
+    CHECK(memcmp(g_ram + 0x2100, "@I+", 3) == 0);
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2103);
+    CHECK(!g_f.fault);
+}
+
+/* ser_rx_byte $C37E with the mute bytes $01 and $18: ser_abort and cmd_index_reset bit 0 set (their other bits
+   kept), cmd_char = ser_cmd_char, ser_rx_idle and ser_rx_idle_saved bit 0 set, ser_cmd_mode bit 0 cleared, the input
+   ring emptied (read = write), A = the write pointer's high byte; X and Y kept; nothing queued. */
+static void test_rx_mute(void)
+{
+    static const uint8_t k_mutes[] = { SER_CTRL_A, SER_CTRL_X };
+    for (size_t i = 0; i < sizeof k_mutes; i++) {
+        setup();
+        rx_ring(0x2105, 0x2230);
+        g_ram[SER_CMD_CHAR] = '@';
+        g_ram[CMD_CHAR] = '#';
+        g_ram[SER_ABORT] = 0x40;
+        g_ram[CMD_INDEX_RESET] = 0x40;
+        g_ram[SER_RX_IDLE] = 0x40;
+        g_ram[SER_RX_IDLE_SAVED] = 0x40;
+        g_ram[SER_CMD_MODE] = 0x41;
+        fw_regs r = { k_mutes[i], 0x55, 0x33, 0 };
+        ser_rx_byte(&g_f, &r);
+        check_regs(&r, 0x22, 0x55, 0x33);
+        CHECK_EQ(g_ram[SER_ABORT], 0x41);
+        CHECK_EQ(g_ram[CMD_INDEX_RESET], 0x41);
+        CHECK_EQ(g_ram[CMD_CHAR], '@');
+        CHECK_EQ(g_ram[SER_RX_IDLE], 0x41);
+        CHECK_EQ(g_ram[SER_RX_IDLE_SAVED], 0x41);
+        CHECK_EQ(g_ram[SER_CMD_MODE], 0x40);
+        CHECK_EQ(fw_rd16(&g_f, SER_RX_READ), 0x2230);
+        CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2230);
+        CHECK_EQ(g_ram[0x2230], 0);
+        CHECK_EQ(g_nlog, 0);
+    }
+}
+
+/* ser_rx_byte with the command character (ser_cmd_char, '#' here, not a constant): command mode on,
+   ser_rx_idle_saved = ser_rx_idle (the whole byte), ser_cmd_ptr = ser_cmd_buf, ser_cmd_table_ofs = 0, ser_cmd_buf's
+   5 bytes cleared (the sixth kept); Y = 0, A and X kept; nothing queued. Then a byte in command mode off: queued
+   (ser_rx_put). */
+static void test_rx_command_char(void)
+{
+    setup();
+    rx_ring(0x2100, 0x2100);
+    g_ram[SER_CMD_CHAR] = '#';
+    g_ram[SER_RX_IDLE] = 0x05;
+    memset(g_ram + SER_CMD_BUF, 'x', 6);
+    g_ram[SER_CMD_TABLE_OFS] = 2;
+    fw_regs r = { '#', 0x55, 0x33, 0 };
+    ser_rx_byte(&g_f, &r);
+    check_regs(&r, '#', 0x55, 0);
+    CHECK_EQ(g_ram[SER_CMD_MODE], 1);
+    CHECK_EQ(g_ram[SER_RX_IDLE_SAVED], 0x05);
+    CHECK_EQ(fw_rd16(&g_f, SER_CMD_PTR), SER_CMD_BUF);
+    CHECK_EQ(g_ram[SER_CMD_TABLE_OFS], 0);
+    for (unsigned i = 0; i < 5; i++)
+        CHECK_EQ(g_ram[SER_CMD_BUF + i], 0);
+    CHECK_EQ(g_ram[SER_CMD_BUF + 5], 'x');
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2100);
+
+    g_ram[SER_CMD_MODE] = 0;
+    r.a = '@';
+    ser_rx_byte(&g_f, &r);
+    check_regs(&r, '@', 0x55, 0);
+    CHECK_EQ(g_ram[0x2100], '@');
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2101);
+    CHECK_EQ(g_nlog, 0);
+    CHECK(!g_f.fault);
+}
+
+/* The zero page cmd_imm_match restores: $44-$49 and $4C. */
+static const uint8_t k_zp[] = {
+    CMD_TABLE_PTR, CMD_TABLE_PTR + 1, CMD_TEXT_PTR, CMD_TEXT_PTR + 1, CMD_PAT_PTR, CMD_PAT_PTR + 1, CMD_TABLE_OFS,
+};
+
+/* Command mode on with buf in ser_cmd_buf and ser_cmd_ptr after it; both rings empty; marks in the zero page that
+   cmd_imm_match restores. */
+static void imm_setup(const char *buf)
+{
+    setup();
+    rx_ring(0x2100, 0x2100);
+    tx_ring(SER_TX_RING, SER_TX_RING, 0, 0);
+    g_ram[SER_CMD_CHAR] = '@';
+    g_ram[SER_CMD_MODE] = 1;
+    memcpy(g_ram + SER_CMD_BUF, buf, strlen(buf));
+    fw_wr16(&g_f, SER_CMD_PTR, (uint16_t)(SER_CMD_BUF + strlen(buf)));
+    for (size_t i = 0; i < sizeof k_zp; i++)
+        g_ram[k_zp[i]] = (uint8_t)(0xA0 + i);
+}
+
+static void check_zp(void)
+{
+    for (size_t i = 0; i < sizeof k_zp; i++)
+        CHECK_EQ(g_ram[k_zp[i]], 0xA0 + i);
+}
+
+/* ser_rx_byte in command mode: cmd_imm_match $C413. "I" alone is a partial match ($C450): the byte at ser_cmd_ptr,
+   ser_cmd_table_ofs = the entry matched (0, "I+"), Y = it, ser_cmd_ptr + 1, still command mode, nothing queued; from
+   $20FF the pointer steps to $2100 ($C458). No match ("X"): command mode off, "@X" queued (ser_rx_flush_cmd), Y = 0.
+   A and X kept, zero page restored. */
+static void test_imm_partial_and_none(void)
+{
+    imm_setup("");
+    fw_regs r = { 'I', 0x55, 0x33, 0 };
+    ser_rx_byte(&g_f, &r);
+    check_regs(&r, 'I', 0x55, 0);
+    CHECK_EQ(g_ram[SER_CMD_BUF], 'I');
+    CHECK_EQ(fw_rd16(&g_f, SER_CMD_PTR), SER_CMD_BUF + 1);
+    CHECK_EQ(g_ram[SER_CMD_TABLE_OFS], 0);
+    CHECK_EQ(g_ram[SER_CMD_MODE], 1);
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2100);
+    check_zp();
+
+    imm_setup("I");
+    fw_wr16(&g_f, SER_CMD_PTR, 0x20FF);
+    ser_rx_byte(&g_f, &r);
+    CHECK_EQ(g_ram[0x20FF], 'I');
+    CHECK_EQ(fw_rd16(&g_f, SER_CMD_PTR), 0x2100);
+    CHECK_EQ(g_ram[SER_CMD_MODE], 1);
+    check_zp();
+
+    imm_setup("");
+    r = (fw_regs){ 'X', 0x55, 0x33, 0 };
+    ser_rx_byte(&g_f, &r);
+    check_regs(&r, 'X', 0x55, 0);
+    CHECK_EQ(g_ram[SER_CMD_MODE], 0);
+    CHECK(memcmp(g_ram + 0x2100, "@X", 2) == 0);
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2102);
+    check_zp();
+    CHECK_EQ(g_nlog, 0);
+    CHECK(!g_f.fault);
+}
+
+/* @I+ (cmd_imm_index_add, through cmd_imm_vector): the first after a mute (cmd_index_reset bit 0) zeroes
+   cmd_index_count and clears the bit, then cmd_index_count + 1; command mode off and "@I+" queued; Y = 0 (the last
+   ser_rx_put's). Without the reset the count goes on (9 to 10). A and X kept, zero page restored. */
+static void test_imm_index_add(void)
+{
+    imm_setup("I");
+    g_ram[CMD_INDEX_RESET] = 0x41;
+    g_ram[CMD_INDEX_COUNT] = 9;
+    fw_regs r = { '+', 0x55, 0x33, 0 };
+    ser_rx_byte(&g_f, &r);
+    check_regs(&r, '+', 0x55, 0);
+    CHECK_EQ(fw_rd16(&g_f, CMD_IMM_VECTOR), ROM_CMD_IMM_INDEX_ADD);
+    CHECK_EQ(g_ram[CMD_INDEX_COUNT], 1);
+    CHECK_EQ(g_ram[CMD_INDEX_RESET], 0x40);
+    CHECK_EQ(g_ram[SER_CMD_MODE], 0);
+    CHECK(memcmp(g_ram + 0x2100, "@I+", 3) == 0);
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2103);
+    check_zp();
+
+    imm_setup("I");
+    g_ram[CMD_INDEX_COUNT] = 9;
+    ser_rx_byte(&g_f, &r);
+    CHECK_EQ(g_ram[CMD_INDEX_COUNT], 10);
+    CHECK_EQ(g_ram[CMD_INDEX_RESET], 0);
+    CHECK_EQ(g_nlog, 0);
+    CHECK(!g_f.fault);
+}
+
+/* @I? (cmd_imm_index_query): the reply I, cmd_index_count in hex ($12: "21"), then T, or M when ser_rx_idle_saved
+   bit 0 is set and boot_speaking bit 0 clear ($C4A7); command mode off, ser_rx_idle = ser_rx_idle_saved, nothing
+   queued; Y = 0, A and X kept, zero page restored. */
+static void test_imm_index_query(void)
+{
+    static const struct { uint8_t idle_saved, speaking; const char *reply; } k[] = {
+        { 0x00, 0x01, "I21T" },   /* text waiting */
+        { 0x01, 0x00, "I21M" },   /* neither */
+        { 0x01, 0x01, "I21T" },   /* speech in progress */
+    };
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) {
+        imm_setup("I");
+        g_ram[CMD_INDEX_COUNT] = 0x12;
+        g_ram[SER_RX_IDLE] = 0x80;
+        g_ram[SER_RX_IDLE_SAVED] = k[i].idle_saved;
+        g_ram[BOOT_SPEAKING] = k[i].speaking;
+        fw_regs r = { '?', 0x55, 0x33, 0 };
+        ser_rx_byte(&g_f, &r);
+        check_regs(&r, '?', 0x55, 0);
+        CHECK_EQ(fw_rd16(&g_f, CMD_IMM_VECTOR), ROM_CMD_IMM_INDEX_QUERY);
+        CHECK(memcmp(g_ram + SER_TX_RING, k[i].reply, 4) == 0);
+        CHECK_EQ(g_ram[SER_TX_COUNT], 4);
+        CHECK_EQ(g_ram[SER_CMD_MODE], 0);
+        CHECK_EQ(g_ram[SER_RX_IDLE], k[i].idle_saved);
+        CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2100);
+        check_zp();
+        CHECK_EQ(g_nlog, 0);
+        CHECK(!g_f.fault);
+    }
+}
+
+/* A handler address cmd_imm_match does not know (a patched copy of the converted data: "I+"'s record, "I+", 0, then
+   the handler, pointing at $1234) is a fault at that address, after cmd_imm_vector is written; no handler runs and
+   zero page is still restored. */
+static void test_imm_unknown_handler(void)
+{
+    static fw_image img;
+    imm_setup("I");
+    img = *fw_image_get();
+    img.rom[CMD_IMM_PATTERNS + 3] = 0x34;
+    img.rom[CMD_IMM_PATTERNS + 4] = 0x12;
+    fw_init(&g_f, g_ram, &img, &g_host);
+    fw_regs r = { '+', 0x55, 0x33, 0 };
+    ser_rx_byte(&g_f, &r);
+    CHECK(g_f.fault);
+    CHECK_EQ(g_f.fault_addr, 0x1234);
+    CHECK_EQ(fw_rd16(&g_f, CMD_IMM_VECTOR), 0x1234);
+    CHECK_EQ(g_ram[SER_CMD_MODE], 1);
+    check_zp();
+}
+
 void suite_fw_ser(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -474,4 +747,13 @@ void suite_fw_ser(void)
     test_hex();
     test_tx_service();
     test_tx_records();
+    test_rx_next_page();
+    test_rx_put();
+    test_rx_flush_cmd();
+    test_rx_mute();
+    test_rx_command_char();
+    test_imm_partial_and_none();
+    test_imm_index_add();
+    test_imm_index_query();
+    test_imm_unknown_handler();
 }

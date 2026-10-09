@@ -20,6 +20,16 @@ static inline uint8_t fw_adc(uint8_t a, uint8_t m, uint8_t *c)
 /* INC addr: mod 256. */
 static inline void fw_inc8(fw *f, uint16_t addr) { fw_wr8(f, addr, (uint8_t)(fw_rd8(f, addr) + 1)); }
 
+/* SEB bit,zp / CLB bit,zp on a RAM byte (M4.6a). */
+static inline void fw_seb(fw *f, uint16_t addr, unsigned bit)
+{
+    fw_wr8(f, addr, (uint8_t)(fw_rd8(f, addr) | 1u << bit));
+}
+static inline void fw_clb(fw *f, uint16_t addr, unsigned bit)
+{
+    fw_wr8(f, addr, (uint8_t)(fw_rd8(f, addr) & ~(1u << bit)));
+}
+
 /* LDA arr,X; CLC; ADC #n; STA arr,X: an 8-bit add into an array byte. */
 static inline void fw_add8(fw *f, uint16_t arr, uint8_t x, uint8_t n)
 {
