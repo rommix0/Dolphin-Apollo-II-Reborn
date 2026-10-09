@@ -13,8 +13,8 @@
    (machine_finish_routine). A subroutine probe is a machine_rom_call of the routine with the copy's registers.
    A hook on copy A records whether the probe's target branch went the probe's way (the hook at the destination fires
    with the branch as the last instruction executed, the machine's history), or for a routine without a branch
-   whether it was entered; every probe must reach its target. Every routine diff_lts never sees (its k_probed) is
-   some probe's routine.
+   whether it was entered; every probe must reach its target at every call. Every routine diff_lts never sees
+   (diff_probed, diff_state.c) is some probe's routine.
    A self-check first runs the ROM routine in copy B too, on queries: it proves the probes and the comparison
    whatever the replacement table holds. */
 #include <stdio.h>
@@ -310,7 +310,7 @@ static void run_file(const uint8_t *rom, size_t len, const char *name)
     free(text);
 }
 
-/* Prints each probe's counts; every probe compared and its target reached at least once. */
+/* Prints each probe's counts; every probe compared and its target reached at every call. */
 static void report(void)
 {
     for (size_t i = 0; i < PROBE_COUNT; i++) {
@@ -323,7 +323,7 @@ static void report(void)
             printf("  %-16s %-18s %5u calls compared (%s), entered in %u\n", p->name, p->routine, p->calls,
                    c ? "C" : "ROM", p->reached);
         CHECK(p->calls > 0);
-        CHECK(p->reached > 0);
+        CHECK_EQ(p->reached, p->calls);
         CHECK(c || g_self_check);   /* every probe's routine is C (M4.6a) */
     }
 }

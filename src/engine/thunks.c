@@ -870,7 +870,8 @@ static void cmd_hex_value_regs(fw *f, cpu740 *c)
     c->p = (uint8_t)(v == 0 ? c->p | CPU740_Z : c->p & ~CPU740_Z);
 }
 
-/* The registers in, a serial routine (ser.c), the registers out: the routines that take and leave A, X and Y. */
+/* The registers in, a serial routine (ser.c, cmd_imm.c, isr_serial.c), the registers out: the routines that take and
+   leave A, X and Y. */
 static void ser_regs(fw *f, cpu740 *c, void (*fn)(fw *, fw_regs *))
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
@@ -909,8 +910,9 @@ static void isr_int4_host_line_regs(fw *f, cpu740 *c)
 
 /* isr_host_line_high $C3EB and isr_host_line_low $C3F4: A, X and Y in and out as they came (LDM, SEB/CLB, LDM).
    isr_int4_host_line returns from the interrupt next ($C3E6 / $C3EA RTI), so the interrupted code reads all three;
-   boot_init_host_lines returns ($AC77 / $AC7D RTS) to boot_reset, which loads A next. No caller reads a flag.
-   Declared: A, X, Y. */
+   boot_init_host_lines returns ($AC77 / $AC7D RTS) to boot_reset, which goes on at boot_reentry_warm ($A662 JMP
+   $A66B): isr_par_hold and isr_par_ready push and pull A ($C5DE, $C5D6), then cmd_apply_speaker ($A675) takes X and Y
+   (its thunk). No caller reads a flag. Declared: A, X, Y. */
 static void isr_host_line_high_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_host_line_high); }
 static void isr_host_line_low_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_host_line_low); }
 
@@ -922,9 +924,9 @@ static void isr_host_line_low_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_host_l
 static void ser_rx_byte_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_rx_byte); }
 
 /* ser_rx_put $C3CC: A in. A and X out as they came, Y = 0 or the new page ($C3DC STY). ser_rx_byte returns; its
-   caller pulls the registers. ser_rx_flush_cmd reads X next ($C40C INX) and loads A first ($C404 LDA $2020,X);
-   boot_queue_string reloads Y first ($C625 LDY $78) and loads A ($C61C). No caller reads a flag. Declared: A, X,
-   Y. */
+   caller pulls the registers. ser_rx_flush_cmd reads X next ($C40C INX) and loads A first ($C404 LDA $2020,X), and
+   leaves Y to its own exit (its thunk); boot_queue_string reloads Y first ($C625 LDY $78) and loads A ($C61C). No
+   caller reads a flag. Declared: A, X, Y. */
 static void ser_rx_put_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_rx_put); }
 
 /* ser_rx_flush_cmd $C3FA: A and X in and out as they came (pushed at $C3FA-$C3FC, pulled at $C40F-$C411); Y as its
@@ -949,7 +951,9 @@ static void ser_tx_get_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_get); }
 /* ser_tx_put $C4DD: A in (read back from the stack, $C4E3). A, X and Y out as they came (pulled at $C4FA-$C4FE).
    ser_tx_records reads Y and X next ($C5C1 INY, $C5C2 DEX); ser_tx_hex pulls A ($C57B, $C57F) and keeps X and Y to
    its exit; cmd_imm_index_query loads A next ($C49A LDA, $C4AE LDA) and leaves X and Y to cmd_imm_done, which keeps
-   them; the C cmd_reply_setting reads X and Y after it. No caller reads a flag. Declared: A, X, Y. */
+   them; cmd_reply_setting ($C643; C since M4.2, which calls the C) reads Y and X next ($C646 LDA $9990,Y, $C649
+   STX); cmd_echo ($AB99; C since M4.2) goes on at cmd_run_done ($A8BD PLA / TAX / RTS to cmd_run_due, which reloads
+   Y at $A880) and reads none. No caller reads a flag. Declared: A, X, Y. */
 static void ser_tx_put_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_put); }
 
 /* ser_tx_send $C504: A in. A, X and Y out as they came (PHP / PLP keep the flags). Its one caller, ser_tx_service
@@ -980,8 +984,9 @@ static void ser_hex_digit_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_hex_digit)
 
 /* ser_tx_hex $C571: A in. A, X and Y out as they came (its first push pulled last; ser_hex_digits and ser_tx_put
    keep X and Y). cmd_imm_index_query loads A next ($C49F LDA #'T'); ser_tx_records loads A ($C5B3) or Y ($C5B8 LDY
-   #0) and restores all three at its end; the C cmd_reply_setting returns. No caller reads a flag. Declared: A, X,
-   Y. */
+   #0) and restores all three at its end; cmd_reply_setting ($C650; C since M4.2) reloads A ($C653 LDA $75) and
+   returns to cmd_query, which goes on at cmd_run_done ($A8BD PLA / TAX / RTS): none read. No caller reads a flag.
+   Declared: A, X, Y. */
 static void ser_tx_hex_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_hex); }
 
 /* ser_tx_service $C581: A, X, Y in (A pushed and pulled, X and Y passed to ser_tx_get and ser_tx_send). A and X out
@@ -990,8 +995,9 @@ static void ser_tx_hex_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_hex); }
    #0). The C par_play calls the C. No caller reads a flag. Declared: A, X, Y. */
 static void ser_tx_service_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_service); }
 
-/* ser_tx_records $C5A4: A, X and Y in and out (pushed at $C5A4-$C5A8, pulled at $C5D0-$C5D4). Its one caller, the C
-   cmd_list_languages, returns. Declared: A, X, Y. */
+/* ser_tx_records $C5A4: A, X and Y in and out (pushed at $C5A4-$C5A8, pulled at $C5D0-$C5D4). Its one caller,
+   cmd_list_languages ($ABCD; C since M4.2, which calls the C), goes on at cmd_run_done ($A8BD PLA / TAX / RTS to
+   cmd_run_due, which reloads Y at $A880): none read. Declared: A, X, Y. */
 static void ser_tx_records_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_records); }
 
 /* ser_rx_next_page $C5EC: Y in; Y = the next page out, A and X untouched. ser_rx_put ($C3DC) stores Y and returns;

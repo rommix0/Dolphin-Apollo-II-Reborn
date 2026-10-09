@@ -117,7 +117,7 @@ void machine_clear_hooks(machine *m);
 /* Pops a return address and continues after it, like RTS. */
 void machine_return(machine *m);
 /* Pulls P, then the PC, and continues there, like RTI (cpu740.c, M_RTI: P | B): the exit of a replaced interrupt
-   handler (M4.6a spec 3.2). */
+   handler (M4.6a spec 3.2). Unlike M_RTI, it does not fault when the pulled P has T set. */
 void machine_return_interrupt(machine *m);
 /* While hold is set, no IRQ line reaches the CPU; requests stay pending in the SFRs. */
 void machine_hold_irqs(machine *m, bool hold);

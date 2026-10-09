@@ -135,8 +135,8 @@ static void test_sfr_helpers(void)
     CHECK_EQ(g_ncalls, 0);
 }
 
-/* Without a host, below $DA (RAM, not an SFR), or with a host lacking write_sfr, the write helpers fault at the
-   address and touch nothing: SEB/CLB do not read either. */
+/* Without a host, below $DA (RAM, not an SFR), or with a host lacking write_sfr (SEB/CLB: lacking read_sfr too), the
+   helpers fault at the address and touch nothing: SEB/CLB neither read nor write. */
 static void test_sfr_faults(void)
 {
     fw f;
@@ -181,6 +181,13 @@ static void test_sfr_faults(void)
     CHECK(g_f.fault);
     CHECK_EQ(g_f.fault_addr, SFR_P0);
     CHECK_EQ(g_nlog, 0);                          /* not even the read */
+
+    setup();
+    g_host.read_sfr = NULL;                       /* a host that writes SFRs only */
+    fw_sfr_clb(&g_f, SFR_P0, 3);
+    CHECK(g_f.fault);
+    CHECK_EQ(g_f.fault_addr, SFR_P0);
+    CHECK_EQ(g_nlog, 0);                          /* not even the write */
 }
 
 /* fw_wait (M4.6a spec 3.3): one host wait of the kind; no host, a host without wait, or a wait that fails is a fault

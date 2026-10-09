@@ -2105,10 +2105,10 @@ static void test_play_tail(void)
    The flag every 2nd isr_par_ready.
    Pass 1: the event (cmd_run_event with A = par_seg_index's high byte 0, X = cmd_ev_next 0): cmd_voicing = 6,
    cmd_ev_next = 1; the test again: X = 1, not below cmd_ev_count. ser_tx_service and isr_par_ready get the
-   handler's A = 6 and Y and X = 1; isr_par_ready twice (the flag comes). Pass 2: par_frames_left 1 -> 0 ($B8FB): par_next_segment (C):
-   par_frames_left = 2, pros_seg_count 0, par_seg_index 4; A = 2 ($B903). $B908: isr_par_ready, par_step_tracks,
-   frm_finish_frame. Pass 3: no flag, pass 4: the flag; no segment left: the tight loop, 2 -> 1: one frame; 1 -> 0:
-   the end. */
+   handler's A = 6 and Y and X = 1; isr_par_ready twice (the flag comes). Pass 2: par_frames_left 1 -> 0 ($B8FB):
+   par_next_segment (C): par_frames_left = 2, pros_seg_count 0, par_seg_index 4; A = 2 ($B903). $B908: isr_par_ready,
+   par_step_tracks, frm_finish_frame. Pass 3: no flag, pass 4: the flag; no segment left: the tight loop, 2 -> 1: one
+   frame; 1 -> 0: the end. */
 static void test_play_segment(void)
 {
     read_setup();

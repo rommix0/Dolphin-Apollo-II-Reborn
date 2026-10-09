@@ -40,8 +40,8 @@
 #define ROM_CMD_EV_SET_VOICING    0xBCEA   /* cmd_set_voicing */
 #define ROM_CMD_EV_SET_VOLUME     0xBCED   /* cmd_set_volume */
 
-/* ROM routines the C calls through fw_rom_call (isr_par_ready: ROM_ISR_PAR_READY in tn_convert.h; the serial
-   routines and the immediate handlers: ser_addr.h) */
+/* ROM routines the C calls through fw_rom_call (isr_par_ready: ROM_ISR_PAR_READY in tn_convert.h). The serial
+   routines and the immediate handlers are C since M4.6a; their ROM addresses are in ser_addr.h. */
 #define ROM_CMD_RUN_NEXT          0xA893   /* dispatch cmd_handlers[cmd_next] (the dispatcher's fallback); X kept */
 
 #endif

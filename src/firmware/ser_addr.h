@@ -17,16 +17,18 @@
 #define ROM_SER_TX_GET           0xC4B5   /* called by isr_int1 $C30A, ser_tx_service $C58A */
 #define ROM_SER_TX_PUT           0xC4DD   /* queue A as a reply byte; A, X, Y preserved. Called by
                                              cmd_imm_index_query $C497, $C4A9, ser_tx_hex $C578, $C57C, ser_tx_records
-                                             $C5AB, $C5BE, $C5CD, and the C cmd_echo and cmd_reply_setting */
+                                             $C5AB, $C5BE, $C5CD, cmd_echo $AB99 and cmd_reply_setting $C643
+                                             (both C: they call the C ser_tx_put) */
 #define ROM_SER_TX_SEND          0xC504   /* called by ser_tx_service $C58D */
 #define ROM_SER_HEX_DIGITS       0xC53A   /* called by ser_tx_hex $C574 */
 #define ROM_SER_HEX_DIGIT        0xC55A   /* called by ser_hex_digits $C542, $C54F */
 #define ROM_SER_TX_HEX           0xC571   /* queue A as two ASCII hex digits, low nibble first; A preserved. Called by
-                                             cmd_imm_index_query $C49C, ser_tx_records $C5B0, $C5B5, and the C
-                                             cmd_reply_setting */
-#define ROM_SER_TX_SERVICE       0xC581   /* called by the C par_play (ROM $B89C) (and boot_get_clause $A6D7) */
+                                             cmd_imm_index_query $C49C, ser_tx_records $C5B0, $C5B5, and
+                                             cmd_reply_setting $C650 (C: calls the C ser_tx_hex) */
+#define ROM_SER_TX_SERVICE       0xC581   /* called by par_play $B89C (C: calls the C ser_tx_service)
+                                             (and boot_get_clause $A6D7) */
 #define ROM_SER_TX_RECORDS       0xC5A4   /* queue the record reply ser_reply_id/_count/_size/_ptr describe; called by
-                                             the C cmd_list_languages */
+                                             cmd_list_languages $ABCD (C: calls the C ser_tx_records) */
 #define ROM_SER_RX_NEXT_PAGE     0xC5EC   /* called by ser_rx_put $C3D9 (and boot_get_clause $A6F5) */
 #define ROM_SER_TX_NEXT_PAGE     0xC5F5   /* called by ser_tx_get $C4C6, ser_tx_put $C4F0 */
 

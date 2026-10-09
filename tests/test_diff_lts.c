@@ -4,14 +4,14 @@
    declared outputs, the SFR model state and all RAM except the SFRs and the dead stack below the exit SP
    (diff_same, diff_state.h; M4.6a spec 4.1). An interrupt handler (a replacement marked isr) is compared the same
    way: entered through its vector, its ROM copy runs to its RTI (SP rises 3 above the hook's) and its thunk exits
-   like RTI. The routines no corpus text enters (diff_probed, M4.6a spec 4.4) print 0 calls: diff_serial's probes
-   compare them. A call whose
-   ROM copy reaches boot_loop_play ($A7D4, tn_convert_clause's mid-clause flush) cannot finish with interrupts
-   held: it is skipped and counted (golden_hybrid covers it, M4.1 spec 5.1), in tn_convert_clause only. A call
-   whose ROM copy resets the stack (@= entering a bank) stops right after the reset in both copies and is
-   compared like any other (M4.2 spec 3) and counted: bank_select must produce some (M4.2 spec 5.5). The
-   replacements marked waits (the frame loop, which waits on the timer interrupt) cannot run with interrupts held:
-   they are not observed here but in diff_play (M4.4b spec 4.1, 4.2). */
+   like RTI, and A, X and Y are compared too (the interrupted code reads all three; the row declares none). The
+   routines no corpus text enters (diff_probed, M4.6a spec 4.4) print 0 calls: diff_serial's probes compare them.
+   A call whose ROM copy reaches boot_loop_play ($A7D4, tn_convert_clause's mid-clause flush) cannot finish with
+   interrupts held: it is skipped and counted (golden_hybrid covers it, M4.1 spec 5.1), in tn_convert_clause only. A
+   call whose ROM copy resets the stack (@= entering a bank) stops right after the reset in both copies and is
+   compared like any other (M4.2 spec 3) and counted: bank_select must produce some (M4.2 spec 5.5). The replacements
+   marked waits (the frame loop, which waits on the timer interrupt) cannot run with interrupts held: they are not
+   observed here but in diff_play (M4.4b spec 4.1, 4.2). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,7 +90,8 @@ static bool observe(machine *m, void *user)
             if (g_c.fault != MFAULT_NONE)
                 snprintf(why, sizeof why, "the C faulted (fault %d at $%04X)", (int)g_c.fault, g_c.fault_addr);
             else
-                same = diff_same(&g_ref, &g_c, o->r->outputs, why, sizeof why);
+                same = diff_same(&g_ref, &g_c, o->r->isr ? (uint8_t)(FW_OUT_A | FW_OUT_X | FW_OUT_Y) : o->r->outputs,
+                                 why, sizeof why);
         }
     }
     if (!same && g_mismatches++ < 10)
