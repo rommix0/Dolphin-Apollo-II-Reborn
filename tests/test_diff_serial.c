@@ -324,6 +324,7 @@ static void report(void)
                    c ? "C" : "ROM", p->reached);
         CHECK(p->calls > 0);
         CHECK(p->reached > 0);
+        CHECK(c || g_self_check);   /* every probe's routine is C (M4.6a) */
     }
 }
 

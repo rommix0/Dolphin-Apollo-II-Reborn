@@ -25,6 +25,7 @@
 #include "firmware/frm_build.h"
 #include "firmware/ser.h"
 #include "firmware/cmd_imm.h"
+#include "firmware/isr_serial.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -115,10 +116,11 @@ typedef void (*thunk_regs)(fw *f, cpu740 *c);
 
 /* The frame every thunk shares: set the fault trap (saving an outer thunk's, as a ROM call from C can reach
    another thunk on the same bridge), sync the window, run the routine; then restore the trap and either leave the
-   machine where an unwound ROM call left it, report the fault, or emulate the RTS. The outermost thunk (no deadline
-   active) also bounds the whole call: b->deadline = its entry cycles + FW_ROM_CALL_SPEECH_BUDGET, cleared however it
-   ends, so that a C wait that never ends (par_play's, a whole utterance inside one hook call) faults (thunks.h). */
-static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
+   machine where an unwound ROM call left it, report the fault, or emulate the RTS (an interrupt handler's RTI when
+   isr is set, M4.6a spec 3.2). The outermost thunk (no deadline active) also bounds the whole call: b->deadline =
+   its entry cycles + FW_ROM_CALL_SPEECH_BUDGET, cleared however it ends, so that a C wait that never ends
+   (par_play's, a whole utterance inside one hook call) faults (thunks.h). */
+static bool run_frame(machine *m, fw_bridge *b, thunk_regs regs, bool isr)
 {
     if (m != b->m) {   /* registers come from m, RAM and host calls from b->m: they must be one machine */
         m->fault = MFAULT_FIRMWARE;
@@ -153,9 +155,14 @@ static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs)
         m->cpu.s = entry_sp;
         return true;
     }
-    machine_return(m);
+    if (isr)
+        machine_return_interrupt(m);
+    else
+        machine_return(m);
     return true;
 }
+
+static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs) { return run_frame(m, b, regs, false); }
 
 /* cmd_apply_speaker $A78C: X, Y in (handed to par_setup_voice, which does not read them). A = the cmd_speaker it
    read, X and Y as par_setup_voice leaves them, out. boot_reset reads all three: after its second call ($A675),
@@ -873,6 +880,40 @@ static void ser_regs(fw *f, cpu740 *c, void (*fn)(fw *, fw_regs *))
     c->y = r.y;
 }
 
+/* isr_int1 $C2B4, an interrupt handler (isr): entered by the CPU through vec_int1_serial $FFFA, with the PC and P
+   pushed and I set. A, X and Y in; every path leaves them as they came (the serial paths push and pull them,
+   $C33C-$C340 / $C376-$C37A; the parallel data path $C2F3-$C2F7 / $C336-$C33A; the early parallel exits, RTI at
+   $C2BF, $C2D5 and $C2E8, touch none), and the RTI pulls P and the PC (machine_return_interrupt): the interrupted
+   code goes on with its own registers. The C makes no ROM call, so the machine's registers stay; they are set back
+   from the entry values all the same. No outputs declared (M4.6a spec 3.2). */
+static void isr_int1_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_int1(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* isr_int4_host_line $C3E0, an interrupt handler (isr): entered through vec_int4_timerx $FFF4. A, X and Y in and
+   out as they came (isr_host_line_high and _low keep them), the RTI at $C3E6 / $C3EA (machine_return_interrupt).
+   No outputs declared. */
+static void isr_int4_host_line_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_int4_host_line(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* isr_host_line_high $C3EB and isr_host_line_low $C3F4: A, X and Y in and out as they came (LDM, SEB/CLB, LDM).
+   isr_int4_host_line returns from the interrupt next ($C3E6 / $C3EA RTI), so the interrupted code reads all three;
+   boot_init_host_lines returns ($AC77 / $AC7D RTS) to boot_reset, which loads A next. No caller reads a flag.
+   Declared: A, X, Y. */
+static void isr_host_line_high_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_host_line_high); }
+static void isr_host_line_low_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_host_line_low); }
+
 /* ser_rx_byte $C37E: A in (the byte); X and Y passed to cmd_imm_match or ser_rx_put. A, X and Y out as the path
    taken leaves them (the mute: A = ser_rx_write's high byte; the command character: Y = 0; else as cmd_imm_match or
    ser_rx_put leaves them; X kept on every path). Its one caller, isr_int1 ($C32E, $C356, $C36F), pulls Y, X and A
@@ -1201,6 +1242,8 @@ THUNK(par_track_end)
 THUNK(par_scale_duration)
 THUNK(ser_rx_byte)
 THUNK(ser_rx_put)
+THUNK(isr_host_line_high)
+THUNK(isr_host_line_low)
 THUNK(ser_rx_flush_cmd)
 THUNK(cmd_imm_match)
 THUNK(ser_tx_get)
@@ -1229,6 +1272,12 @@ THUNK(pros_declination)
 THUNK(pros_declination_step)
 THUNK(ph_lengthen_count)
 #undef THUNK
+/* The hook of an interrupt handler: its frame exits like RTI. */
+#define ISR_THUNK(name) \
+    static bool t_##name(machine *m, void *user) { return run_frame(m, user, name##_regs, true); }
+ISR_THUNK(isr_int1)
+ISR_THUNK(isr_int4_host_line)
+#undef ISR_THUNK
 
 const fw_replacement fw_replacements[] = {
     { "cmd_apply_speaker",  0xA78C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_apply_speaker },
@@ -1287,8 +1336,12 @@ const fw_replacement fw_replacements[] = {
     { "par_track_start",    0xC24A, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_start },
     { "par_track_end",      0xC26C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_track_end },
     { "par_scale_duration", 0xC29C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_scale_duration },
+    { "isr_int1",           0xC2B4, 0,                   t_isr_int1, false, true },
     { "ser_rx_byte",        0xC37E, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_byte },
     { "ser_rx_put",         0xC3CC, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_put },
+    { "isr_int4_host_line", 0xC3E0, 0,                   t_isr_int4_host_line, false, true },
+    { "isr_host_line_high", 0xC3EB, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_host_line_high },
+    { "isr_host_line_low",  0xC3F4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_host_line_low },
     { "ser_rx_flush_cmd",   0xC3FA, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_flush_cmd },
     { "cmd_imm_match",      0xC413, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_imm_match },
     { "ser_tx_get",         0xC4B5, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_get },

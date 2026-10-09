@@ -7,6 +7,7 @@
 #include "test.h"
 #include "firmware/fw.h"
 #include "firmware/cmd_imm.h"
+#include "firmware/isr_serial.h"
 #include "firmware/ser.h"
 #include "firmware/ser_addr.h"
 #include "firmware/data/fw_data.h"
@@ -733,6 +734,270 @@ static void test_imm_unknown_handler(void)
     check_zp();
 }
 
+/* The log from entry i on is exactly want[0..n-1], and nothing follows it. */
+static void check_seq(unsigned i, const log_entry *want, unsigned n)
+{
+    CHECK_EQ(g_nlog, i + n);
+    for (unsigned k = 0; k < n; k++)
+        check_log(i + k, want[k].kind, want[k].addr, want[k].value);
+}
+
+#define R(a, v) { LOG_READ, a, v }
+#define W(a, v) { LOG_WRITE, a, v }
+
+/* The SFRs as the machine has them in serial mode after the boot (boot_init_ports, boot_init_host_lines): the _INT1
+   enable (ICR1 $01), INT4 enabled with P0.2 low (ICR3 $48), the UART receive interrupt on (UART_CTRL $D1), P0 $00;
+   the UART holding received the byte b with no error (UART_STATUS $03). Both rings empty, serial mode. */
+static void int1_setup(uint8_t b)
+{
+    setup();
+    rx_ring(0x2100, 0x2100);
+    tx_ring(SER_TX_RING, SER_TX_RING, 0, 0);
+    g_ram[SER_CMD_CHAR] = '@';
+    g_sfr[SFR_ICR1] = 0x01;
+    g_sfr[SFR_ICR3] = 0x48;
+    g_sfr[SFR_UART_CTRL] = 0xD1;
+    g_sfr[SFR_UART_STATUS] = 0x03;
+    g_sfr[SFR_UART_RX] = b;
+}
+
+/* isr_int1 $C2B4 in serial mode, every SFR access in the ROM's order. A clean UART byte ($C33C): ICR1 read (BBS1),
+   UART_CTRL bit 4 cleared, P0.5 set, ICR3 bits 6 and 7 cleared (each a read and a write), UART_STATUS read (no error
+   bit), UART_RX read (the byte, to ser_rx_byte: queued), ICR3 bit 6 set, UART_RX read and written back, UART_CTRL
+   bit 4 set, P0.5 cleared, P0.3 cleared. A, X and Y as they came. */
+static void test_int1_serial(void)
+{
+    static const log_entry k[] = {
+        R(SFR_ICR1, 0x01),
+        R(SFR_UART_CTRL, 0xD1), W(SFR_UART_CTRL, 0xC1),
+        R(SFR_P0, 0x00), W(SFR_P0, 0x20),
+        R(SFR_ICR3, 0x48), W(SFR_ICR3, 0x08),
+        R(SFR_ICR3, 0x08), W(SFR_ICR3, 0x08),
+        R(SFR_UART_STATUS, 0x03),
+        R(SFR_UART_RX, 'h'),
+        R(SFR_ICR3, 0x08), W(SFR_ICR3, 0x48),
+        R(SFR_UART_RX, 'h'), W(SFR_UART_RX, 'h'),
+        R(SFR_UART_CTRL, 0xC1), W(SFR_UART_CTRL, 0xD1),
+        R(SFR_P0, 0x20), W(SFR_P0, 0x00),
+        R(SFR_P0, 0x00), W(SFR_P0, 0x00),
+    };
+    int1_setup('h');
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_int1(&g_f, &r);
+    check_regs(&r, 0x11, 0x22, 0x33);
+    check_seq(0, k, sizeof k / sizeof k[0]);
+    CHECK_EQ(g_ram[0x2100], 'h');
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2101);
+    CHECK(!g_f.fault);
+}
+
+/* A UART byte with an error bit (UART_STATUS bit 2, here $07): no read of the byte and no ser_rx_byte, then the same
+   tail ($C35B). The machine's UART never sets an error bit (m50734.c: UART_STATUS is $02 or $03), so this side of the
+   BNE at $C350 is pinned here. */
+static void test_int1_uart_error(void)
+{
+    static const log_entry k[] = {
+        R(SFR_ICR1, 0x01),
+        R(SFR_UART_CTRL, 0xD1), W(SFR_UART_CTRL, 0xC1),
+        R(SFR_P0, 0x00), W(SFR_P0, 0x20),
+        R(SFR_ICR3, 0x48), W(SFR_ICR3, 0x08),
+        R(SFR_ICR3, 0x08), W(SFR_ICR3, 0x08),
+        R(SFR_UART_STATUS, 0x07),
+        R(SFR_ICR3, 0x08), W(SFR_ICR3, 0x48),
+        R(SFR_UART_RX, 'h'), W(SFR_UART_RX, 'h'),
+        R(SFR_UART_CTRL, 0xC1), W(SFR_UART_CTRL, 0xD1),
+        R(SFR_P0, 0x20), W(SFR_P0, 0x00),
+        R(SFR_P0, 0x00), W(SFR_P0, 0x00),
+    };
+    int1_setup('h');
+    g_sfr[SFR_UART_STATUS] = 0x07;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_int1(&g_f, &r);
+    check_regs(&r, 0x11, 0x22, 0x33);
+    check_seq(0, k, sizeof k / sizeof k[0]);
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2100);   /* nothing queued */
+    CHECK(!g_f.fault);
+}
+
+/* The _INT1 latch path ($C367): ICR1 bit 1 set; P1_LATCH read (to ser_rx_byte: queued), ICR1 bits 0 and 1 cleared,
+   then bit 0 set again, P0.3 cleared; the UART untouched. */
+static void test_int1_latch(void)
+{
+    static const log_entry k[] = {
+        R(SFR_ICR1, 0x03),
+        R(SFR_P1_LATCH, 'L'),
+        R(SFR_ICR1, 0x03), W(SFR_ICR1, 0x02),
+        R(SFR_ICR1, 0x02), W(SFR_ICR1, 0x00),
+        R(SFR_ICR1, 0x00), W(SFR_ICR1, 0x01),
+        R(SFR_P0, 0x00), W(SFR_P0, 0x00),
+    };
+    int1_setup('h');
+    g_sfr[SFR_ICR1] = 0x03;
+    g_sfr[SFR_P1_LATCH] = 'L';
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_int1(&g_f, &r);
+    check_regs(&r, 0x11, 0x22, 0x33);
+    check_seq(0, k, sizeof k / sizeof k[0]);
+    CHECK_EQ(g_ram[0x2100], 'L');
+    CHECK(!g_f.fault);
+}
+
+/* Parallel mode (boot_dip bit 0) with the host's P0 level p0, isr_par_state and the P1_LATCH byte; isr_int1 run with
+   A, X, Y = $11, $22, $33, which must come back. */
+static void int1_parallel_run(uint8_t p0, uint8_t state, uint8_t latch)
+{
+    int1_setup('h');
+    g_ram[BOOT_DIP] = 1;
+    g_ram[ISR_PAR_STATE] = state;
+    g_sfr[SFR_P0] = p0;
+    g_sfr[SFR_P1_LATCH] = latch;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_int1(&g_f, &r);
+    check_regs(&r, 0x11, 0x22, 0x33);
+    CHECK(!g_f.fault);
+}
+
+/* isr_int1's parallel paths ($C2BA-$C33B), every SFR access in the ROM's order. P0.0 high: the _INT1 request
+   cleared, nothing else ($C2BD). P0.4 low: P1 released (P1 = 0 with P1_DIR $FF, then P1_DIR 0); with isr_par_state
+   bit 0 clear P0.3 pulsed low and high around the request's clearing ($C2C6), with it set the bit cleared, P0.3
+   cleared and P1_LATCH written 0 ($C2D6). P0.4 high: P0.3 and the request cleared, P1 = 1 out, the _INT1 enable off
+   while P1_LATCH is read, then on again ($C331); 5: isr_par_state bit 1 cleared and bit 0 set, the next reply byte
+   (ser_tx_get) onto P1; 3 (below 5): nothing more; 7 or more with isr_par_state bit 0 clear: P1 = the byte with bit 0
+   flipped, isr_par_state = 1 (bits 0 and 1 flipped and 3 when ser_tx_pending bit 0 is set), P0.3 set, the byte to
+   ser_rx_byte; with isr_par_state bit 0 set: nothing more. */
+static void test_int1_parallel(void)
+{
+    static const log_entry k_ack[] = { R(SFR_P0, 0x01), R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x01) };
+    int1_parallel_run(0x01, 0, 'A');
+    check_seq(0, k_ack, 3);
+
+    static const log_entry k_idle[] = {
+        R(SFR_P0, 0x00), R(SFR_P0, 0x00),
+        W(SFR_P1, 0x00), W(SFR_P1_DIR, 0xFF),
+        R(SFR_P0, 0x00), W(SFR_P0, 0x00),
+        R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x01),
+        R(SFR_P0, 0x00), W(SFR_P0, 0x08),
+        W(SFR_P1_DIR, 0x00),
+    };
+    int1_parallel_run(0x00, 0x02, 'A');
+    check_seq(0, k_idle, sizeof k_idle / sizeof k_idle[0]);
+    CHECK_EQ(g_ram[ISR_PAR_STATE], 0x02);
+
+    static const log_entry k_done[] = {
+        R(SFR_P0, 0x00), R(SFR_P0, 0x00),
+        W(SFR_P1, 0x00), W(SFR_P1_DIR, 0xFF),
+        R(SFR_P0, 0x00), W(SFR_P0, 0x00),
+        W(SFR_P1_LATCH, 0x00),
+        R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x01),
+        W(SFR_P1_DIR, 0x00),
+    };
+    int1_parallel_run(0x00, 0x03, 'A');
+    check_seq(0, k_done, sizeof k_done / sizeof k_done[0]);
+    CHECK_EQ(g_ram[ISR_PAR_STATE], 0x02);
+
+    static const log_entry k_reply[] = {
+        R(SFR_P0, 0x10), R(SFR_P0, 0x10),
+        R(SFR_P0, 0x10), W(SFR_P0, 0x10),
+        R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x01),
+        W(SFR_P1, 0x01), W(SFR_P1_DIR, 0xFF),
+        R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x00),
+        R(SFR_P1_LATCH, 5),
+        W(SFR_P1, 'r'), W(SFR_P1_DIR, 0xFF),
+        R(SFR_ICR1, 0x00), W(SFR_ICR1, 0x01),
+    };
+    int1_setup('h');
+    g_ram[SER_TX_RING] = 'r';
+    tx_ring(SER_TX_RING, SER_TX_RING + 1, 1, 1);
+    g_ram[BOOT_DIP] = 1;
+    g_ram[ISR_PAR_STATE] = 0x02;
+    g_sfr[SFR_P0] = 0x10;
+    g_sfr[SFR_P1_LATCH] = 5;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_int1(&g_f, &r);
+    check_regs(&r, 0x11, 0x22, 0x33);
+    check_seq(0, k_reply, sizeof k_reply / sizeof k_reply[0]);
+    CHECK_EQ(g_ram[ISR_PAR_STATE], 0x01);
+    CHECK_EQ(g_ram[SER_TX_PENDING], 0);   /* the byte taken */
+
+    static const log_entry k_code[] = {
+        R(SFR_P0, 0x10), R(SFR_P0, 0x10),
+        R(SFR_P0, 0x10), W(SFR_P0, 0x10),
+        R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x01),
+        W(SFR_P1, 0x01), W(SFR_P1_DIR, 0xFF),
+        R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x00),
+        R(SFR_P1_LATCH, 3),
+        R(SFR_ICR1, 0x00), W(SFR_ICR1, 0x01),
+    };
+    int1_parallel_run(0x10, 0x02, 3);
+    check_seq(0, k_code, sizeof k_code / sizeof k_code[0]);
+    CHECK_EQ(g_ram[ISR_PAR_STATE], 0x02);
+
+    static const log_entry k_data[] = {
+        R(SFR_P0, 0x10), R(SFR_P0, 0x10),
+        R(SFR_P0, 0x10), W(SFR_P0, 0x10),
+        R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x01),
+        W(SFR_P1, 0x01), W(SFR_P1_DIR, 0xFF),
+        R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x00),
+        R(SFR_P1_LATCH, 'A'),
+        W(SFR_P1, 'A' ^ 0x01), W(SFR_P1_DIR, 0xFF),
+        R(SFR_P0, 0x10), W(SFR_P0, 0x18),
+        R(SFR_ICR1, 0x00), W(SFR_ICR1, 0x01),
+    };
+    int1_parallel_run(0x10, 0x02, 'A');
+    check_seq(0, k_data, sizeof k_data / sizeof k_data[0]);
+    CHECK_EQ(g_ram[ISR_PAR_STATE], 0x01);
+    CHECK_EQ(g_ram[0x2100], 'A');
+
+    int1_setup('h');                      /* the same with a reply pending: bits 0 and 1 flipped, state 3 */
+    g_ram[BOOT_DIP] = 1;
+    g_ram[SER_TX_PENDING] = 1;
+    g_sfr[SFR_P0] = 0x10;
+    g_sfr[SFR_P1_LATCH] = 'A';
+    r = (fw_regs){ 0x11, 0x22, 0x33, 0 };
+    isr_int1(&g_f, &r);
+    check_log(11, LOG_WRITE, SFR_P1, 'A' ^ 0x03);
+    CHECK_EQ(g_ram[ISR_PAR_STATE], 0x03);
+    CHECK_EQ(g_ram[0x2100], 'A');
+
+    static const log_entry k_busy[] = {
+        R(SFR_P0, 0x10), R(SFR_P0, 0x10),
+        R(SFR_P0, 0x10), W(SFR_P0, 0x10),
+        R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x01),
+        W(SFR_P1, 0x01), W(SFR_P1_DIR, 0xFF),
+        R(SFR_ICR1, 0x01), W(SFR_ICR1, 0x00),
+        R(SFR_P1_LATCH, 'A'),
+        R(SFR_ICR1, 0x00), W(SFR_ICR1, 0x01),
+    };
+    int1_parallel_run(0x10, 0x01, 'A');
+    check_seq(0, k_busy, sizeof k_busy / sizeof k_busy[0]);
+    CHECK_EQ(fw_rd16(&g_f, SER_RX_WRITE), 0x2100);   /* nothing queued */
+}
+
+/* isr_int4_host_line $C3E0: P0.2 high, isr_host_line_high (ICR3 = $40, P0.5 set, ser_status_due = 1); low,
+   isr_host_line_low (ICR3 = $48, P0.5 cleared). A, X and Y kept. */
+static void test_int4(void)
+{
+    static const log_entry k_high[] = { R(SFR_P0, 0x04), W(SFR_ICR3, 0x40), R(SFR_P0, 0x04), W(SFR_P0, 0x24) };
+    static const log_entry k_low[] = { R(SFR_P0, 0x20), W(SFR_ICR3, 0x48), R(SFR_P0, 0x20), W(SFR_P0, 0x00) };
+    setup();
+    g_sfr[SFR_P0] = 0x04;
+    g_sfr[SFR_ICR3] = 0xC8;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_int4_host_line(&g_f, &r);
+    check_regs(&r, 0x11, 0x22, 0x33);
+    check_seq(0, k_high, 4);
+    CHECK_EQ(g_ram[SER_STATUS_DUE], 1);
+
+    setup();
+    g_sfr[SFR_P0] = 0x20;
+    g_ram[SER_STATUS_DUE] = 7;
+    isr_int4_host_line(&g_f, &r);
+    check_regs(&r, 0x11, 0x22, 0x33);
+    check_seq(0, k_low, 4);
+    CHECK_EQ(g_ram[SER_STATUS_DUE], 7);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_ser(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -756,4 +1021,9 @@ void suite_fw_ser(void)
     test_imm_index_add();
     test_imm_index_query();
     test_imm_unknown_handler();
+    test_int1_serial();
+    test_int1_uart_error();
+    test_int1_latch();
+    test_int1_parallel();
+    test_int4();
 }
