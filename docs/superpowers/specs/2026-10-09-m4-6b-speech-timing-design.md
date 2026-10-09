@@ -52,7 +52,7 @@ No `fw_rom_call` of an `isr_*` routine is left in `src/firmware`.
 
 Every loop that waits for a flag an interrupt sets becomes: test the flag; if not yet, `fw_wait(f, FW_WAIT_INTERRUPT, at)`; test again. Where the ROM calls `isr_par_ready` on every pass, the C calls it on every pass too.
 - `par_play`'s top loop, `$B877`–`$B8AE` (UART status and the reply, `isr_par_ready`, the abort test, the frame-flag test, `isr_par_ready`, back to the top): the wait at the back edge (`at` = `$B877`).
-- `par_play`'s frame-flag wait, `$B8C9`–`$B8CC`, and the C helper that serves it and `boot_loop_play` (`wait_frame_flag`): `at` = `$B8C9`.
+- `par_play`'s frame-flag wait, `$B8C9`–`$B8CC`, and the C helper that serves it and `boot_loop_play` (`wait_frame_flag`): `at` = `$B8C9`; the rest-frame wait `$B8E6`–`$B8E9` is the same loop shape and waits with `at` = `$B8E6`. *(Corrected 2026-10-09 from the plan's proof.)*
 - `isr_wait_frame`, `$B465`: `at` = `$B465`.
 
 ### 2.4 Hooks (11 new replacements; 100 in all, 101 `golden_hybrid` modes)
@@ -81,11 +81,11 @@ Through the host only (`fw_sfr*`, M4.6a §3.1): P0 (`$F6`), P2 (`$F0`), P3 (`$EE
 - `void (*dsp_write)(void *ctx, uint8_t byte)`, through `fw_dsp_write(f, v)`: the two `STA DSP_DATA` (`$B2E7`, `$B2ED`). The hybrid host writes the byte to `$8000` on the bus, so the machine's port-write count, raw frame stream and reset grouping work as now.
 - `void (*frame_done)(void *ctx)`, through `fw_frame_done(f)`: the C `isr_timer_dsp` calls it where the ROM reaches `$B306`, before the `LDM` writes there, which is exactly where the machine captures a frame today. The hybrid host calls `machine_capture_frame(m)`. The C copy never executes `$B306`, so no frame is captured twice.
 
-Both helpers fault without a host or without their function, as the SFR helpers do.
+Both helpers fault without a host or without their function, as the SFR helpers do: `fw_dsp_write` at `$8000`, `fw_frame_done` at `$B306`. *(Corrected 2026-10-09 from the plan's proof.)*
 
 ### 3.2 The wait seam
 
-`fw_wait(f, kind, at)` gains `at`, the ROM address of the loop the wait stands for; a wait without a host or its `wait` function faults there. (This replaces M4.6a's single fault address, a deferred item; the two calls in `ser.c` pass `$C500`.)
+`fw_wait(f, kind, at)` gains `at`, the ROM address of the loop the wait stands for; a wait without a host or its `wait` function faults there. (This replaces M4.6a's single fault address, a deferred item; the two calls in `ser.c` pass `$C500`.) The host's `wait` function receives `at` too. *(Corrected 2026-10-09 from the plan's proof.)*
 
 | Kind | Stands for | Hybrid host | Native host |
 |---|---|---|---|
@@ -99,7 +99,7 @@ Every wait is bounded by the bridge deadline (M4.4b): a wait that never ends fau
 ### 3.3 Machine API additions (no model change)
 
 - `machine_capture_frame(m)`: what the step loop does at `$B306` (the 20 bytes at the `$2C/$2D` pointer, `frames_produced`, the frame callback).
-- `machine_wait_interrupt(m, max_cycles)`: as a WIT at the current PC, which is the hook's PC and never the idle WIT `$C602`, so the machine delivers no serial byte (parent spec §4: bytes arrive only at the idle WIT). The CPU wakes on an IRQ line, takes any unmasked interrupt (ROM or C), and the call returns when the PC and SP are back where they were.
+- `machine_wait_interrupt(m, max_cycles)`: as a WIT at the current PC, which is the hook's PC and never the idle WIT `$C602`, so the machine delivers no serial byte (parent spec §4: bytes arrive only at the idle WIT). The CPU wakes on an IRQ line, takes any unmasked interrupt (ROM or C), and the call returns when the PC and SP are back where they were. If a line wakes the CPU while I is set (no interrupt taken), it returns false at once. *(Corrected 2026-10-09 from the plan's proof.)*
 - `machine_run_loop(m, loop, exit, max_cycles)`: saves PC and P, sets I (both loops run inside PHP/SEI), steps from `loop` until the PC reaches `exit`, restores PC and P. No stack frame.
 
 ### 3.4 P2 and the low window
@@ -114,19 +114,19 @@ In `isr_timer_start`, `isr_dsp_reset` and `isr_par_hold` they are comments: the 
 
 ### 4.1 `diff_lts`
 
-- Compares the eight routines that do not wait: `isr_set_volume`, `isr_volume_half`, `isr_par_ready`, `isr_par_hold`, `isr_dsp_reset`, `isr_speech_stop`, `isr_timer_start` (its timer waits end with interrupts held: the request bits are set by the clock) and `isr_timer_dsp` (an `isr` row). Every call; about 700,000 of `isr_timer_dsp` on the corpus. The plan's proof measures the time; if it is excessive, the numbers go to the user before anything is sampled.
+- Compares the eight routines that do not wait: `isr_set_volume`, `isr_volume_half`, `isr_par_ready`, `isr_par_hold`, `isr_dsp_reset`, `isr_speech_stop`, `isr_timer_start` (its timer waits end with interrupts held: the request bits are set by the clock) and `isr_timer_dsp` (an `isr` row). Every call of these eight (`k_every_call`; `diff_lts` samples the other routines as before): 2,589,942 of `isr_timer_dsp` and 7,959,385 of `isr_par_ready` (the ROM's polling loops call it on every pass) on the corpus; `diff_lts` takes 179 s in the proof, under the 5-minute gate. *(Corrected 2026-10-09 from the plan's proof.)*
 - `diff_same` compares more machine state: `p23_func`; each timer's prescaler, reload and running flag; the DSP outputs (`port_writes`, `dsp_resets`, `dsp_reset_level`, `raw_pos`, `raw_buf`, `frames_produced`). Not the timers' remaining counts, which move with the C's zero time as ICR2's request bits do.
-- `DIFF_MAX` grows to fit 100 replacements.
+- `DIFF_MAX` grows to 104 (100 replacements).
 
 ### 4.2 `diff_play`
 
-Its two injection points, `$B306` and `isr_par_ready`, both become C. The injections move to the frame event, which both copies reach (the ROM at `$B306`, the C through `frame_done`). The comparison is made at every frame event, as at every swap today: both main programs are waiting, and the ISR has made the same RAM writes in both copies by then. A ROM-against-ROM self-check proves each injection still reaches its target branch (`$B8A5` abort, `$B89C` reply). It still watches `par_play` and `boot_loop_play`, whose call trees now include the C `isr_wait_frame`, `isr_speech_start` and the timer ISR.
+Its two injection points, `$B306` and `isr_par_ready`, both become C. The reply injection moves to the frame event, which both copies reach (the ROM at `$B306`, the C through `frame_done`). The abort (mute) injection is made at the timer interrupt's entry two ticks after the second frame event: made at the frame event itself it gave 4 mismatches, because the ROM copy can be between its abort test (`$B8A2`) and its frame-flag test (`$B8A8`) while the C copy is waiting, a race the ROM itself has; two ticks later both main programs are past it. *(Corrected 2026-10-09 from the plan's proof.)* The comparison is made at every frame event, as at every swap today: both main programs are waiting, and the ISR has made the same RAM writes in both copies by then. A ROM-against-ROM self-check proves each injection still reaches its target branch (`$B8A5` abort, `$B89C` reply). It watches `par_play` and `boot_loop_play`, and also the three `waits` rows (`isr_speech_start`, `isr_wait_frames`, `isr_wait_frame`), armed at their `JSR` sites. *(Corrected 2026-10-09 from the plan's proof.)*
 
 ### 4.3 `diff_serial`
 
 Keeps its name and machinery, and gains probes, proved ROM against ROM before the C exists:
 - `isr_par_ready` and `isr_par_hold` with parallel mode injected (`boot_dip` bit 0), as synthetic calls from real states;
-- the timer ISR (entered at `$B2D9` as the CPU enters an interrupt, as M4.6a's ISR probes) on the paths the corpus may not reach, e.g. a frame boundary while `isr_frame_flag` is still set (the frame repeats). The branch probe (§4.5) decides which are needed.
+- the timer ISR (entered at `$B2D9` as the CPU enters an interrupt, as M4.6a's ISR probes) on the paths the corpus may not reach, e.g. a frame boundary while `isr_frame_flag` is still set (the frame repeats). The branch probe (§4.5) decides which are needed. The proof needed three new probes (the repeated frame at `$B300`, and parallel mode in `isr_par_ready` and `isr_par_hold`): 28 in all. `isr_wait_frames`' `BNE` taken (`$B35A`, X ≥ 2) has no caller that passes X ≥ 2 and is pinned by the unit test `test_wait_frames_two`. *(Corrected 2026-10-09 from the plan's proof.)*
 
 ### 4.4 `golden_hybrid`, `test_timing_invariance`, the CLI
 
