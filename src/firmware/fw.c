@@ -1,5 +1,8 @@
 #include "fw.h"
 
+#define SFR_P2         0xF0
+#define P2_LOW_WINDOW  0x80   /* P2 bit 7: the lower-ROM window */
+
 void fw_init(fw *f, uint8_t *ram, const fw_image *img, const fw_host *host)
 {
     f->ram = ram;
@@ -74,10 +77,18 @@ uint8_t fw_sfr8(fw *f, uint8_t addr)
     return 0xFF;
 }
 
+/* A value written to P2: the window cache follows its bit 7 (M4.6b spec 3.4). */
+static void p2_written(fw *f, uint8_t addr, uint8_t v)
+{
+    if (addr == SFR_P2)
+        f->low_window = (v & P2_LOW_WINDOW) != 0;
+}
+
 void fw_wr_sfr8(fw *f, uint8_t addr, uint8_t v)
 {
     if (addr >= 0xDA && f->host && f->host->write_sfr) {
         f->host->write_sfr(f->host->ctx, addr, v);
+        p2_written(f, addr, v);
         return;
     }
     fault(f, addr);
@@ -87,8 +98,9 @@ void fw_wr_sfr8(fw *f, uint8_t addr, uint8_t v)
 static void sfr_rmw(fw *f, uint8_t addr, uint8_t set, uint8_t clear)
 {
     if (addr >= 0xDA && f->host && f->host->read_sfr && f->host->write_sfr) {
-        uint8_t v = f->host->read_sfr(f->host->ctx, addr);
-        f->host->write_sfr(f->host->ctx, addr, (uint8_t)((v | set) & ~clear));
+        uint8_t v = (uint8_t)((f->host->read_sfr(f->host->ctx, addr) | set) & ~clear);
+        f->host->write_sfr(f->host->ctx, addr, v);
+        p2_written(f, addr, v);
         return;
     }
     fault(f, addr);
@@ -98,11 +110,29 @@ void fw_sfr_seb(fw *f, uint8_t addr, unsigned bit) { sfr_rmw(f, addr, (uint8_t)(
 void fw_sfr_clb(fw *f, uint8_t addr, unsigned bit) { sfr_rmw(f, addr, 0, (uint8_t)(1u << bit)); }
 bool fw_sfr_bit(fw *f, uint8_t addr, unsigned bit) { return ((fw_sfr8(f, addr) >> bit) & 1) != 0; }
 
-void fw_wait(fw *f, fw_wait_kind kind)
+void fw_wait(fw *f, fw_wait_kind kind, uint16_t at)
 {
-    if (f->host && f->host->wait && f->host->wait(f->host->ctx, kind))
+    if (f->host && f->host->wait && f->host->wait(f->host->ctx, kind, at))
         return;
-    fault(f, FW_WAIT_UART_TX_LOOP);   /* the only kind (M4.6b and M4.6c add theirs) */
+    fault(f, at);
+}
+
+void fw_dsp_write(fw *f, uint8_t v)
+{
+    if (f->host && f->host->dsp_write) {
+        f->host->dsp_write(f->host->ctx, v);
+        return;
+    }
+    fault(f, FW_DSP_DATA);
+}
+
+void fw_frame_done(fw *f)
+{
+    if (f->host && f->host->frame_done) {
+        f->host->frame_done(f->host->ctx);
+        return;
+    }
+    fault(f, FW_FRAME_EVENT);
 }
 
 void fw_fault(fw *f, uint16_t addr) { fault(f, addr); }

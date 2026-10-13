@@ -133,7 +133,7 @@ void ser_tx_put(fw *f, fw_regs *r)
 
 void ser_tx_send(fw *f, fw_regs *r)
 {
-    fw_wait(f, FW_WAIT_UART_TX);                                 /* $C505 JSR ser_tx_wait (inside PHP ... PLP) */
+    fw_wait(f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);           /* $C505 JSR ser_tx_wait (inside PHP ... PLP) */
     fw_wr_sfr8(f, SFR_UART_TX, r->a);                            /* $C508 STA UART_TX */
 }
 
@@ -179,7 +179,7 @@ void ser_tx_service(fw *f, fw_regs *r)
     uint8_t pending = fw_rd8(f, SER_TX_PENDING);                 /* LDA ser_tx_pending */
     fw_wr8(f, SER_STATUS_DUE, pending);
     if (pending == 0) {                                          /* BNE: the whole byte */
-        fw_wait(f, FW_WAIT_UART_TX);                             /* $C596 JSR ser_tx_wait */
+        fw_wait(f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);       /* $C596 JSR ser_tx_wait */
         if (fw_sfr_bit(f, SFR_P0, P0_HOST_LINE))                 /* PHP, SEI, BBC2 P0 */
             fw_sfr_seb(f, SFR_P0, P0_BUSY);                      /* SEB5 P0 */
     }

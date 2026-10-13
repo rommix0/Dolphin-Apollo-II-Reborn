@@ -133,6 +133,19 @@ machine_call_result machine_rom_call(machine *m, uint16_t addr, machine_regs *re
 /* Runs the routine the PC has just entered (by JSR) until the stack pointer rises above its value now, i.e.
    the routine returned, also two levels up. False on a fault or when max_cycles pass first. */
 bool machine_finish_routine(machine *m, uint64_t max_cycles);
+/* The frame capture the step loop makes at APOLLO_SWAP_PC ($B306): the 20 bytes at the APOLLO_PRODUCER_PTR
+   pointer, frames_produced counted, the frame callback called (M4.6b spec 3.3: the hybrid host's frame event). */
+void machine_capture_frame(machine *m);
+/* Waits as a WIT at the current PC would (M4.6b spec 3.3): the CPU idles until an IRQ line wakes it, takes the
+   interrupt (its handler ROM or a hooked replacement) and returns from it. True once the PC and SP are back where
+   they were. The PC is a hook's, never the idle WIT's ($C602): no serial byte is delivered. False when max_cycles
+   pass first, on a fault, or when a line wakes the CPU with I set (the interrupt could never be taken); the CPU is
+   then no longer waiting. */
+bool machine_wait_interrupt(machine *m, uint64_t max_cycles);
+/* Runs the ROM loop at loop with I set (inside the caller's PHP/SEI ... PLP; M4.6b spec 3.3) until the PC reaches
+   exit, then puts the PC and P back as they were. No stack frame. False when max_cycles pass first or on a fault
+   (the PC and P put back all the same). */
+bool machine_run_loop(machine *m, uint16_t loop, uint16_t exit, uint64_t max_cycles);
 /* Copies src's whole state into dst for a differential run, without hooks, outputs, coverage or the hold. */
 void machine_clone(machine *dst, const machine *src);
 /* The shared address mapper (M4.0 spec section 2.2) behind bus reads, machine_peek and the hook check: where a

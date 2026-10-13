@@ -11,6 +11,7 @@
 #include "firmware/cmd_play_event.h"
 #include "firmware/frm_build.h"
 #include "firmware/fw_ops.h"
+#include "firmware/isr_addr.h"
 #include "firmware/par_addr.h"
 #include "firmware/par_boundary.h"
 #include "firmware/par_play.h"

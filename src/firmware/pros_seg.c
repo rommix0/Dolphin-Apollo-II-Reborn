@@ -1,6 +1,6 @@
 #include "pros_seg.h"
 #include "fw_ops.h"
-#include "tn_convert.h"
+#include "isr_addr.h"
 
 /* STA (ptr),Y: the 16-bit pointer plus y. The pointers start at the arrays ($0200, $0600, $0A00, $0E00) and only
    move up one page per 256 segments; a clause makes far fewer than 1,280 segments (at most 3 per phonetic symbol

@@ -5,6 +5,7 @@
 #include <string.h>
 #include "test.h"
 #include "firmware/cmd_addr.h"
+#include "firmware/isr_addr.h"
 #include "firmware/par_addr.h"
 #include "firmware/pros_addr.h"
 #include "firmware/tn_convert.h"

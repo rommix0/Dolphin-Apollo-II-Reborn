@@ -114,12 +114,22 @@ typedef struct { uint8_t a, x, y, p; } fw_regs;
    stack past the call's own frame (bank_enter, M4.2 spec 3), so it can never return. */
 typedef enum { FW_CALL_FAILED = 0, FW_CALL_RETURNED, FW_CALL_UNWOUND } fw_call_result;
 
-/* The hardware waits (M4.6a spec 3.3): one kind per ROM wait loop. The hybrid host runs the loop on the emulated
-   CPU; a native host waits natively. */
+/* The hardware waits (M4.6a spec 3.3, M4.6b spec 3.2): one kind per ROM wait loop. The hybrid host runs the loop on
+   the emulated CPU, or idles it until an interrupt has been handled; a native host waits natively. */
 typedef enum fw_wait_kind {
     FW_WAIT_UART_TX = 0,   /* until the UART can transmit: ser_tx_wait, BBC1 UART_STATUS until bit 1 is set */
+    FW_WAIT_INTERRUPT,     /* a polling loop on a flag an interrupt sets: until an interrupt has been handled */
+    FW_WAIT_TIMER2,        /* isr_timer_start's BBC3 ICR2 (inside SEI): until timer 2's request bit is set */
+    FW_WAIT_TIMER3,        /* isr_timer_start's BBC5 ICR2 (inside SEI): until timer 3's request bit is set */
 } fw_wait_kind;
 #define FW_WAIT_UART_TX_LOOP  0xC500   /* ser_tx_wait: the ROM loop of FW_WAIT_UART_TX (BBC1 $E7,$C500 / RTS) */
+#define FW_WAIT_TIMER2_LOOP   0xB372   /* isr_timer_start: BBC3 ICR2,$B372, the loop of FW_WAIT_TIMER2 ... */
+#define FW_WAIT_TIMER2_EXIT   0xB375   /* ... and the instruction after it (LDM #$28,T3_RELOAD) */
+#define FW_WAIT_TIMER3_LOOP   0xB37F   /* isr_timer_start: BBC5 ICR2,$B37F, the loop of FW_WAIT_TIMER3 ... */
+#define FW_WAIT_TIMER3_EXIT   0xB382   /* ... and the instruction after it (LDM #$31,T3_RELOAD) */
+#define FW_DSP_DATA           0x8000   /* DSP_DATA, the DSP port (write only): where fw_dsp_write faults */
+#define FW_FRAME_EVENT        0xB306   /* isr_swap_buffers: the ROM's point of the frame event, where fw_frame_done
+                                          faults */
 
 /* The machine or native host. In hybrid runs it is the emulator (src/engine/thunks.c). */
 typedef struct fw_host {
@@ -133,8 +143,14 @@ typedef struct fw_host {
     uint8_t (*read_sfr)(void *ctx, uint8_t addr);
     /* Writes an SFR ($DA-$FF) as the CPU's write would (M4.6a spec 3.1). */
     void (*write_sfr)(void *ctx, uint8_t addr, uint8_t value);
-    /* Waits for the hardware (M4.6a spec 3.3). False when the wait did not end (a fault). */
-    bool (*wait)(void *ctx, fw_wait_kind kind);
+    /* Waits for the hardware (M4.6a spec 3.3, M4.6b spec 3.2); at is the ROM loop the wait stands for. False when
+       the wait did not end (a fault). */
+    bool (*wait)(void *ctx, fw_wait_kind kind, uint16_t at);
+    /* Writes a byte to the DSP port DSP_DATA $8000, as isr_timer_dsp's STA DSP_DATA does (M4.6b spec 3.1). */
+    void (*dsp_write)(void *ctx, uint8_t byte);
+    /* The frame event: the C timer interrupt is where the ROM's reaches $B306 (isr_swap_buffers), the frame at
+       isr_fill_ptr complete (M4.6b spec 3.1). */
+    void (*frame_done)(void *ctx);
 } fw_host;
 
 /* Converted ROM data at its original addresses (built by src/firmware/data/fw_data.c). */
@@ -182,18 +198,24 @@ void fw_wr_ind_y(fw *f, uint8_t zp, uint8_t y, uint8_t v);
    $DA, a fault: it longjmps to f->trap when set, else reads $FF. */
 uint8_t fw_sfr8(fw *f, uint8_t addr);
 /* STA/LDM to an SFR: v written through the host. Without a host or write_sfr, or below $DA, a fault (nothing
-   written). */
+   written). A write of P2 ($F0) sets f->low_window from bit 7 of v (M4.6b spec 3.4). */
 void fw_wr_sfr8(fw *f, uint8_t addr, uint8_t v);
 /* SEB bit,addr / CLB bit,addr on an SFR: a read, then a write of the value with the bit set or cleared, as the CPU
    does them (cpu740.c, M_SEB/M_CLB): a port reads its pins, so an input pin's level reaches the latch. Without a
-   host, read_sfr or write_sfr, or below $DA, a fault (nothing read or written). */
+   host, read_sfr or write_sfr, or below $DA, a fault (nothing read or written). On P2 ($F0) f->low_window follows
+   bit 7 of the value written (M4.6b spec 3.4). */
 void fw_sfr_seb(fw *f, uint8_t addr, unsigned bit);
 void fw_sfr_clb(fw *f, uint8_t addr, unsigned bit);
 /* BBS bit,addr / BBC bit,addr on an SFR: the bit of one read (fw_sfr8, its faults included). */
 bool fw_sfr_bit(fw *f, uint8_t addr, unsigned bit);
-/* Waits for the hardware through the host (JSR ser_tx_wait for FW_WAIT_UART_TX). Without a host or wait, or when the
-   wait fails, a fault at the kind's ROM loop (FW_WAIT_UART_TX_LOOP). */
-void fw_wait(fw *f, fw_wait_kind kind);
+/* Waits for the hardware through the host: the polling loop or wait loop at the ROM address at (JSR ser_tx_wait
+   $C500 for FW_WAIT_UART_TX; the polling loop's own address for FW_WAIT_INTERRUPT; $B372 and $B37F for the timer
+   waits). Without a host or wait, or when the wait fails, a fault at at. */
+void fw_wait(fw *f, fw_wait_kind kind, uint16_t at);
+/* STA DSP_DATA: v written to the DSP port through the host. Without a host or dsp_write, a fault at FW_DSP_DATA. */
+void fw_dsp_write(fw *f, uint8_t v);
+/* The frame event through the host (M4.6b spec 3.1). Without a host or frame_done, a fault at FW_FRAME_EVENT. */
+void fw_frame_done(fw *f);
 /* A fault at addr where the ROM would never return (a loop with no exit), like a fault of fw_rom8: it sets f->fault
    (keeping the first fault_addr), then longjmps to f->trap when set, else returns. run_thunk relies on the flag being
    set after the longjmp. */

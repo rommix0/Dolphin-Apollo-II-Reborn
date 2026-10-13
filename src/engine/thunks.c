@@ -81,16 +81,63 @@ static void host_write_sfr(void *ctx, uint8_t addr, uint8_t value)
     m->bus.write(m->bus.ctx, addr, value);
 }
 
-/* The firmware's hardware wait (M4.6a spec 3.3): the kind's ROM loop runs on the emulated CPU as host code (for
-   FW_WAIT_UART_TX, ser_tx_wait $C500: BBC1 UART_STATUS,$C500 / RTS), through host_rom_call with the machine's own
-   A, X and Y, so with interrupts live, the ROM's cycles and the bridge deadline. $C500 is never hooked. */
-static bool host_wait(void *ctx, fw_wait_kind kind)
+/* The firmware's hardware wait (M4.6a spec 3.3, M4.6b spec 3.2), on the emulated CPU, within the bridge deadline:
+   - FW_WAIT_UART_TX: ser_tx_wait $C500 (BBC1 UART_STATUS,$C500 / RTS) runs as host code through host_rom_call, with
+     the machine's own A, X and Y, so with interrupts live and the ROM's cycles. $C500 is never hooked.
+   - FW_WAIT_INTERRUPT: the CPU idles as at a WIT at the hook's PC (never the idle WIT $C602, so no serial byte is
+     delivered) until an interrupt has been handled, its handler ROM or C (machine_wait_interrupt).
+   - FW_WAIT_TIMER2, FW_WAIT_TIMER3: isr_timer_start's loops $B372 and $B37F run with I set, as inside its PHP/SEI
+     (machine_run_loop).
+   at is the C's report of the loop; the hybrid host runs the kind's own. The window is read back after the wait,
+   as after a ROM call: an interrupt handler ran. */
+static bool host_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     fw_bridge *b = ctx;
-    if (kind != FW_WAIT_UART_TX)
+    machine *m = b->m;
+    (void)at;
+    if (kind == FW_WAIT_UART_TX) {
+        fw_regs r = { m->cpu.a, m->cpu.x, m->cpu.y, 0 };
+        return host_rom_call(b, FW_WAIT_UART_TX_LOOP, &r, FW_ROM_CALL_BUDGET) == FW_CALL_RETURNED;
+    }
+    uint64_t budget = FW_ROM_CALL_BUDGET;
+    if (b->deadline) {   /* the outermost thunk's bound, as host_rom_call's */
+        uint64_t now = m->cpu.cycles;
+        if (now >= b->deadline)
+            return false;
+        if (budget > b->deadline - now)
+            budget = b->deadline - now;
+    }
+    bool ok;
+    switch (kind) {
+    case FW_WAIT_INTERRUPT:
+        ok = machine_wait_interrupt(m, budget);
+        break;
+    case FW_WAIT_TIMER2:
+        ok = machine_run_loop(m, FW_WAIT_TIMER2_LOOP, FW_WAIT_TIMER2_EXIT, budget);
+        break;
+    case FW_WAIT_TIMER3:
+        ok = machine_run_loop(m, FW_WAIT_TIMER3_LOOP, FW_WAIT_TIMER3_EXIT, budget);
+        break;
+    default:
         return false;
-    fw_regs r = { b->m->cpu.a, b->m->cpu.x, b->m->cpu.y, 0 };
-    return host_rom_call(b, FW_WAIT_UART_TX_LOOP, &r, FW_ROM_CALL_BUDGET) == FW_CALL_RETURNED;
+    }
+    b->f.low_window = window_on(m);
+    return ok;
+}
+
+/* STA DSP_DATA (M4.6b spec 3.1): the byte written to $8000 through the bus, as the CPU's STA writes it, so the
+   machine counts it (port_writes) and groups it into the raw frame stream as before. */
+static void host_dsp_write(void *ctx, uint8_t byte)
+{
+    machine *m = ((fw_bridge *)ctx)->m;
+    m->bus.write(m->bus.ctx, APOLLO_DSP_PORT, byte);
+}
+
+/* The frame event (M4.6b spec 3.1): the capture the machine makes when the ROM reaches $B306. The C timer interrupt
+   never executes $B306, so no frame is captured twice. */
+static void host_frame_done(void *ctx)
+{
+    machine_capture_frame(((fw_bridge *)ctx)->m);
 }
 
 bool fw_bridge_init(fw_bridge *b, machine *m)
@@ -106,6 +153,8 @@ bool fw_bridge_init(fw_bridge *b, machine *m)
     b->host.read_sfr = host_read_sfr;
     b->host.write_sfr = host_write_sfr;
     b->host.wait = host_wait;
+    b->host.dsp_write = host_dsp_write;
+    b->host.frame_done = host_frame_done;
     fw_init(&b->f, m->ram, img, &b->host);
     return img != NULL;
 }

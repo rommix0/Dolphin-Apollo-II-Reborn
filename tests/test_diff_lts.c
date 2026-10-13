@@ -1,8 +1,9 @@
 /* Live differential test of the ported routines (M4.0 spec section 5.1). Every corpus file runs on the ROM
-   engine; at each entry of a ported routine (sampled) scratch A runs the ROM routine with interrupts held. If it
-   returns, scratch B is cloned and runs the C thunk, and the two must agree on the exit PC and SP, the routine's
-   declared outputs, the SFR model state and all RAM except the SFRs and the dead stack below the exit SP
-   (diff_same, diff_state.h; M4.6a spec 4.1). An interrupt handler (a replacement marked isr) is compared the same
+   engine; at each entry of a ported routine (sampled, but every call of the speech-timing routines, k_every_call)
+   scratch A runs the ROM routine with interrupts held. If it returns, scratch B is cloned and runs the C thunk, and
+   the two must agree on the exit PC and SP, the routine's declared outputs, the SFR model state, the DSP outputs
+   and all RAM except the SFRs and the dead stack below the exit SP (diff_same, diff_state.h; M4.6a spec 4.1, M4.6b
+   spec 4.1). An interrupt handler (a replacement marked isr) is compared the same
    way: entered through its vector, its ROM copy runs to its RTI (SP rises 3 above the hook's) and its thunk exits
    like RTI, and A, X and Y are compared too (the interrupted code reads all three; the row declares none). The
    routines no corpus text enters (diff_probed, M4.6a spec 4.4) print 0 calls: diff_serial's probes compare them.
@@ -24,9 +25,9 @@
 #include "diff_state.h"
 
 #define DIFF_FULL_CALLS 1000      /* every call up to this many per routine and corpus file ... */
-#define DIFF_STRIDE     64        /* ... then every 64th */
+#define DIFF_STRIDE     64        /* ... then every 64th (but the routines of k_every_call) */
 #define DIFF_BUDGET     10000000ULL
-#define DIFF_MAX        96
+#define DIFF_MAX        104
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
 /* Extra text, for this test only (not goldens): words whose rules use the % & @ context symbols. */
@@ -34,7 +35,13 @@ static const char *const k_extra[] = {
     "Judges ruled the churches; loose rules, sugar, the nation's fixes, washing, rejoicing and lunches.",
 };
 
-typedef struct { const fw_replacement *r; unsigned calls; } observer;
+/* The speech-timing routines that do not wait (M4.6b spec 4.1): compared at every call, the timer interrupt's too. */
+static const char *const k_every_call[] = {
+    "isr_set_volume", "isr_volume_half", "isr_par_ready", "isr_par_hold", "isr_dsp_reset", "isr_speech_stop",
+    "isr_timer_start", "isr_timer_dsp",
+};
+
+typedef struct { const fw_replacement *r; unsigned calls; bool every; } observer;
 
 static machine g_m, g_ref, g_c;
 static observer g_obs[DIFF_MAX];
@@ -58,7 +65,7 @@ static bool observe(machine *m, void *user)
 {
     observer *o = user;
     unsigned call = o->calls++;
-    if (call >= DIFF_FULL_CALLS && call % DIFF_STRIDE != 0)
+    if (!o->every && call >= DIFF_FULL_CALLS && call % DIFF_STRIDE != 0)
         return false;
     machine_clone(&g_ref, m);
     machine_hold_irqs(&g_ref, true);
@@ -108,6 +115,9 @@ static void install(machine *m, void *user)
             continue;   /* diff_play's */
         g_obs[i].r = &fw_replacements[i];
         g_obs[i].calls = 0;   /* the full-call budget is per corpus file */
+        g_obs[i].every = false;
+        for (size_t k = 0; k < sizeof k_every_call / sizeof k_every_call[0]; k++)
+            g_obs[i].every |= !strcmp(fw_replacements[i].name, k_every_call[k]);
         CHECK(machine_hook(m, fw_replacements[i].addr, observe, &g_obs[i]));
     }
 }

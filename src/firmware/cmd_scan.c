@@ -1,6 +1,6 @@
 #include "cmd_scan.h"
 #include "cmd_match.h"
-#include "tn_convert.h"
+#include "isr_addr.h"
 #include "data/fw_data.h"
 
 void cmd_scan_clause(fw *f)

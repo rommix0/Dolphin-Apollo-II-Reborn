@@ -1,20 +1,13 @@
 #ifndef FW_PAR_ADDR_H
 #define FW_PAR_ADDR_H
 /* ROM code addresses of the playback set-up (M4.4a spec 2.2), the frame loop (M4.4b spec 2.2) and the frame
-   builder (M4.5 spec 2.2), and of the interrupt and serial routines they call (M4.4a 2.4, M4.4b 2.4), checked
-   against build/ghidra740/dump and the JSR/JMP operands in the ROM image. A caller in parentheses stays ROM. */
+   builder (M4.5 spec 2.2), checked against build/ghidra740/dump and the JSR/JMP operands in the ROM image (the
+   interrupt routines they call are in isr_addr.h, M4.6b). A caller in parentheses stays ROM. */
 #define ROM_BOOT_LOOP_PLAY         0xA7D4   /* called by tn_convert_clause $B204 (and boot_reset $A687,
                                                boot_selftest_sound $A7BA, cmd_say_phonetic $A87C) */
-#define ROM_ISR_SET_VOLUME         0xACE8   /* M4.6; called by boot_loop_play $B2C4, $B2D2, cmd_ev_set_volume $BCEF
-                                               (and boot_reset $A642, isr_volume_half $B46F) */
-#define ROM_ISR_SPEECH_START       0xB323   /* M4.6; called by boot_loop_play $B2B9 */
-#define ROM_ISR_SPEECH_STOP        0xB398   /* M4.6; called by boot_loop_play $B2D5 */
 #define ROM_PAR_SETUP_VOICE        0xB3A4   /* called by cmd_apply_pitch $A845; the C cmd_apply_pitch calls the C */
 #define ROM_FRM_BUILD_REST_FRAME   0xB41D   /* called by par_setup_voice $B404 */
 #define ROM_FRM_COPY_REST_FRAME    0xB445   /* called by par_setup_voice $B407, $B416, par_play $B8DA */
-#define ROM_ISR_WAIT_FRAME         0xB465   /* M4.6; called by boot_loop_play $B2BF, $B2CD, par_play $B8D2 (and
-                                               isr_wait_frames $B356) */
-#define ROM_ISR_VOLUME_HALF        0xB46C   /* M4.6; called by boot_loop_play $B2BC, $B2CA */
 #define ROM_PAR_PLAY               0xB877   /* called by boot_loop_play $B2C7; re-entered by its own JMPs $B892,
                                                $B8AE, $B914 */
 #define ROM_FRM_SNAPSHOT           0xB917   /* called by par_play $B8DD, frm_finish_frame $B9BA */
@@ -55,8 +48,6 @@
 #define ROM_PAR_TRACK_END          0xC26C   /* called by par_track_overlap $C1F8 */
 #define ROM_PAR_SCALE_DURATION     0xC29C   /* called by par_boundary_cur_dom $BF03, $BF0E; par_boundary_next_dom
                                                $BF48, $BF53 */
-#define ROM_ISR_PAR_HOLD           0xC5DE   /* M4.6; called by boot_loop_play $B2B3 (and boot_reset $A66F,
-                                               boot_get_clause $A6E4, boot_queue_string $C617) */
 #define ROM_UTIL_SHL4              0xC656   /* called by cmd_apply_pitch $A835, $A83F; cmd_set_formant $A952;
                                                cmd_set_mark_space $A9AD; cmd_hex_byte $B455 (all C: util_shl4 in
                                                fw_ops.h) */

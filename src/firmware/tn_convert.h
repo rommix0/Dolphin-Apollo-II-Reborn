@@ -3,8 +3,6 @@
 /* The clause-to-phonetic-text driver of text normalisation (ROM $B1E6), decompiled (M4.1 spec section 2.2). */
 #include "fw.h"
 
-/* Routines still in ROM that tn_convert_clause calls */
-#define ROM_ISR_PAR_READY       0xC5D6   /* parallel mode: ready for the next host byte; A, X, Y preserved */
 #define TN_PHONETIC_FLUSH       0xFA     /* tn_phon_len at which tn_phonetic is spoken mid-clause */
 
 /* $B1E6: convert cmd_text (boot_clause_len characters) to phonetic text in tn_phonetic: per character the

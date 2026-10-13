@@ -2,7 +2,7 @@
 #define FW_PROS_ADDR_H
 /* ROM code addresses of the segment generator (M4.3a spec 2.2) and of the stress and phrase passes before it
    (M4.3b spec 2.2), checked against build/ghidra740/dump and the JSR/JMP operands in the ROM image.
-   isr_par_ready, the one ROM routine they call, is ROM_ISR_PAR_READY in tn_convert.h. */
+   isr_par_ready, the one ROM routine they call, is ROM_ISR_PAR_READY in isr_addr.h. */
 #define ROM_PH_APPEND_PHRASE_PAUSE  0xC9B8   /* exits with JMP ROM_PROS_SEG_TAIL */
 #define ROM_PH_APPEND_PAUSE         0xCA15
 #define ROM_PROS_APPEND_SEGMENT     0xCA3B

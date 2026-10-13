@@ -1,6 +1,7 @@
 #include "cmd_play_event.h"
 #include "cmd_addr.h"
 #include "fw_ops.h"
+#include "isr_addr.h"
 #include "par_addr.h"
 #include "data/fw_data.h"
 

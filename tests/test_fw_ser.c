@@ -24,6 +24,7 @@ static uint8_t g_sfr[0x100];     /* the stub's SFRs: a read returns g_sfr[addr],
 static log_entry g_log[MAX_LOG];
 static unsigned g_nlog, g_ncalls;
 static bool g_wait_ok;           /* what the stub's wait returns */
+static uint16_t g_wait_at;       /* the ROM loop the last wait stood for */
 static uint8_t g_script_addr;    /* reads of this SFR take the next g_script value while any is left (a level that */
 static uint8_t g_script[8];      /* changes between two reads), storing it in g_sfr; 0 = no script */
 static unsigned g_script_n, g_script_pos;
@@ -51,10 +52,11 @@ static void stub_write_sfr(void *ctx, uint8_t addr, uint8_t value)
     log_add(LOG_WRITE, addr, value);
 }
 
-static bool stub_wait(void *ctx, fw_wait_kind kind)
+static bool stub_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     (void)ctx;
     log_add(LOG_WAIT, (uint8_t)kind, 0);
+    g_wait_at = at;
     return g_wait_ok;
 }
 
@@ -83,6 +85,7 @@ static void setup(void)
     g_nlog = 0;
     g_ncalls = 0;
     g_wait_ok = true;
+    g_wait_at = 0;
     g_script_addr = 0;
     g_script_n = g_script_pos = 0;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
@@ -190,32 +193,33 @@ static void test_sfr_faults(void)
     CHECK_EQ(g_nlog, 0);                          /* not even the write */
 }
 
-/* fw_wait (M4.6a spec 3.3): one host wait of the kind; no host, a host without wait, or a wait that fails is a fault
-   at the kind's ROM loop, ser_tx_wait $C500. */
+/* fw_wait (M4.6a spec 3.3, M4.6b spec 3.2): one host wait of the kind, with the ROM loop it stands for; no host, a
+   host without wait, or a wait that fails is a fault at that loop, here ser_tx_wait $C500. */
 static void test_wait(void)
 {
     setup();
-    fw_wait(&g_f, FW_WAIT_UART_TX);
+    fw_wait(&g_f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);
     CHECK_EQ(g_nlog, 1);
     check_log(0, LOG_WAIT, FW_WAIT_UART_TX, 0);
+    CHECK_EQ(g_wait_at, 0xC500);
     CHECK(!g_f.fault);
 
     setup();
     g_wait_ok = false;
-    fw_wait(&g_f, FW_WAIT_UART_TX);
+    fw_wait(&g_f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);
     CHECK(g_f.fault);
     CHECK_EQ(g_f.fault_addr, FW_WAIT_UART_TX_LOOP);
 
     setup();
     g_host.wait = NULL;
-    fw_wait(&g_f, FW_WAIT_UART_TX);
+    fw_wait(&g_f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);
     CHECK(g_f.fault);
     CHECK_EQ(g_f.fault_addr, 0xC500);
     CHECK_EQ(g_nlog, 0);
 
     fw f;
     fw_init(&f, g_ram, fw_image_get(), NULL);
-    fw_wait(&f, FW_WAIT_UART_TX);
+    fw_wait(&f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);
     CHECK(f.fault);
     CHECK_EQ(f.fault_addr, 0xC500);
 }

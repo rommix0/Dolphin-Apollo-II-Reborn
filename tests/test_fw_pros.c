@@ -5,6 +5,7 @@
 #include <string.h>
 #include "test.h"
 #include "engine/thunks.h"
+#include "firmware/isr_addr.h"
 #include "firmware/ph_expand.h"
 #include "firmware/pros_addr.h"
 #include "firmware/pros_decl.h"

@@ -4,7 +4,7 @@
 /* Small steps the ported routines share (M4.4a spec 2.6), and the two shift routines (M4.4b spec 2.2). */
 
 #include "fw.h"
-#include "tn_convert.h"   /* ROM_ISR_PAR_READY */
+#include "isr_addr.h"
 
 /* JSR isr_par_ready with the registers the ROM has at the JSR (it preserves A, X and Y). */
 static inline void fw_par_ready(fw *f, fw_regs r) { fw_rom_call(f, ROM_ISR_PAR_READY, &r, FW_ROM_CALL_BUDGET); }

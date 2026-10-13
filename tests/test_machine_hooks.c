@@ -5,6 +5,7 @@
 #include "rom_fixture.h"
 #include "machine/machine.h"
 #include "engine/thunks.h"
+#include "firmware/isr_addr.h"
 #include "firmware/par_addr.h"
 #include "firmware/tn_convert.h"
 
@@ -413,10 +414,25 @@ static void test_host_sfr(void)
     CHECK(!b.f.fault);
 }
 
-/* The firmware's hardware wait (M4.6a spec 3.3): FW_WAIT_UART_TX runs ser_tx_wait at $C500 (BBC1 UART_STATUS,$C500 /
-   RTS, here in the synthetic ROM) on the emulated CPU through a ROM call: A, X, Y, SP and the PC as they were, the
-   loop's cycles spent (BBC1 not taken, the transmitter being ready, then RTS). Once the bridge deadline has passed
-   it fails, and fw_wait faults at $C500. */
+#define SYN_ISR   0xC600   /* the synthetic timer interrupt handler */
+#define SYN_LOOP  0xC700   /* a synthetic BBC3 ICR2 loop */
+
+/* Timer 2 running with a 400-cycle period (prescaler 0, reload 99: 4 x 1 x 100), its interrupt enabled (ICR2 bit 2)
+   or not, written through the bus as the CPU's LDM writes them; its request bit 3 clear. */
+static void timer2_on(machine *m, bool irq)
+{
+    m->bus.write(m->bus.ctx, 0xDE, 0);
+    m->bus.write(m->bus.ctx, 0xDF, 99);
+    m->bus.write(m->bus.ctx, M50734_ICR2, irq ? 0x04 : 0x00);
+}
+
+/* The firmware's hardware wait (M4.6a spec 3.3, M4.6b spec 3.2): FW_WAIT_UART_TX runs ser_tx_wait at $C500 (BBC1
+   UART_STATUS,$C500 / RTS, here in the synthetic ROM) on the emulated CPU through a ROM call: A, X, Y, SP and the PC
+   as they were, the loop's cycles spent (BBC1 not taken, the transmitter being ready, then RTS). Once the bridge
+   deadline has passed it fails, and fw_wait faults at $C500. FW_WAIT_TIMER2 and FW_WAIT_TIMER3 run the synthetic
+   loops at $B372 (BBC3 ICR2) and $B37F (BBC5 ICR2) until the timer's request bit; FW_WAIT_INTERRUPT returns once
+   the timer interrupt's handler has run; each with the PC and SP as they were. A deadline that passes in the wait
+   ends it with a fault at the loop given. */
 static void test_host_wait(void)
 {
     static fw_bridge b;
@@ -429,7 +445,7 @@ static void test_host_wait(void)
     g_m.cpu.x = 0x22;
     g_m.cpu.y = 0x33;
     uint64_t c0 = g_m.cpu.cycles;
-    fw_wait(&b.f, FW_WAIT_UART_TX);
+    fw_wait(&b.f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);
     CHECK(!b.f.fault);
     CHECK_EQ(g_m.cpu.a, 0x11);
     CHECK_EQ(g_m.cpu.x, 0x22);
@@ -439,10 +455,45 @@ static void test_host_wait(void)
     CHECK_EQ(g_m.cpu.cycles - c0, 11);   /* BBC1 zp not taken (5), RTS (6) */
 
     b.deadline = g_m.cpu.cycles;         /* passed: the wait fails without running an instruction */
-    fw_wait(&b.f, FW_WAIT_UART_TX);
+    fw_wait(&b.f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);
     CHECK(b.f.fault);
     CHECK_EQ(b.f.fault_addr, FW_WAIT_UART_TX_LOOP);
     CHECK_EQ(g_m.cpu.cycles - c0, 11);
+
+    static const uint8_t t2_loop[] = { 0x77, 0xFE, 0xFD };   /* $B372: BBC3 ICR2,$B372 */
+    static const uint8_t t3_loop[] = { 0xB7, 0xFE, 0xFD };   /* $B37F: BBC5 ICR2,$B37F */
+    static const uint8_t isr[] = { 0x7F, 0xFE, 0xE6, 0x20, 0x40 };
+    put(FW_WAIT_TIMER2_LOOP, t2_loop, sizeof t2_loop);
+    put(FW_WAIT_TIMER3_LOOP, t3_loop, sizeof t3_loop);
+    put(SYN_ISR, isr, sizeof isr);
+    vector(0xFFF8, SYN_ISR);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    CHECK(fw_bridge_init(&b, &g_m));
+    timer2_on(&g_m, false);
+    fw_wait(&b.f, FW_WAIT_TIMER2, FW_WAIT_TIMER2_LOOP);
+    CHECK(!b.f.fault);
+    CHECK(g_m.sfr.icr2 & 0x08);
+    g_m.bus.write(g_m.bus.ctx, 0xE0, 0);         /* timer 3: prescaler 0, reload $28 (164 cycles) */
+    g_m.bus.write(g_m.bus.ctx, 0xE1, 0x28);
+    fw_wait(&b.f, FW_WAIT_TIMER3, FW_WAIT_TIMER3_LOOP);
+    CHECK(!b.f.fault);
+    CHECK(g_m.sfr.icr2 & 0x20);
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    g_m.bus.write(g_m.bus.ctx, M50734_ICR2, 0x04);   /* timer 2's interrupt alone */
+    g_m.cpu.p = 0;
+    fw_wait(&b.f, FW_WAIT_INTERRUPT, 0xB877);
+    CHECK(!b.f.fault);
+    CHECK_EQ(g_m.ram[0x20], 1);
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+
+    g_m.sfr.timer_running[1] = false;            /* no interrupt comes: the deadline ends the wait */
+    b.deadline = g_m.cpu.cycles + 500;
+    fw_wait(&b.f, FW_WAIT_INTERRUPT, 0xB877);
+    CHECK(b.f.fault);
+    CHECK_EQ(b.f.fault_addr, 0xB877);
+    CHECK(g_m.cpu.cycles >= b.deadline);
+    CHECK(g_m.cpu.cycles < b.deadline + 8);
 }
 
 /* machine_return_interrupt is the CPU's RTI (M4.6a spec 3.2): from the same interrupt frame (the PC $9007, then P with
@@ -469,6 +520,167 @@ static void test_return_interrupt(void)
     CHECK_EQ(g_c.cpu.s, 0xFF);
     CHECK_EQ(g_m.cpu.p, CPU740_N | CPU740_Z | CPU740_C | CPU740_B);
     CHECK_EQ(g_c.cpu.p, g_m.cpu.p);
+}
+
+static unsigned g_frames;
+static uint8_t g_frame[APOLLO_FRAME_BYTES];
+
+static void on_frame(void *user, const uint8_t frame[APOLLO_FRAME_BYTES])
+{
+    (void)user;
+    g_frames++;
+    memcpy(g_frame, frame, APOLLO_FRAME_BYTES);
+}
+
+/* machine_capture_frame (M4.6b spec 3.3) is the capture the step loop makes at $B306: the 20 bytes at the $2C/$2D
+   pointer to the frame callback, frames_produced counted. */
+static void test_capture_frame(void)
+{
+    static const uint8_t nop[] = { 0xEA };
+    load_main(0xC100);
+    put(APOLLO_SWAP_PC, nop, sizeof nop);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    for (int i = 0; i < APOLLO_FRAME_BYTES; i++)
+        g_m.ram[0x16B9 + i] = (uint8_t)(0x40 + i);
+    g_m.ram[APOLLO_PRODUCER_PTR] = 0xB9;
+    g_m.ram[APOLLO_PRODUCER_PTR + 1] = 0x16;
+    machine_clone(&g_c, &g_m);
+    machine_set_outputs(&g_m, on_frame, NULL);
+    machine_set_outputs(&g_c, on_frame, NULL);
+    g_frames = 0;
+    g_m.cpu.pc = APOLLO_SWAP_PC;
+    CHECK(machine_step(&g_m));                   /* the step at $B306 captures, then runs the NOP */
+    CHECK_EQ(g_frames, 1);
+    CHECK_EQ(g_m.frames_produced, 1);
+    uint8_t first[APOLLO_FRAME_BYTES];
+    memcpy(first, g_frame, sizeof first);
+    machine_capture_frame(&g_c);
+    CHECK_EQ(g_frames, 2);
+    CHECK_EQ(g_c.frames_produced, 1);
+    CHECK(memcmp(first, g_frame, sizeof first) == 0);
+    CHECK_EQ(first[0], 0x40);
+    CHECK_EQ(first[19], 0x53);
+    CHECK_EQ(g_c.cpu.pc, 0x9000);                /* nothing executed */
+}
+
+/* machine_run_loop (M4.6b spec 3.3): BBC3 ICR2 at $C700 runs with I set until timer 2 sets its request bit, so the
+   timer's interrupt, enabled with I clear before, is not taken (SP unchanged); then the PC and P are as they were.
+   A loop that cannot end fails after its budget, the PC and P put back all the same. */
+static void test_run_loop(void)
+{
+    static const uint8_t loop[] = { 0x77, 0xFE, 0xFD, 0xEA };   /* $C700: BBC3 ICR2,$C700 / NOP */
+    load_main(0xC100);
+    put(SYN_LOOP, loop, sizeof loop);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    timer2_on(&g_m, true);
+    g_m.cpu.p = CPU740_C;
+    uint64_t c0 = g_m.cpu.cycles;
+    CHECK(machine_run_loop(&g_m, SYN_LOOP, SYN_LOOP + 3, 10000));
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK_EQ(g_m.cpu.p, CPU740_C);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    CHECK(g_m.sfr.icr2 & 0x08);
+    CHECK(g_m.cpu.cycles - c0 >= 400);
+    CHECK(g_m.cpu.cycles - c0 < 413);            /* BBC3 taken 7 cycles a pass, not taken 5 */
+
+    g_m.sfr.timer_running[1] = false;            /* nothing sets the bit any more */
+    g_m.sfr.icr2 = 0;
+    c0 = g_m.cpu.cycles;
+    CHECK(!machine_run_loop(&g_m, SYN_LOOP, SYN_LOOP + 3, 1000));
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK_EQ(g_m.cpu.p, CPU740_C);
+    CHECK(g_m.cpu.cycles - c0 >= 1000);
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+}
+
+/* A replacement of the synthetic handler: counts, clears the request and exits like RTI. */
+static bool hook_isr_c(machine *m, void *user)
+{
+    (void)user;
+    g_calls++;
+    m->sfr.icr2 &= (uint8_t)~0x08;
+    machine_return_interrupt(m);
+    return true;
+}
+
+/* machine_wait_interrupt (M4.6b spec 3.3): as a WIT at $9000, the CPU idles until timer 2's interrupt; its handler
+   ($C600: CLB3 ICR2 / INC $20 / RTI) runs and the call returns with the PC and SP back, the CPU no longer waiting.
+   A byte waiting in the serial queue is not delivered (only the idle WIT $C602 delivers). With the handler replaced
+   by a hook the same, the ROM handler not run. Without an interrupt it fails after its budget; with I set it fails
+   at once (the interrupt could never be taken). */
+static void test_wait_interrupt(void)
+{
+    static const uint8_t isr[] = { 0x7F, 0xFE, 0xE6, 0x20, 0x40 };   /* CLB3 ICR2 / INC $20 / RTI */
+    static const uint8_t byte[] = { 0x41 };
+    load_main(0xC100);
+    put(SYN_ISR, isr, sizeof isr);
+    vector(0xFFF8, SYN_ISR);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    CHECK(machine_feed_serial(&g_m, byte, sizeof byte));
+    timer2_on(&g_m, true);
+    g_m.cpu.p = 0;
+    uint64_t c0 = g_m.cpu.cycles;
+    CHECK(machine_wait_interrupt(&g_m, 10000));
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    CHECK(!g_m.cpu.waiting);
+    CHECK_EQ(g_m.ram[0x20], 1);
+    CHECK(g_m.cpu.cycles - c0 >= 400);
+    CHECK(!g_m.sfr.uart_rx_full);                /* no byte delivered */
+    CHECK(g_m.q_head != g_m.q_tail);
+
+    g_calls = 0;
+    CHECK(machine_hook(&g_m, SYN_ISR, hook_isr_c, NULL));
+    CHECK(machine_wait_interrupt(&g_m, 10000));
+    CHECK_EQ(g_calls, 1);
+    CHECK_EQ(g_m.ram[0x20], 1);                  /* the ROM handler did not run */
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+
+    g_m.sfr.timer_running[1] = false;            /* no interrupt comes */
+    g_m.sfr.icr2 = 0x04;
+    c0 = g_m.cpu.cycles;
+    CHECK(!machine_wait_interrupt(&g_m, 1000));
+    CHECK(!g_m.cpu.waiting);
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK(g_m.cpu.cycles - c0 >= 1000);
+    CHECK(g_m.cpu.cycles - c0 < 1008);
+
+    g_m.sfr.icr2 = 0x0C;                         /* requested and enabled, but masked */
+    g_m.cpu.p = CPU740_I;
+    c0 = g_m.cpu.cycles;
+    CHECK(!machine_wait_interrupt(&g_m, 1000));
+    CHECK_EQ(g_m.cpu.cycles, c0);
+    CHECK(!g_m.cpu.waiting);
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK_EQ(g_calls, 1);
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+}
+
+/* The bridge's DSP port and frame event (M4.6b spec 3.1): fw_dsp_write is a bus write of $8000 (counted, grouped
+   into the raw frame), fw_frame_done the machine's frame capture. */
+static void test_host_dsp(void)
+{
+    static fw_bridge b;
+    load_main(0xC100);
+    CHECK(fw_bridge_init(&b, &g_m));
+    machine_set_outputs(&g_m, on_frame, NULL);
+    g_frames = 0;
+    fw_dsp_write(&b.f, 0x12);
+    fw_dsp_write(&b.f, 0x34);
+    CHECK_EQ(g_m.port_writes, 2);
+    CHECK_EQ(g_m.raw_pos, 2);
+    CHECK_EQ(g_m.raw_buf[0], 0x12);
+    CHECK_EQ(g_m.raw_buf[1], 0x34);
+    g_m.ram[0x1700] = 0x77;
+    g_m.ram[APOLLO_PRODUCER_PTR] = 0x00;
+    g_m.ram[APOLLO_PRODUCER_PTR + 1] = 0x17;
+    fw_frame_done(&b.f);
+    CHECK_EQ(g_frames, 1);
+    CHECK_EQ(g_m.frames_produced, 1);
+    CHECK_EQ(g_frame[0], 0x77);
+    CHECK(!b.f.fault);
+    CHECK_EQ(g_m.unmodelled_count, 0);
 }
 
 /* The bridge's cycle deadline (thunks.h): a ROM call from C gets at most the cycles left before b->deadline, and
@@ -584,6 +796,10 @@ void suite_machine_hooks(void)
     test_host_sfr();
     test_host_wait();
     test_return_interrupt();
+    test_capture_frame();
+    test_run_loop();
+    test_wait_interrupt();
+    test_host_dsp();
     test_bridge_deadline();
     test_waits_thunk_deadline();
 }

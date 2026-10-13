@@ -406,6 +406,47 @@ bool machine_finish_routine(machine *m, uint64_t max_cycles)
     return true;
 }
 
+void machine_capture_frame(machine *m)
+{
+    capture_frame(m);
+}
+
+bool machine_wait_interrupt(machine *m, uint64_t max_cycles)
+{
+    cpu740 *c = &m->cpu;
+    uint16_t pc = c->pc;
+    uint8_t s = c->s;
+    uint64_t end = c->cycles + max_cycles;
+    c->waiting = true;   /* a WIT at pc: at_idle is false there, so maybe_deliver delivers nothing */
+    while (c->cycles < end) {
+        prepare(m);
+        if (c->waiting && c->irq_lines && (c->p & CPU740_I))
+            break;       /* the CPU would wake and run on at pc without taking the interrupt */
+        if (!exec(m))
+            break;
+        if (!c->waiting && c->pc == pc && c->s == s)
+            return true;   /* the handler's RTI is back at pc */
+    }
+    c->waiting = false;
+    return false;
+}
+
+bool machine_run_loop(machine *m, uint16_t loop, uint16_t exit, uint64_t max_cycles)
+{
+    cpu740 *c = &m->cpu;
+    uint16_t pc = c->pc;
+    uint8_t p = c->p;
+    uint64_t end = c->cycles + max_cycles;
+    bool ok = true;
+    c->p |= CPU740_I;
+    c->pc = loop;
+    while (ok && c->pc != exit)
+        ok = c->cycles < end && machine_step(m);
+    c->pc = pc;
+    c->p = p;
+    return ok;
+}
+
 void machine_clone(machine *dst, const machine *src)
 {
     memcpy(dst, src, sizeof *dst);

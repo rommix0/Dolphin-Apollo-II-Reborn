@@ -13,6 +13,7 @@
 #include "diff_state.h"
 #include "engine/hybrid_engine.h"
 #include "engine/thunks.h"
+#include "firmware/isr_addr.h"
 #include "firmware/tn_convert.h"
 #include "render/render.h"
 

@@ -1,5 +1,6 @@
 #include "tn_convert.h"
 #include "cmd_run.h"
+#include "isr_addr.h"
 #include "lts.h"
 #include "par_play.h"
 #include "pros_make.h"

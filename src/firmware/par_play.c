@@ -2,6 +2,7 @@
 #include "cmd_play_event.h"
 #include "frm_build.h"
 #include "fw_ops.h"
+#include "isr_addr.h"
 #include "par_addr.h"
 #include "par_start.h"
 #include "par_track.h"

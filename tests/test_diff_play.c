@@ -35,6 +35,7 @@
 #include "engine/rom_engine.h"
 #include "engine/thunks.h"
 #include "firmware/par_addr.h"
+#include "firmware/isr_addr.h"
 #include "firmware/tn_convert.h"
 
 #define PLAY_BUDGET        1000000000ULL   /* copy A: the longest call (seg_wrap_word, 1,774 frames) is 35.5 M cycles */
