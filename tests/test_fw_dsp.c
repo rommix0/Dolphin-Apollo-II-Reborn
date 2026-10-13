@@ -25,6 +25,8 @@ static uint8_t g_sfr[0x100];     /* the stub's SFRs: a read returns g_sfr[addr],
 static event g_log[MAX_LOG];
 static unsigned g_nlog;
 static bool g_wait_ok;           /* what the stub's wait returns */
+static unsigned g_iwaits;        /* FW_WAIT_INTERRUPT waits so far */
+static unsigned g_flag_every;    /* the scripted timer interrupt sets isr_frame_flag bit 0 at every n-th (0: never) */
 
 static void log_add(ev_kind kind, uint16_t addr, uint8_t value)
 {
@@ -51,6 +53,8 @@ static bool stub_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     (void)ctx;
     log_add(EV_WAIT, at, (uint8_t)kind);
+    if (kind == FW_WAIT_INTERRUPT && g_wait_ok && g_flag_every && ++g_iwaits % g_flag_every == 0)
+        g_ram[ISR_FRAME_FLAG] |= 1;
     return g_wait_ok;
 }
 
@@ -80,6 +84,8 @@ static void setup(void)
     g_host.frame_done = stub_frame_done;
     g_nlog = 0;
     g_wait_ok = true;
+    g_iwaits = 0;
+    g_flag_every = 0;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
 }
 
@@ -237,6 +243,21 @@ static void test_rows(void)
     check_row("isr_volume_half", 0xB46C, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
     check_row("isr_par_ready", 0xC5D6, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
     check_row("isr_par_hold", 0xC5DE, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("isr_timer_start", 0xB35D, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("isr_dsp_reset", 0xB38B, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("isr_speech_stop", 0xB398, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    static const char *const waits[] = { "isr_speech_start", "isr_wait_frames", "isr_wait_frame" };
+    static const uint16_t addrs[] = { 0xB323, 0xB356, 0xB465 };
+    for (unsigned i = 0; i < 3; i++) {          /* they wait on the timer interrupt: diff_play checks them */
+        const fw_replacement *r = fw_replacement_find(waits[i]);
+        CHECK(r != NULL);
+        if (!r)
+            continue;
+        CHECK_EQ(r->addr, addrs[i]);
+        CHECK_EQ(r->outputs, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+        CHECK(r->waits);
+        CHECK(!r->isr);
+    }
 }
 
 /* isr_set_volume $ACE8 at all 16 levels: $75 = ((A ^ $F) & $F) << 3 ($ACE8-$ACEF); P3 read once (AND P3) and written
@@ -341,6 +362,176 @@ static void test_par_handshake(void)
     CHECK(!g_f.fault);
 }
 
+/* The SFR accesses of isr_dsp_reset $B38B from P2 = p2: CLB0, SEB0, CLB0 P2, each a read then a write. */
+#define DSP_RESET_LOG(p2) \
+    { EV_READ, SFR_P2, (p2) }, { EV_WRITE, SFR_P2, (uint8_t)((p2) & ~1) }, \
+    { EV_READ, SFR_P2, (uint8_t)((p2) & ~1) }, { EV_WRITE, SFR_P2, (uint8_t)((p2) | 1) }, \
+    { EV_READ, SFR_P2, (uint8_t)((p2) | 1) }, { EV_WRITE, SFR_P2, (uint8_t)((p2) & ~1) }
+
+/* isr_dsp_reset $B38B: P2.0 low, high, low; the other P2 bits kept. P2 bit 7 (the lower-ROM window) is set and stays
+   set, so the window cache stays on (M4.6b spec 3.4). A, X and Y untouched. */
+static void test_dsp_reset(void)
+{
+    static const event log[] = { DSP_RESET_LOG(0xF2) };
+    setup();
+    g_sfr[SFR_P2] = 0xF2;
+    g_f.low_window = true;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_dsp_reset(&g_f, &r);
+    check_log(log, 6);
+    CHECK(g_f.low_window);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0x22);
+    CHECK_EQ(r.y, 0x33);
+    CHECK(!g_f.fault);
+}
+
+/* The SFR accesses and waits of isr_timer_start $B35D ($B35F-$B387) from ICR2 = $3F and P3 = p3. */
+#define TIMER_START_LOG(p3) \
+    { EV_WRITE, SFR_T2_PRE, 0 }, { EV_WRITE, SFR_T3_PRE, 0 }, \
+    { EV_READ, SFR_P3, (p3) }, { EV_WRITE, SFR_P3, (uint8_t)((p3) | 1) }, { EV_WRITE, SFR_T2_RELOAD, 4 }, \
+    { EV_READ, SFR_ICR2, 0x3F }, { EV_WRITE, SFR_ICR2, 0x37 }, { EV_READ, SFR_ICR2, 0x37 }, \
+    { EV_WRITE, SFR_ICR2, 0x33 }, { EV_WAIT, 0xB372, FW_WAIT_TIMER2 }, { EV_WRITE, SFR_T3_RELOAD, 0x28 }, \
+    { EV_READ, SFR_ICR2, 0x33 }, { EV_WRITE, SFR_ICR2, 0x13 }, { EV_READ, SFR_ICR2, 0x13 }, \
+    { EV_WRITE, SFR_ICR2, 0x03 }, { EV_WRITE, SFR_P23_FUNC, 1 }, { EV_WAIT, 0xB37F, FW_WAIT_TIMER3 }, \
+    { EV_WRITE, SFR_T3_RELOAD, 0x31 }, { EV_WRITE, SFR_ICR2, 0x10 }
+
+/* isr_timer_start $B35D: the whole SFR order around its two waits: the prescalers, isr_tick_div decremented twice
+   (10 -> 8), P3.0 set, timer 2's reload 4 and its request and enable bits cleared (CLB3, CLB2), the wait for its
+   request at $B372; timer 3's reload $28 and its request and enable bits cleared (CLB5, CLB4), P23_FUNC = 1, the
+   wait at $B37F; then the reload $31 and ICR2 = $10. The stub keeps ICR2 as written: its request bits are the
+   machine's (the host's loops end when they are set). A, X and Y untouched. A tick count of 1 wraps to $FF. */
+static void test_timer_start(void)
+{
+    static const event log[] = { TIMER_START_LOG(0x80) };
+    setup();
+    g_sfr[SFR_ICR2] = 0x3F;
+    g_sfr[SFR_P3] = 0x80;
+    g_ram[ISR_TICK_DIV] = 10;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_timer_start(&g_f, &r);
+    check_log(log, sizeof log / sizeof log[0]);
+    CHECK_EQ(g_ram[ISR_TICK_DIV], 8);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0x22);
+    CHECK_EQ(r.y, 0x33);
+    CHECK(!g_f.fault);
+
+    setup();
+    g_ram[ISR_TICK_DIV] = 1;
+    isr_timer_start(&g_f, &r);
+    CHECK_EQ(g_ram[ISR_TICK_DIV], 0xFF);         /* 8-bit DEC */
+}
+
+/* isr_speech_stop $B398: P23_FUNC = 0, ICR2 = 0 (LDM: writes only), isr_dsp_reset, then boot_speaking bit 0
+   cleared (the other bits kept). A, X and Y untouched. */
+static void test_speech_stop(void)
+{
+    static const event log[] = { { EV_WRITE, SFR_P23_FUNC, 0 }, { EV_WRITE, SFR_ICR2, 0 }, DSP_RESET_LOG(0x71) };
+    setup();
+    g_sfr[SFR_P23_FUNC] = 1;
+    g_sfr[SFR_ICR2] = 0x10;
+    g_sfr[SFR_P2] = 0x71;
+    g_ram[BOOT_SPEAKING] = 0xFF;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_speech_stop(&g_f, &r);
+    check_log(log, sizeof log / sizeof log[0]);
+    CHECK_EQ(g_ram[BOOT_SPEAKING], 0xFE);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0x22);
+    CHECK_EQ(r.y, 0x33);
+    CHECK(!g_f.fault);
+}
+
+/* isr_speech_start $B323: frm_source_index = cmd_source_prosody's bits 7-5 and frm_filter_index = its bit 4
+   ($B5 = 101 1 0101: 5 and 1; the old values are cleared first); the ISR counters ($59 = $5B = 10, $5A = $5C = 0);
+   isr_dsp_reset; isr_timer_start (isr_tick_div 10 -> 8); isr_wait_frames with X = 1: one wait at $B465, the flag
+   coming with it, then cleared. A = 0 and X = 0 out, Y untouched. */
+static void test_speech_start(void)
+{
+    static const event log[] = { DSP_RESET_LOG(0x70), TIMER_START_LOG(0x00), { EV_WAIT, 0xB465, FW_WAIT_INTERRUPT } };
+    setup();
+    g_sfr[SFR_ICR2] = 0x3F;
+    g_sfr[SFR_P2] = 0x70;
+    g_ram[CMD_SOURCE_PROSODY] = 0xB5;
+    g_ram[FRM_SOURCE_INDEX] = 0xEE;
+    g_ram[FRM_FILTER_INDEX] = 0xEE;
+    g_ram[ISR_WORD_OFS] = 0x12;
+    g_ram[ISR_FRAME_FLAG] = 0x81;               /* stale: cleared before the wait */
+    g_flag_every = 1;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_speech_start(&g_f, &r);
+    check_log(log, sizeof log / sizeof log[0]);
+    CHECK_EQ(g_ram[FRM_SOURCE_INDEX], 5);
+    CHECK_EQ(g_ram[FRM_FILTER_INDEX], 1);
+    CHECK_EQ(g_ram[ISR_TICK_DIV], 8);
+    CHECK_EQ(g_ram[ISR_WORDS_LEFT], 10);
+    CHECK_EQ(g_ram[ISR_WORD_OFS], 0);
+    CHECK_EQ(g_ram[ISR_FRAME_FLAG], 0);
+    CHECK_EQ(r.a, 0);
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0x33);
+    CHECK(!g_f.fault);
+}
+
+/* isr_wait_frame $B465 with a scripted timer interrupt: the flag already set (bit 0 of $03): no wait, the whole byte
+   cleared; not set: a wait at $B465 per interrupt until the third brings it, then cleared (bit 1 alone, $02, does not
+   count); a wait that fails: a fault at $B465 and no more waits. A, X and Y untouched. */
+static void test_wait_frame(void)
+{
+    setup();
+    g_ram[ISR_FRAME_FLAG] = 0x03;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_wait_frame(&g_f, &r);
+    CHECK_EQ(g_nlog, 0);
+    CHECK_EQ(g_ram[ISR_FRAME_FLAG], 0);
+
+    static const event log[] = {
+        { EV_WAIT, 0xB465, FW_WAIT_INTERRUPT }, { EV_WAIT, 0xB465, FW_WAIT_INTERRUPT },
+        { EV_WAIT, 0xB465, FW_WAIT_INTERRUPT },
+    };
+    setup();
+    g_ram[ISR_FRAME_FLAG] = 0x02;
+    g_flag_every = 3;
+    isr_wait_frame(&g_f, &r);
+    check_log(log, 3);
+    CHECK_EQ(g_ram[ISR_FRAME_FLAG], 0);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0x22);
+    CHECK_EQ(r.y, 0x33);
+    CHECK(!g_f.fault);
+
+    setup();
+    g_wait_ok = false;
+    isr_wait_frame(&g_f, &r);
+    CHECK_EQ(g_nlog, 1);
+    CHECK(g_f.fault);
+    CHECK_EQ(g_f.fault_addr, 0xB465);
+}
+
+/* isr_wait_frames $B356 with X = 2: two frames, the DEX / BNE $B356 taken once, a branch no ROM caller takes (its
+   one caller, isr_speech_start, passes X = 1), pinned here; X = 0 waits 256 frames (8-bit DEX). X = 0 out, A and Y
+   untouched. */
+static void test_wait_frames_two(void)
+{
+    setup();
+    g_flag_every = 1;
+    fw_regs r = { 0x11, 2, 0x33, 0 };
+    isr_wait_frames(&g_f, &r);
+    CHECK_EQ(g_iwaits, 2);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0x33);
+
+    setup();
+    g_flag_every = 1;
+    r.x = 0;
+    isr_wait_frames(&g_f, &r);
+    CHECK_EQ(g_iwaits, 256);
+    CHECK_EQ(r.x, 0);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_dsp(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -352,4 +543,10 @@ void suite_fw_dsp(void)
     test_set_volume();
     test_volume_half();
     test_par_handshake();
+    test_dsp_reset();
+    test_timer_start();
+    test_speech_stop();
+    test_speech_start();
+    test_wait_frame();
+    test_wait_frames_two();
 }

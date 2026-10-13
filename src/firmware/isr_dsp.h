@@ -24,4 +24,25 @@ void isr_set_volume(fw *f, fw_regs *r);
 /* $B46C: isr_set_volume with A = cmd_volume >> 1. */
 void isr_volume_half(fw *f, fw_regs *r);
 
+/* $B38B: the DSP reset line P2.0 low, high, low (CLB0, SEB0, CLB0 P2), inside PHP/SEI ... PLP. A, X and Y
+   untouched. */
+void isr_dsp_reset(fw *f, fw_regs *r);
+/* $B35D: starts the 10 kHz DSP tick, inside PHP/SEI ... PLP: T2_PRE = T3_PRE = 0; isr_tick_div decremented twice;
+   P3.0 set; T2_RELOAD = 4; ICR2 bits 3 and 2 cleared; a wait for timer 2's request bit (FW_WAIT_TIMER2, $B372);
+   T3_RELOAD = $28; ICR2 bits 5 and 4 cleared; P23_FUNC = 1; a wait for timer 3's request bit (FW_WAIT_TIMER3,
+   $B37F); T3_RELOAD = $31; ICR2 = $10 (timer 3's interrupt alone). A, X and Y untouched. */
+void isr_timer_start(fw *f, fw_regs *r);
+/* $B398: P23_FUNC = 0, ICR2 = 0, isr_dsp_reset, boot_speaking bit 0 cleared. A, X and Y untouched. */
+void isr_speech_stop(fw *f, fw_regs *r);
+/* $B323: frm_source_index = cmd_source_prosody's bits 7-5 and frm_filter_index = its bit 4 (both 0 first, then a ROL
+   per bit); isr_tick_div = isr_words_left = 10, isr_word_ofs = isr_frame_flag = 0; isr_dsp_reset; isr_timer_start;
+   isr_wait_frames with X = 1. A = 0 and X = 0 out, Y untouched. */
+void isr_speech_start(fw *f, fw_regs *r);
+/* $B356: X frame boundaries: isr_wait_frame, then DEX until X is 0 (X = 0 waits 256). X = 0 out, A and Y untouched. */
+void isr_wait_frames(fw *f, fw_regs *r);
+/* $B465: until the timer interrupt has set isr_frame_flag bit 0 (a frame boundary), a wait for the next interrupt
+   (FW_WAIT_INTERRUPT at $B465, M4.6b spec 2.3); then the whole byte = 0 (LDM). A, X and Y untouched. A failed wait
+   ends it (a fault). */
+void isr_wait_frame(fw *f, fw_regs *r);
+
 #endif

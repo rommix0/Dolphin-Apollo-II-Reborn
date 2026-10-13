@@ -23,10 +23,10 @@
 void par_play(fw *f, fw_regs *r);
 
 /* $A7D4: when the utterance has content (FW_UTT_CONTENT, $6B) and no mute is pending (ser_abort bit 0), play it:
-   isr_par_hold, par_play_start (C), isr_speech_start, isr_volume_half, isr_wait_frame, isr_set_volume(cmd_volume),
-   par_play (C), isr_volume_half, isr_wait_frame, isr_set_volume(0), isr_speech_stop. r in: A, X and Y flow into
-   the first calls. r out: A = FW_UTT_CONTENT and X, Y untouched when it does not play; else the registers
-   isr_speech_stop leaves. */
+   isr_par_hold, par_play_start, isr_speech_start, isr_volume_half, isr_wait_frame, isr_set_volume(cmd_volume),
+   par_play, isr_volume_half, isr_wait_frame, isr_set_volume(0), isr_speech_stop (all C since M4.6b). r in: A, X and
+   Y flow into the first calls. r out: A = FW_UTT_CONTENT and X, Y untouched when it does not play; else the
+   registers isr_speech_stop leaves. */
 void boot_loop_play(fw *f, fw_regs *r);
 
 #endif

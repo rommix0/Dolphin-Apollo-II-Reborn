@@ -372,6 +372,73 @@ static void tn_convert_clause_regs(fw *f, cpu740 *c)
     tn_convert_clause(f);
 }
 
+/* isr_speech_start $B323: no register input (X and A are written first: $B323 LDX #0, $B32B LDA). A = 0 ($B344 LDA
+   #0) and X = 0 (isr_wait_frames' DEX) out, Y untouched (isr_dsp_reset, isr_timer_start and isr_wait_frames keep A
+   and Y). Its one caller, boot_play_body ($B2B9), calls isr_volume_half next, which loads A first ($B46C LDA
+   cmd_volume) and hands X and Y on to isr_wait_frame, isr_set_volume and par_play (their rows). No caller reads a
+   flag. It waits on the timer interrupt (isr_wait_frames), so diff_play checks it, not diff_lts. The C
+   boot_loop_play calls the C, so it fires only while the ROM boot_loop_play runs. Declared: A, X, Y. */
+static void isr_speech_start_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_speech_start(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* isr_wait_frames $B356: X in (the count). X = 0 out, A and Y untouched. Its one caller, isr_speech_start ($B352),
+   returns ($B355 RTS), so X and A (0, $B344) and Y are its exit registers (its row). No caller reads a flag. It waits
+   on the timer interrupt, so diff_play checks it, not diff_lts. The C isr_speech_start calls the C, so it fires only
+   while the ROM isr_speech_start runs. Declared: A, X, Y. */
+static void isr_wait_frames_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_wait_frames(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* isr_timer_start $B35D: A, X and Y in and out untouched (LDM, DEC, SEB, CLB and the two BBC loops; PHP / PLP keep
+   the flags). Its one caller, isr_speech_start ($B34D), loads X next ($B350 LDX #1) and returns A and Y as its exit
+   registers (its row). No caller reads a flag. The C isr_speech_start calls the C, so it fires only while the ROM
+   isr_speech_start runs. Declared: A, X, Y. */
+static void isr_timer_start_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_timer_start(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* isr_dsp_reset $B38B: A, X and Y in and out untouched (CLB, SEB, CLB; PHP / PLP keep the flags). isr_speech_start
+   ($B34A) calls isr_timer_start next, which keeps them (its row); isr_speech_stop ($B39E) clears boot_speaking bit 0
+   and returns them as its exit registers (its row). No caller reads a flag. The C isr_speech_start and
+   isr_speech_stop call the C, so it fires only while one of them runs as ROM. Declared: A, X, Y. */
+static void isr_dsp_reset_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_dsp_reset(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* isr_speech_stop $B398: A, X and Y in and out untouched (LDM, LDM, isr_dsp_reset, CLB). Its one caller,
+   boot_play_body ($B2D5), returns ($B2D8 RTS), so they are boot_loop_play's exit registers (its thunk), which no
+   caller reads. No caller reads a flag. The C boot_loop_play calls the C, so it fires only while the ROM
+   boot_loop_play runs. Declared: A, X, Y. */
+static void isr_speech_stop_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_speech_stop(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
 /* par_setup_voice $B3A4: A, X, Y in; none is read (Y reaches frm_build_rest_frame, whose first instruction is
    LDY #$14 at $B41D). A = $0B, X = 9 and Y = $0B out, as the frame builder leaves them: frm_build_rest_frame's loop ends
    at X = 9 ($B436 CPX #8), frm_clamp_mark_space ends with LDA #$0B and Y = $0A + 1 ($B930-$B954); the C calls the C
@@ -413,6 +480,21 @@ static void frm_copy_rest_frame_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
     frm_copy_rest_frame(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* isr_wait_frame $B465: A, X and Y in and out untouched (BBC0, LDM). boot_play_body loads A next ($B2C2 LDA cmd_volume,
+   $B2D0 LDA #0) and hands X and Y on to isr_set_volume and par_play or isr_speech_stop (their rows); isr_wait_frames
+   ($B359 DEX) reads X; par_play ($B8D2) loads A next ($B8D5 LDA #3) and hands X and Y to frm_copy_rest_frame, which
+   loads Y first and keeps X (its row). No caller reads a flag. It waits on the timer interrupt, so diff_play checks
+   it, not diff_lts. The C boot_loop_play, isr_wait_frames and par_play call the C, so it fires only while one of
+   them runs as ROM. Declared: A, X, Y. */
+static void isr_wait_frame_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_wait_frame(f, &r);
     c->a = r.a;
     c->x = r.x;
     c->y = r.y;
@@ -1302,9 +1384,15 @@ THUNK(tn_rule_skip_field)
 THUNK(tn_append_phonetic)
 THUNK(lts_convert_char)
 THUNK(tn_convert_clause)
+THUNK(isr_speech_start)
+THUNK(isr_wait_frames)
+THUNK(isr_timer_start)
+THUNK(isr_dsp_reset)
+THUNK(isr_speech_stop)
 THUNK(par_setup_voice)
 THUNK(frm_build_rest_frame)
 THUNK(frm_copy_rest_frame)
+THUNK(isr_wait_frame)
 THUNK(isr_volume_half)
 THUNK(par_play)
 THUNK(frm_snapshot)
@@ -1402,9 +1490,15 @@ const fw_replacement fw_replacements[] = {
     { "tn_append_phonetic", 0xB154, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_tn_append_phonetic },
     { "lts_convert_char",   0xB172, 0,                   t_lts_convert_char },
     { "tn_convert_clause",  0xB1E6, 0,                   t_tn_convert_clause },
+    { "isr_speech_start",   0xB323, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_speech_start, true },
+    { "isr_wait_frames",    0xB356, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_wait_frames, true },
+    { "isr_timer_start",    0xB35D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_timer_start },
+    { "isr_dsp_reset",      0xB38B, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_dsp_reset },
+    { "isr_speech_stop",    0xB398, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_speech_stop },
     { "par_setup_voice",    0xB3A4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_setup_voice },
     { "frm_build_rest_frame", 0xB41D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_build_rest_frame },
     { "frm_copy_rest_frame", 0xB445, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_copy_rest_frame },
+    { "isr_wait_frame",     0xB465, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_wait_frame, true },
     { "isr_volume_half",    0xB46C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_volume_half },
     { "par_play",           0xB877, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_play, true },
     { "frm_snapshot",       0xB917, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_snapshot },

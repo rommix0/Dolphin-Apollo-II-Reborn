@@ -2,7 +2,6 @@
 #include "cmd_play_event.h"
 #include "frm_build.h"
 #include "fw_ops.h"
-#include "isr_addr.h"
 #include "isr_dsp.h"
 #include "isr_serial.h"
 #include "par_addr.h"
@@ -109,13 +108,13 @@ static void last_frames(fw *f, fw_regs *r)
     }
 }
 
-/* $B8D2-$B8FA, the end: isr_wait_frame; par_frames_left = 3; per rest frame frm_copy_rest_frame, frm_snapshot,
+/* $B8D2-$B8FA, the end: isr_wait_frame (C); par_frames_left = 3; per rest frame frm_copy_rest_frame, frm_snapshot,
    frm_clamp_mark_space and frm_transition_flags (C, the registers flowing from one to the next), a wait for the
    swap, the flag cleared (LDM #0) and DEC par_frames_left (BNE $B8DA). Then cmd_ev_sound_end (a @T effect cut short
    is undone) and isr_par_ready. */
 static void rest_frames(fw *f, fw_regs *r)
 {
-    fw_rom_call(f, ROM_ISR_WAIT_FRAME, r, FW_ROM_CALL_BUDGET);
+    isr_wait_frame(f, r);
     r->a = PAR_REST_FRAMES;
     fw_wr8(f, PAR_FRAMES_LEFT, r->a);
     do {
@@ -164,17 +163,17 @@ static void play_body(fw *f, fw_regs *r)
 {
     isr_par_hold(f, r);
     par_play_start(f, r);
-    fw_rom_call(f, ROM_ISR_SPEECH_START, r, FW_ROM_CALL_BUDGET);
+    isr_speech_start(f, r);
     isr_volume_half(f, r);
-    fw_rom_call(f, ROM_ISR_WAIT_FRAME, r, FW_ROM_CALL_BUDGET);
+    isr_wait_frame(f, r);
     r->a = fw_rd8(f, CMD_VOLUME);
     isr_set_volume(f, r);
     par_play(f, r);
     isr_volume_half(f, r);
-    fw_rom_call(f, ROM_ISR_WAIT_FRAME, r, FW_ROM_CALL_BUDGET);
+    isr_wait_frame(f, r);
     r->a = 0;
     isr_set_volume(f, r);
-    fw_rom_call(f, ROM_ISR_SPEECH_STOP, r, FW_ROM_CALL_BUDGET);
+    isr_speech_stop(f, r);
 }
 
 void boot_loop_play(fw *f, fw_regs *r)

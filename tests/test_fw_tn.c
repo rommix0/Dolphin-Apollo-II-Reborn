@@ -24,7 +24,7 @@ static fw_host g_host;
 static bool g_window;
 static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
-static uint8_t g_p0, g_p3, g_icr1;   /* the SFRs the C isr_par_ready, isr_par_hold and isr_set_volume touch */
+static uint8_t g_sfr[0x100];         /* the SFRs the C speech timing reads and writes, as last written */
 
 static void record(fw *f, uint16_t addr, const fw_regs *r, uint64_t budget)
 {
@@ -41,9 +41,8 @@ static void record(fw *f, uint16_t addr, const fw_regs *r, uint64_t budget)
 }
 
 /* Records every call with tn_phon_len at that moment. cmd_run_next ($A893) plays the ROM's bookkeeping
-   (cmd_next += 1, cmd_next_pos = cmd_positions[cmd_next]); the other helpers leave the registers unchanged.
-   isr_speech_start sets ser_abort bit 0 (a mute as the DSP starts), so the C boot_loop_play of the mid-clause flush
-   plays no segment: par_play goes from its first pass to the three rest frames. */
+   (cmd_next += 1, cmd_next_pos = cmd_positions[cmd_next]); any other call fails (speech timing is C since
+   M4.6b). */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     fw *f = ctx;
@@ -54,56 +53,40 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         fw_wr8(f, CMD_NEXT_POS, fw_rd8(f, (uint16_t)(CMD_POSITIONS + n)));
         return FW_CALL_RETURNED;
     }
-    switch (addr) {
-    case ROM_ISR_SPEECH_START:
-        fw_wr8(f, SER_ABORT, 1);
-        return FW_CALL_RETURNED;
-    case ROM_ISR_WAIT_FRAME:
-    case ROM_ISR_SPEECH_STOP:
-        return FW_CALL_RETURNED;
-    default:
-        return FW_CALL_FAILED;
-    }
+    return FW_CALL_FAILED;
 }
 
-/* Records every wait (addr = its ROM loop). Each is an interrupt handled: the timer interrupt sets isr_frame_flag
-   bit 0 (a frame is due at every wait of the C par_play). */
+/* Records every wait (addr = its ROM loop). Each wait for an interrupt is one handled: the timer interrupt sets
+   isr_frame_flag bit 0 (a frame is due at every wait). isr_timer_start's first wait sets ser_abort bit 0 (a mute as
+   the DSP starts), so the C boot_loop_play of the mid-clause flush plays no segment: par_play goes from its first
+   pass to the three rest frames. */
 static bool mock_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     fw *f = ctx;
     record(f, at, NULL, 0);
     if (kind == FW_WAIT_INTERRUPT)
         fw_wr8(f, ISR_FRAME_FLAG, 1);
+    if (kind == FW_WAIT_TIMER2)
+        fw_wr8(f, SER_ABORT, 1);
     return true;
 }
 
-/* UART_STATUS: the transmitter ready (bit 1), nothing received; P0, P3 and ICR1 as last written. */
+/* UART_STATUS: the transmitter ready (bit 1), nothing received; any other SFR as last written. */
 static uint8_t mock_read_sfr(void *ctx, uint8_t addr)
 {
     (void)ctx;
-    switch (addr) {
-    case 0xE7: return 0x02;
-    case 0xF6: return g_p0;
-    case 0xEE: return g_p3;
-    case 0xFF: return g_icr1;
-    default: return 0x00;
-    }
+    return addr == 0xE7 ? 0x02 : g_sfr[addr];
 }
 
-/* P0 ($F6): isr_par_ready sets bit 3 (recorded as a call of ROM_ISR_PAR_READY), isr_par_hold clears it (recorded as
-   ROM_ISR_PAR_HOLD), neither with registers (the C passes them to nothing); P3 and ICR1 are kept. */
+/* Every SFR write is kept; a write of P0 ($F6) is also recorded: isr_par_ready sets bit 3 (a call of
+   ROM_ISR_PAR_READY), isr_par_hold clears it (ROM_ISR_PAR_HOLD), neither with registers (the C passes them to
+   nothing). */
 static void mock_write_sfr(void *ctx, uint8_t addr, uint8_t value)
 {
     fw *f = ctx;
-    switch (addr) {
-    case 0xF6:
-        g_p0 = value;
+    g_sfr[addr] = value;
+    if (addr == 0xF6)
         record(f, (value & 0x08) ? ROM_ISR_PAR_READY : ROM_ISR_PAR_HOLD, NULL, 0);
-        break;
-    case 0xEE: g_p3 = value; break;
-    case 0xFF: g_icr1 = value; break;
-    default: CHECK(false); break;
-    }
 }
 
 static void mock_window(void *ctx, bool on)
@@ -123,7 +106,7 @@ static void setup_n(const char *text, size_t n)
     g_host.wait = mock_wait;
     g_window = false;
     g_ncalls = 0;
-    g_p0 = g_p3 = g_icr1 = 0;
+    memset(g_sfr, 0, sizeof g_sfr);
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
     g_ram[BOOT_DIP] = 1;                        /* parallel mode: isr_par_ready and isr_par_hold are recorded */
     memcpy(g_ram + CMD_TEXT, text, n);
@@ -266,10 +249,9 @@ static void test_digit_to_rules(void)
 }
 
 /* The mid-clause flush ($B1FF): the C pros_make_segments (M4.3b) turns the 250 symbols into segments, with its
-   isr_par_ready calls, and the C boot_loop_play (M4.4b) gets the registers it leaves, as the ROM's would: it plays
-   (FW_UTT_CONTENT is $FF), so isr_par_hold and par_play_start pass X on to its first ROM call, isr_speech_start;
-   the C par_play_start sets up the first segment; the mock's mute at isr_speech_start ends the C par_play at its
-   first pass. Then the conversion goes on from tn_resume_pos with an empty buffer. */
+   isr_par_ready calls, and the C boot_loop_play (M4.4b) plays them (FW_UTT_CONTENT is $FF): the C par_play_start
+   sets up the first segment; the mock's mute at the timer start's first wait ends the C par_play at its first
+   pass. Then the conversion goes on from tn_resume_pos with an empty buffer. */
 static void test_flush(void)
 {
     char text[255];
@@ -294,16 +276,17 @@ static void test_flush(void)
        segment but the two end pauses), par_play 8 (its pass, two per rest frame around its wait, its last call) */
     CHECK_EQ(count(ROM_ISR_PAR_READY), 1382);
     CHECK(g_ncalls <= MAX_CALLS);
-    /* boot_loop_play's ROM calls and waits (isr_set_volume and isr_volume_half are C and write P3 only), then
+    /* boot_loop_play, all C (M4.6b): isr_par_hold, the waits of isr_speech_start (the timer start's two, a frame),
+       the frame after the half volume, par_play's pass and end, the frame after the half volume again; then
        isr_par_ready at text[250..254] */
     static const uint16_t k_play[] = {
-        ROM_ISR_PAR_HOLD, ROM_ISR_SPEECH_START, ROM_ISR_WAIT_FRAME,
+        ROM_ISR_PAR_HOLD, FW_WAIT_TIMER2_LOOP, FW_WAIT_TIMER3_LOOP, ROM_ISR_WAIT_FRAME, ROM_ISR_WAIT_FRAME,
         ROM_ISR_PAR_READY, ROM_ISR_WAIT_FRAME,                                     /* par_play: the pass, the end */
-        ROM_ISR_PAR_READY, 0xB8E6, ROM_ISR_PAR_READY,                              /* the rest frames (C) */
+        ROM_ISR_PAR_READY, 0xB8E6, ROM_ISR_PAR_READY,                              /* the rest frames */
         ROM_ISR_PAR_READY, 0xB8E6, ROM_ISR_PAR_READY,
         ROM_ISR_PAR_READY, 0xB8E6, ROM_ISR_PAR_READY,
         ROM_ISR_PAR_READY,                                                         /* $B8F7 */
-        ROM_ISR_WAIT_FRAME, ROM_ISR_SPEECH_STOP,
+        ROM_ISR_WAIT_FRAME,
         ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY, ROM_ISR_PAR_READY,
     };
     unsigned n = sizeof k_play / sizeof k_play[0];
@@ -314,10 +297,8 @@ static void test_flush(void)
     for (unsigned i = 0; i < n; i++)
         CHECK_EQ(g_calls[first + i].addr, k_play[i]);
     CHECK_EQ(g_calls[first].phon_len, TN_PHONETIC_FLUSH);
-    CHECK_EQ(g_calls[first + 1].a, 0);                    /* isr_speech_start: par_play_start's A = 0 ($BB2C) and */
-    CHECK_EQ(g_calls[first + 1].x, TN_PHONETIC_FLUSH);    /* X = pros_pos (tn_phon_len), as pros_phrase_gen leaves
-                                                             it, through isr_par_hold and par_play_start */
-    CHECK_EQ(g_p3, 0x78);                                 /* isr_set_volume(0) ($B2D0): $F << 3 */
+    CHECK_EQ(g_sfr[0xEE], 0x79);                          /* P3: isr_set_volume(0) ($B2D0): $F << 3, and bit 0 set
+                                                             by isr_timer_start */
     CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0xFFFF);          /* par_play_start: no event queued */
     CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 0);                  /* the three rest frames counted down */
     CHECK_EQ(g_ram[ISR_FRAME_FLAG], 0);                   /* cleared after the last rest frame ($B8EC) */

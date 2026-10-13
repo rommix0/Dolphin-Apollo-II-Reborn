@@ -12,6 +12,7 @@
 #include "firmware/frm_build.h"
 #include "firmware/fw_ops.h"
 #include "firmware/isr_addr.h"
+#include "firmware/isr_dsp.h"
 #include "firmware/par_addr.h"
 #include "firmware/par_boundary.h"
 #include "firmware/par_play.h"
@@ -45,6 +46,8 @@ static unsigned g_ncalls;
 static uint8_t g_p3;             /* the port P3 the C isr_set_volume reads and writes (an SFR: not in g_ram) */
 static uint8_t g_p3_log[8];      /* the values written to P3, in order */
 static unsigned g_np3;
+static uint8_t g_sfr[0x100];     /* the other SFRs the C speech timing reads and writes (P2, ICR2, the timers) */
+static unsigned g_nsfr_writes;   /* SFR writes but P3's */
 static unsigned g_waits;         /* FW_WAIT_INTERRUPT waits so far */
 static unsigned g_flag_every;    /* the mock timer interrupt sets isr_frame_flag at every n-th of them (0: never) */
 static unsigned g_abort_at;      /* the mock receive interrupt sets ser_abort bit 0 at this one (0: never) */
@@ -66,30 +69,14 @@ static void record(uint16_t addr, const fw_regs *r, uint64_t budget, bool wait)
     g_ncalls++;
 }
 
-/* Records every ROM call. The interrupt routines that boot_loop_play and par_play still call in ROM (M4.6b Task 4
-   makes them C) return the registers the ROM ones leave; any other call fails (par_setup_voice and par_play call
-   the C frame builder since M4.5, the C ser_tx_service since M4.6a, the C volume and parallel handshake since
-   M4.6b). */
+/* Records every ROM call and fails it: par_setup_voice and par_play call the C frame builder since M4.5, the C
+   ser_tx_service since M4.6a, and boot_loop_play and par_play the C speech timing since M4.6b. Only an event
+   handler that is none of the five (test_run_event_rom) makes one. */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     (void)ctx;
     record(addr, r, budget, false);
-    switch (addr) {
-    case ROM_ISR_SPEECH_STOP:        /* $B398-$B3A3: LDM, LDM, isr_dsp_reset (PHP ... PLP), CLB0: A, X, Y kept */
-        return FW_CALL_RETURNED;
-    case ROM_ISR_WAIT_FRAME:         /* $B465-$B46B: BBC0 isr_frame_flag (the frame is due), LDM #0: A, X, Y kept */
-        g_ram[ISR_FRAME_FLAG] = 0;
-        return FW_CALL_RETURNED;
-    case ROM_ISR_SPEECH_START:       /* $B323-$B355: LDA #0 at $B344 (isr_dsp_reset, isr_timer_start and
-                                        isr_wait_frames keep A), LDX #1 / isr_wait_frames' DEX: A = X = 0, Y kept; its
-                                        isr_wait_frame clears the flag */
-        r->a = 0;
-        r->x = 0;
-        g_ram[ISR_FRAME_FLAG] = 0;
-        return FW_CALL_RETURNED;
-    default:
-        return FW_CALL_FAILED;
-    }
+    return FW_CALL_FAILED;
 }
 
 /* Records every wait. Each FW_WAIT_INTERRUPT is an interrupt handled: the timer interrupt swaps the buffers and sets
@@ -109,20 +96,30 @@ static bool mock_wait(void *ctx, fw_wait_kind kind, uint16_t at)
     return true;
 }
 
-/* UART_STATUS ($E7) as g_uart_status says, P3 ($EE) as g_p3; any other SFR reads 0: P0 ($F6, counted) with the host
-   line P0.2 low, as in the machine, so the C ser_tx_service returns at its BBC2 P0 ($C585) and sends nothing. */
+/* UART_STATUS ($E7) as g_uart_status says, P3 ($EE) as g_p3, P0 ($F6, counted) 0: the host line P0.2 low, as in the
+   machine, so the C ser_tx_service returns at its BBC2 P0 ($C585) and sends nothing; any other SFR as last
+   written (g_sfr, 0 at first). */
 static uint8_t mock_read_sfr(void *ctx, uint8_t addr)
 {
     (void)ctx;
     g_p0_reads += addr == 0xF6;
-    return addr == 0xE7 ? g_uart_status : addr == 0xEE ? g_p3 : 0;
+    switch (addr) {
+    case 0xE7: return g_uart_status;
+    case 0xEE: return g_p3;
+    case 0xF6: return 0;
+    default: return g_sfr[addr];
+    }
 }
 
-/* P3 ($EE) writes go to g_p3 and its log; any other SFR write fails the test (nothing else is written here). */
+/* P3 ($EE) writes go to g_p3 and its log; the others to g_sfr, counted. */
 static void mock_write_sfr(void *ctx, uint8_t addr, uint8_t value)
 {
     (void)ctx;
-    CHECK_EQ(addr, 0xEE);
+    if (addr != 0xEE) {
+        g_sfr[addr] = value;
+        g_nsfr_writes++;
+        return;
+    }
     g_p3 = value;
     if (g_np3 < sizeof g_p3_log)
         g_p3_log[g_np3] = value;
@@ -141,6 +138,8 @@ static void setup(void)
     g_host.wait = mock_wait;
     g_ncalls = 0;
     g_np3 = 0;
+    memset(g_sfr, 0, sizeof g_sfr);
+    g_nsfr_writes = 0;
     g_waits = 0;
     g_flag_every = 0;
     g_abort_at = 0;
@@ -2032,10 +2031,13 @@ static void test_play_rows(void)
     size_t waits = 0;
     for (size_t i = 0; i < fw_replacement_count; i++)
         if (fw_replacements[i].waits) {
+            uint16_t a = fw_replacements[i].addr;
             waits++;
-            CHECK(fw_replacements[i].addr == ROM_BOOT_LOOP_PLAY || fw_replacements[i].addr == ROM_PAR_PLAY);
+            CHECK(a == ROM_BOOT_LOOP_PLAY || a == ROM_PAR_PLAY || a == ROM_ISR_SPEECH_START ||
+                  a == ROM_ISR_WAIT_FRAMES || a == ROM_ISR_WAIT_FRAME);
         }
-    CHECK_EQ(waits, 2);   /* only the two loops wait on the timer interrupt: diff_play checks them, diff_lts not */
+    CHECK_EQ(waits, 5);   /* the two loops and the three frame waits wait on the timer interrupt: diff_play checks
+                             them, diff_lts not (M4.6b spec 2.4) */
 }
 
 /* Record i is a call of addr with A, X and Y (the strict budget), made with par_frames_left = frames. */
@@ -2057,21 +2059,17 @@ static void check_wait(unsigned i, uint16_t at, uint8_t frames)
     CHECK_EQ(g_calls[i].frames, frames);
 }
 
-/* The end ($B8D2-$B8FA) from record i on, with `waits` waits for an interrupt per rest frame: isr_wait_frame, then
-   per rest frame (frm_copy_rest_frame, frm_snapshot, frm_clamp_mark_space and frm_transition_flags, all C) the
-   waits at $B8E6, with par_frames_left 3, 2, 1 ($B8D5, then the DEC at $B8EF); then cmd_ev_sound_end (C, returning
-   at once, cmd_sound_active being 0) and the last isr_par_ready ($B8F7, C). Returns the number of records. */
+/* The end ($B8D2-$B8FA) from record i on, with `waits` waits for an interrupt per rest frame: isr_wait_frame (C,
+   M4.6b; the flag is set when the frame loop ends, so it clears it without a wait), then per rest frame
+   (frm_copy_rest_frame, frm_snapshot, frm_clamp_mark_space and frm_transition_flags, all C) the waits at $B8E6,
+   with par_frames_left 3, 2, 1 ($B8D5, then the DEC at $B8EF); then cmd_ev_sound_end (C, returning at once,
+   cmd_sound_active being 0) and the last isr_par_ready ($B8F7, C). Returns the number of records. */
 static unsigned check_rest_frames(unsigned i, unsigned waits)
 {
-    CHECK(i < g_ncalls && i < MAX_CALLS);
-    if (i >= g_ncalls || i >= MAX_CALLS)
-        return 0;
-    CHECK(!g_calls[i].wait);
-    CHECK_EQ(g_calls[i].addr, ROM_ISR_WAIT_FRAME);
     for (unsigned j = 0; j < 3; j++)
         for (unsigned m = 0; m < waits; m++)
-            check_wait(i + 1 + waits * j + m, PAR_WAIT_REST, (uint8_t)(3 - j));
-    return 1 + 3 * waits;
+            check_wait(i + waits * j + m, PAR_WAIT_REST, (uint8_t)(3 - j));
+    return 3 * waits;
 }
 
 /* No segment left (pros_seg_count = 0): two passes, each ending in a wait for an interrupt at the back edge (the flag
@@ -2100,9 +2098,8 @@ static void test_play_tail(void)
     check_wait(3, PAR_WAIT_LAST, 2);
     check_wait(4, PAR_WAIT_LAST, 1);                                 /* frame 2 */
     check_wait(5, PAR_WAIT_LAST, 1);
-    CHECK_EQ(check_rest_frames(6, 2), 7);                            /* the flag every 2nd wait */
-    check_play_call(6, ROM_ISR_WAIT_FRAME, 0, 0, FRAME_PITCH, 0);    /* par_step_tracks' A, X, Y */
-    CHECK_EQ(g_ncalls, 13);
+    CHECK_EQ(check_rest_frames(6, 2), 6);                            /* the flag every 2nd wait */
+    CHECK_EQ(g_ncalls, 12);
     CHECK_EQ(g_waits, 12);
     CHECK_EQ(g_ram[PAR_FRAMES_LEFT], 0);
     CHECK_EQ(g_ram[ISR_FRAME_FLAG], 0);                                /* cleared after the last rest frame */
@@ -2151,11 +2148,8 @@ static void test_play_segment(void)
     check_wait(4, PAR_WAIT_LAST, 1);                             /* the last frame */
     check_wait(5, PAR_WAIT_LAST, 1);
     CHECK_EQ(g_p0_reads, 6);                                     /* ser_tx_service at each of the six passes */
-    CHECK_EQ(check_rest_frames(6, 2), 7);
-    check_play_call(6, ROM_ISR_WAIT_FRAME, 0x1C, 0, FRAME_PITCH, 0);   /* the pitch $55 to $70 over 2 frames, then
-                                                                    $70: b10 = $1C, A of par_step_tracks, kept by
-                                                                    frm_finish_frame */
-    CHECK_EQ(g_ncalls, 13);
+    CHECK_EQ(check_rest_frames(6, 2), 6);
+    CHECK_EQ(g_ncalls, 12);
     CHECK_EQ(g_ram[CMD_VOICING], 6);
     CHECK_EQ(g_ram[CMD_EV_NEXT], 1);
     CHECK_EQ(fw_rd16(&g_f, PAR_SEG_INDEX), 4);
@@ -2187,9 +2181,8 @@ static void test_play_abort(void)
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
     par_play(&g_f, &r);
     check_wait(0, PAR_WAIT_TOP, 4);
-    CHECK_EQ(check_rest_frames(1, 1), 4);
-    check_play_call(1, ROM_ISR_WAIT_FRAME, 0x11, 0, 0x33, 4);   /* the entry A and Y, X = cmd_ev_next ($B877) */
-    CHECK_EQ(g_ncalls, 5);
+    CHECK_EQ(check_rest_frames(1, 1), 3);
+    CHECK_EQ(g_ncalls, 4);
     CHECK_EQ(g_p0_reads, 0);                                     /* no ser_tx_service: it would read P0 */
     for (int b = 0; b < FRAME_SIZE; b++)
         CHECK_EQ(g_ram[ISR_FRAME_B + b], b == FRAME_MARK_SPACE ? 47 : 0);
@@ -2213,8 +2206,8 @@ static void test_play_zero_frames_main(void)
     par_play(&g_f, &r);
     check_wait(0, PAR_WAIT_TOP, 0);
     check_wait(1, PAR_WAIT_TOP, 0xFF);                         /* after the frame built at $B908 */
-    CHECK_EQ(check_rest_frames(2, 1), 4);
-    CHECK_EQ(g_ncalls, 6);
+    CHECK_EQ(check_rest_frames(2, 1), 3);
+    CHECK_EQ(g_ncalls, 5);
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 1);   /* par_next_segment was not called */
     CHECK(!g_f.fault);
 }
@@ -2243,8 +2236,8 @@ static void test_play_zero_frames_segment(void)
     par_play(&g_f, &r);
     check_wait(0, PAR_WAIT_TOP, 1);
     check_wait(1, PAR_WAIT_TOP, 0xFF);                       /* after the frame built at $B908 */
-    CHECK_EQ(check_rest_frames(2, 1), 4);
-    CHECK_EQ(g_ncalls, 6);
+    CHECK_EQ(check_rest_frames(2, 1), 3);
+    CHECK_EQ(g_ncalls, 5);
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 1);
     CHECK_EQ(fw_rd16(&g_f, PAR_SEG_INDEX), 4);
     CHECK(!g_f.fault);
@@ -2264,8 +2257,8 @@ static void test_play_zero_frames_tail(void)
     check_wait(1, PAR_WAIT_LAST, 0xFF);                                 /* frame $FF's wait */
     check_wait(255, PAR_WAIT_LAST, 1);                                  /* frame 1's */
     CHECK_EQ(count(PAR_WAIT_LAST), 255);
-    CHECK_EQ(check_rest_frames(256, 1), 4);
-    CHECK_EQ(g_ncalls, 260);
+    CHECK_EQ(check_rest_frames(256, 1), 3);
+    CHECK_EQ(g_ncalls, 259);
     CHECK(!g_f.fault);
 }
 
@@ -2289,13 +2282,14 @@ static void test_loop_play_idle(void)
     }
 }
 
-/* boot_loop_play that plays (FW_UTT_CONTENT $FF): isr_par_hold (C: nothing in serial mode); par_play_start (C,
-   test_play_start's voice A set-up: Y = the pause phoneme $3B, A = 0); isr_speech_start (ROM: A = X = 0 out);
-   isr_volume_half (C); isr_wait_frame (ROM); isr_set_volume (C) with A = cmd_volume ($B2C2); par_play (C), here
-   ended by a mute at its first wait; isr_volume_half; isr_wait_frame; isr_set_volume with A = 0 ($B2D0);
-   isr_speech_stop (ROM), whose registers it returns. cmd_volume 9: the half is 4, P3 = (P3 & $87) | (4 ^ $F) << 3.
-   The rest frames go to isr_frame_b (isr_fill_ptr as par_setup_voice leaves it); par_play returns the last one's
-   frm_flags, 0. */
+/* boot_loop_play that plays (FW_UTT_CONTENT $FF), all C (M4.6b): isr_par_hold (nothing in serial mode);
+   par_play_start (test_play_start's voice A set-up: Y = the pause phoneme $3B, A = 0, par_frames_left 1);
+   isr_speech_start (the DSP reset, the timer start with its two waits, P3.0 set, then a frame waited for at $B465,
+   whose interrupt also brings the mute); isr_volume_half; isr_wait_frame; isr_set_volume with A = cmd_volume
+   ($B2C2); par_play, which sees the mute at once: its end waits a frame at $B465, then one per rest frame;
+   isr_volume_half; isr_wait_frame; isr_set_volume with A = 0 ($B2D0); isr_speech_stop, whose registers it returns.
+   cmd_volume 9: the half is 4, P3 = (P3 & $87) | (4 ^ $F) << 3. The rest frames go to isr_frame_b (isr_fill_ptr as
+   par_setup_voice leaves it); par_play returns the last one's frm_flags, 0. */
 static void test_loop_play(void)
 {
     setup();
@@ -2311,20 +2305,24 @@ static void test_loop_play(void)
     g_abort_at = 1;
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
     boot_loop_play(&g_f, &r);
-    check_call(0, ROM_ISR_SPEECH_START, 0, 0x22, 0x3B);          /* par_play_start's A and Y */
-    check_call(1, ROM_ISR_WAIT_FRAME, 0xDF, 0, 0x3B);            /* P3: $87 | (4 ^ $F) << 3 = $87 | $58 */
-    check_wait(2, PAR_WAIT_TOP, 1);                              /* par_play (par_play_start's 1 frame): the mute */
-    CHECK_EQ(check_rest_frames(3, 1), 4);
-    check_call(3, ROM_ISR_WAIT_FRAME, 0xB7, 0, 0x3B);            /* P3 $87 | (9 ^ $F) << 3 = $87 | $30; X =
-                                                                    cmd_ev_next 0 */
-    check_call(7, ROM_ISR_WAIT_FRAME, 0xDF, 0, 0x0D);            /* par_play's X and Y */
-    check_call(8, ROM_ISR_SPEECH_STOP, 0xFF, 0, 0x0D);           /* P3 $87 | $F << 3 */
+    check_wait(0, FW_WAIT_TIMER2_LOOP, 1);                       /* isr_timer_start */
+    check_wait(1, FW_WAIT_TIMER3_LOOP, 1);
+    check_wait(2, ROM_ISR_WAIT_FRAME, 1);                        /* isr_wait_frames: the mute comes */
+    check_wait(3, ROM_ISR_WAIT_FRAME, 1);                        /* after the half volume */
+    check_wait(4, ROM_ISR_WAIT_FRAME, 1);                        /* par_play's end ($B8D2) */
+    CHECK_EQ(check_rest_frames(5, 1), 3);
+    check_wait(8, ROM_ISR_WAIT_FRAME, 0);                        /* after the half volume */
     CHECK_EQ(g_ncalls, 9);
-    static const uint8_t p3[] = { 0xDF, 0xB7, 0xDF, 0xFF };      /* half, cmd_volume, half, 0 */
-    CHECK_EQ(g_np3, 4);
-    for (unsigned i = 0; i < 4; i++)
+    static const uint8_t p3[] = { 0xFF, 0xDF, 0xB7, 0xDF, 0xFF };   /* SEB0 P3, half, cmd_volume, half, 0 */
+    CHECK_EQ(g_np3, 5);
+    for (unsigned i = 0; i < 5; i++)
         CHECK_EQ(g_p3_log[i], p3[i]);
-    CHECK_EQ(g_p3, 0xFF);
+    CHECK_EQ(g_p3, 0xFF);                                        /* P3 $87 | $F << 3 */
+    CHECK_EQ(g_nsfr_writes, 19);                                 /* isr_speech_start 14, isr_speech_stop 5 */
+    CHECK_EQ(g_sfr[SFR_P23_FUNC], 0);                            /* isr_speech_stop */
+    CHECK_EQ(g_sfr[SFR_ICR2], 0);
+    CHECK_EQ(g_sfr[SFR_T3_RELOAD], 0x31);                        /* isr_timer_start */
+    CHECK_EQ(g_ram[ISR_TICK_DIV], 8);                            /* 10, then decremented twice */
     CHECK_EQ(g_ram[PAR_CUR_PHONEME], 0x3B);                      /* par_play_start ran */
     CHECK_EQ(g_ram[PAR_CUR_RANK], 31);
     CHECK_EQ(r.a, 0xFF);

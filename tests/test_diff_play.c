@@ -1,5 +1,6 @@
-/* Live differential test of the routines that wait on the timer interrupt (M4.4b spec 4.1): par_play $B877 and
-   boot_loop_play $A7D4, the replacements marked `waits`, which diff_lts skips (it holds interrupts). Every corpus
+/* Live differential test of the routines that wait on the timer interrupt (M4.4b spec 4.1): par_play $B877,
+   boot_loop_play $A7D4 and the frame waits isr_speech_start $B323, isr_wait_frames $B356 and isr_wait_frame $B465
+   (M4.6b spec 2.4), the replacements marked `waits`, which diff_lts skips (it holds interrupts). Every corpus
    file and the boot run go through the ROM engine; at every call (no sampling) the machine is cloned twice with
    interrupts live. Copy A runs the ROM routine to its return, copy B the C thunk. Both record, at every buffer swap
    ($B306, the machine's frame callback), the produced frame and a snapshot: all RAM but the SFRs ($DA-$FF) and the
@@ -9,9 +10,11 @@
    isr_tick_div $59, isr_word_ofs $5A and isr_words_left $5B (they depend on how far into a frame each copy
    returns; every swap has compared them already).
    par_play re-enters $B877 by its own JMP par_play ($B892, $B8AE, $B914) with the same stack, so only a real call
-   counts: the hook on the JSR par_play at $B2C7 (boot_play_body) arms the next $B877 entry. boot_loop_play is
-   entered only by JSR. In a corpus file the boot's own call (from boot_selftest_sound $A7BA) and the par_play inside
-   it are the boot run's; they are checked there only.
+   counts: the hook on the JSR par_play at $B2C7 (boot_play_body) arms the next $B877 entry. So do the JSRs of
+   isr_wait_frames ($B352) and isr_wait_frame ($B2BF, $B2CD, $B8D2, and $B356, the first instruction of
+   isr_wait_frames), whose own loops re-enter them (BNE $B356, BBC0 $B465). boot_loop_play and isr_speech_start are
+   entered only by JSR. In a corpus file the boot's own call (from boot_selftest_sound $A7BA) and the calls inside it
+   are the boot run's; they are checked there only.
    The receive interrupt's two effects that no corpus text reaches are injected into both copies at the frame event
    (M4.6b spec 4.2), on the first call of each routine in each run whose ROM copy swapped the buffers at least
    twice. The frame event is the machine's frame callback in both copies: the ROM timer interrupt reaches $B306, the
@@ -46,9 +49,13 @@
 #define PLAY_REPLY         0xB89C          /* par_play: JSR ser_tx_service (a reply due) */
 #define PLAY_ABORT         0xB8A5          /* par_play: JMP $B8D2 (ser_abort bit 0: the end) */
 #define BOOT_SOUND_RETURN  0xA7BD          /* after boot_selftest_sound's JSR boot_loop_play at $A7BA */
+#define FRAMES_CALL_SITE   0xB352          /* isr_speech_start: JSR isr_wait_frames */
 #define INJECT_SWAP        1               /* the second swap of a call */
 #define ABORT_TICKS        2               /* the mute: at the second timer interrupt after that swap */
-#define WATCH_MAX          2
+#define WATCH_MAX          5
+
+/* The JSR isr_wait_frame sites but the one at isr_wait_frames' entry: boot_play_body's two and par_play's */
+static const uint16_t k_frame_call_sites[] = { 0xB2BF, 0xB2CD, 0xB8D2 };
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
 
@@ -95,7 +102,7 @@ static swap_state g_cur;
 static watch g_watch[WATCH_MAX];
 static size_t g_nwatch;
 static const char *g_source;
-static bool g_boot_run, g_blp_checked, g_play_armed;
+static bool g_boot_run, g_blp_checked, g_play_armed, g_frames_armed, g_frame_armed;
 static unsigned g_mismatches, g_reached_abort, g_reached_reply;
 static bool g_hit_abort, g_hit_reply;
 
@@ -346,12 +353,77 @@ static bool on_play(machine *m, void *user)
     return false;
 }
 
+/* The watch of the routine at addr checks this call, when it is watched. */
+static void check_watched(machine *m, uint16_t addr)
+{
+    watch *w = watched(addr);
+    if (w)
+        check_all(m, w);
+}
+
+/* $B323: isr_speech_start, inside a boot_loop_play call checked here. */
+static bool on_speech_start(machine *m, void *user)
+{
+    (void)user;
+    if (g_blp_checked)
+        check_watched(m, ROM_ISR_SPEECH_START);
+    return false;
+}
+
+/* $B352: isr_speech_start's JSR isr_wait_frames arms the next $B356 entry. */
+static bool on_frames_call(machine *m, void *user)
+{
+    (void)m;
+    (void)user;
+    g_frames_armed = g_blp_checked;
+    return false;
+}
+
+/* $B356: isr_wait_frames, a real call only when armed (its BNE $B356 re-enters here); its own JSR isr_wait_frame
+   arms the next $B465 entry, at every pass. */
+static bool on_frames(machine *m, void *user)
+{
+    (void)user;
+    if (g_frames_armed) {
+        g_frames_armed = false;
+        check_watched(m, ROM_ISR_WAIT_FRAMES);
+    }
+    g_frame_armed = g_blp_checked;
+    return false;
+}
+
+/* $B2BF, $B2CD, $B8D2: a JSR isr_wait_frame arms the next $B465 entry. */
+static bool on_frame_call(machine *m, void *user)
+{
+    (void)m;
+    (void)user;
+    g_frame_armed = g_blp_checked;
+    return false;
+}
+
+/* $B465: isr_wait_frame, a real call only when armed (its BBC0 $B465 re-enters here). */
+static bool on_frame(machine *m, void *user)
+{
+    (void)user;
+    if (g_frame_armed) {
+        g_frame_armed = false;
+        check_watched(m, ROM_ISR_WAIT_FRAME);
+    }
+    return false;
+}
+
 static void install(machine *m, void *user)
 {
     (void)user;
     CHECK(machine_hook(m, ROM_BOOT_LOOP_PLAY, on_loop_play, NULL));
     CHECK(machine_hook(m, PLAY_CALL_SITE, on_play_call, NULL));
     CHECK(machine_hook(m, ROM_PAR_PLAY, on_play, NULL));
+    CHECK(machine_hook(m, ROM_ISR_SPEECH_START, on_speech_start, NULL));
+    CHECK(machine_hook(m, FRAMES_CALL_SITE, on_frames_call, NULL));
+    CHECK(machine_hook(m, ROM_ISR_WAIT_FRAMES, on_frames, NULL));
+    for (size_t i = 0; i < sizeof k_frame_call_sites / sizeof k_frame_call_sites[0]; i++)
+        CHECK(machine_hook(m, k_frame_call_sites[i], on_frame_call, NULL));
+    CHECK(machine_hook(m, ROM_ISR_WAIT_FRAME, on_frame, NULL));
 }
 
 static void run(const uint8_t *rom, size_t len, const char *source, const char *text, bool boot)
@@ -359,7 +431,7 @@ static void run(const uint8_t *rom, size_t len, const char *source, const char *
     frame_list fl = { 0 };
     g_source = source;
     g_boot_run = boot;
-    g_blp_checked = g_play_armed = false;
+    g_blp_checked = g_play_armed = g_frames_armed = g_frame_armed = false;
     for (size_t i = 0; i < g_nwatch; i++)
         g_watch[i].done_injecting = false;
     machine_status st = rom_engine_run(&g_m, rom, len, NULL, install, NULL, text, boot, &fl, NULL);
@@ -403,7 +475,8 @@ static void add_watch(const char *name, uint16_t addr, const fw_replacement *r)
     w->run_b = r ? run_thunk_b : run_rom;
 }
 
-/* ROM against ROM on hello: both routines, both injections; every pair must agree and both branches be reached. */
+/* ROM against ROM on hello: the five routines, both injections; every pair must agree and both branches be
+   reached. */
 static void self_check(const uint8_t *rom, size_t len)
 {
     char *text = test_read_file("tests/corpus/hello.txt");
@@ -414,13 +487,19 @@ static void self_check(const uint8_t *rom, size_t len)
     g_nwatch = 0;
     add_watch("par_play", ROM_PAR_PLAY, NULL);
     add_watch("boot_loop_play", ROM_BOOT_LOOP_PLAY, NULL);
+    add_watch("isr_speech_start", ROM_ISR_SPEECH_START, NULL);
+    add_watch("isr_wait_frames", ROM_ISR_WAIT_FRAMES, NULL);
+    add_watch("isr_wait_frame", ROM_ISR_WAIT_FRAME, NULL);
     g_reached_abort = g_reached_reply = 0;
     run(rom, len, "self-check hello", text, false);
     free(text);
     printf("  self-check (ROM against ROM, hello): par_play %u calls, boot_loop_play %u calls, %u injected; $B8A5 "
            "reached %u, $B89C reached %u\n", g_watch[0].calls, g_watch[1].calls, g_watch[0].injected +
            g_watch[1].injected, g_reached_abort, g_reached_reply);
-    CHECK(g_watch[0].calls > 0 && g_watch[1].calls > 0);
+    printf("  self-check (ROM against ROM, hello): isr_speech_start %u calls, isr_wait_frames %u, isr_wait_frame %u\n",
+           g_watch[2].calls, g_watch[3].calls, g_watch[4].calls);
+    for (size_t i = 0; i < g_nwatch; i++)
+        CHECK(g_watch[i].calls > 0);
     CHECK_EQ(g_watch[0].injected, 1);
     CHECK_EQ(g_watch[1].injected, 1);
     CHECK(g_reached_abort > 0);
@@ -440,12 +519,14 @@ void suite_diff_play(void)
         const fw_replacement *r = &fw_replacements[i];
         if (!r->waits)
             continue;
-        CHECK(g_nwatch < WATCH_MAX && (r->addr == ROM_PAR_PLAY || r->addr == ROM_BOOT_LOOP_PLAY));
+        CHECK(g_nwatch < WATCH_MAX && (r->addr == ROM_PAR_PLAY || r->addr == ROM_BOOT_LOOP_PLAY ||
+                                       r->addr == ROM_ISR_SPEECH_START || r->addr == ROM_ISR_WAIT_FRAMES ||
+                                       r->addr == ROM_ISR_WAIT_FRAME));
         if (g_nwatch < WATCH_MAX)
             add_watch(r->name, r->addr, r);
     }
     printf("  %zu routines wait on the timer interrupt\n", g_nwatch);
-    CHECK_EQ(g_nwatch, 2);   /* par_play and boot_loop_play (M4.4b spec 2.5) */
+    CHECK_EQ(g_nwatch, 5);   /* par_play and boot_loop_play (M4.4b spec 2.5), the frame waits (M4.6b spec 2.4) */
     if (g_nwatch > 0) {
         g_reached_abort = g_reached_reply = 0;
         run_corpus(rom, len);
