@@ -62,7 +62,7 @@ Success: the goldens stay byte-identical with all 110 replacements and with each
 
 ### 2.5 The NUL bug (the unknown-address fallback)
 
-A NUL byte in the text right after a command prefix is a partial match (M4.2 spec §2.6), and the scan queues handler bytes read from inside the pattern string: after `@` and any letter but `?` the query pattern `*?` matches partially and queues `$D300` (the middle of `pros_phrase_gen`); other prefixes queue zero-page addresses (`@M5` then NUL: `$002A`). The ROM jumps there; the C cannot follow. The C `cmd_run_next` leaves RAM untouched for every address with no C handler and calls the ROM `cmd_run_next` through `fw_rom_call_unhooked` (§3.2) with the registers of `$A88D` (X = the position, Y = `cmd_next`, A = X), so the ROM does its own bookkeeping and jumps where it jumps, exactly as today. CLI text cannot contain a NUL; no golden reaches this.
+A NUL byte in the text right after a command prefix is a partial match (M4.2 spec §2.6), and the scan queues handler bytes read from inside the pattern string: after `@` and any letter but `?` the query pattern `*?` matches partially and queues `$D300` (the middle of `pros_phrase_gen`); other prefixes queue zero-page addresses (`@M5` then NUL: `$002A`). The ROM jumps there; the C cannot follow. The C `cmd_run_next` leaves RAM untouched for every address with no C handler and calls the ROM `cmd_run_next` through `fw_rom_call_unhooked` (§3.2) with the registers of `$A88D` (X = the position, Y = `cmd_next`, A = X), so the ROM does its own bookkeeping and jumps where it jumps, exactly as today. CLI text cannot contain a NUL; no golden reaches this. *(Corrected 2026-10-13 from the plan's proof.)* The hybrid follows the ROM only while the target code does not return through the stack: `@M5` then NUL (`$002A`) ends with the same CPU fault on both engines (a BRK at `$2300`); `@A` then NUL (`$D300`, which returns through the stack) ends with no frame on both, but the ROM engine stops on an illegal opcode at `$8F02` and the hybrid at `$A893`, because the C dispatcher's callers have no return addresses on the machine stack. The hybrid on main (M4.2's fallback) ends the same way. User ruling: keep the fallback and pin both outcomes in a test; M5 decides.
 
 ### 2.6 Quirks kept
 
@@ -84,7 +84,7 @@ A NUL byte in the text right after a command prefix is a partial match (M4.2 spe
 
 ### 3.2 Leaving the C (`fw.h`/`fw.c`)
 
-- `fw_enter(f, addr)`: the bank entries `$FFD0`/`$FFD4`. It calls the new host call `enter(ctx, addr)`, then abandons the C as an unwound ROM call does (`f->unwound` set, a longjmp to `f->trap`); without a host or `enter`, a fault at `addr`. The state the ROM leaves at the jump is set before the call: RAM by the C, and through `enter` the CPU state the host must give the machine: SP `$FF` (`LDX #$FF / TXS`), the I flag set, A and X as `bank_enter` leaves them (warm: A = the bank's `$FFE0`, X = `$FF`; cold: A = 0, X = 0). In M4.6c2 `fw_enter` first looks for a C re-entry point that the C boot sets.
+- `fw_enter(f, addr)` *(built as `fw_enter(f, addr, a, x)` with `enter(ctx, addr, a, x)`: the C passes the A and X `bank_enter` leaves; corrected 2026-10-13 from the plan's proof)*: the bank entries `$FFD0`/`$FFD4`. It calls the new host call `enter(ctx, addr)`, then abandons the C as an unwound ROM call does (`f->unwound` set, a longjmp to `f->trap`); without a host or `enter`, a fault at `addr`. The state the ROM leaves at the jump is set before the call: RAM by the C, and through `enter` the CPU state the host must give the machine: SP `$FF` (`LDX #$FF / TXS`), the I flag set, A and X as `bank_enter` leaves them (warm: A = the bank's `$FFE0`, X = `$FF`; cold: A = 0, X = 0). In M4.6c2 `fw_enter` first looks for a C re-entry point that the C boot sets.
 - `fw_rom_call_unhooked(f, addr, regs, budget)`: like `fw_rom_call`, through the new host call `rom_call_unhooked`; the hook at `addr` does not fire on this entry. Used only by the NUL fallback (§2.5).
 - `fw_host` gains `read_bank`, `enter` and `rom_call_unhooked`.
 
@@ -102,7 +102,7 @@ A NUL byte in the text right after a command prefix is a partial match (M4.2 spe
 
 ### 3.5 Converted data (`src/firmware/data/bank_data.c`)
 
-- `bank_ramcode_image` `$ADFE–$AFFC` (511 bytes):
+- `bank_ramcode_image` `$ADFE–$AFFC` (511 bytes; *(corrected 2026-10-13 from the plan's proof)* the converted range is `$ADFE–$AFFD`, 512 bytes, because the listing's last instruction, `LDA #1` at `$AFFC`, ends at `$AFFD`; with the 20 header bytes, 49,044 converted bytes in all):
   - `bank_p2_table` and `bank_p2_table_alt` (`$0200`/`$0208` in RAM) as named P2 values (`P2_MAIN_BANK` `$70` and the empty-socket selections);
   - the bank routines `$0210–$0312` as an instruction listing at their RAM addresses, placed at RAM address + `$ABFE`;
   - the letter-to-sound code copied along, `$AF11–$AFFC` (RAM `$0313–$03FE`, never executed in RAM), as an instruction listing at its ROM addresses.
