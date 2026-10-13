@@ -84,7 +84,7 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
 /* Records every wait. Each FW_WAIT_INTERRUPT is an interrupt handled: the timer interrupt swaps the buffers and sets
    the flag ($B306 LDM #1) at every g_flag_every-th, and the receive interrupt sets ser_abort bit 0 (a mute) at the
    g_abort_at-th. */
-static bool mock_wait(void *ctx, fw_wait_kind kind, uint16_t at)
+static fw_wait_result mock_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     (void)ctx;
     record(at, NULL, 0, true);
@@ -95,7 +95,7 @@ static bool mock_wait(void *ctx, fw_wait_kind kind, uint16_t at)
         if (g_waits == g_abort_at)
             g_ram[SER_ABORT] |= 1;
     }
-    return true;
+    return FW_WAIT_RETURNED;
 }
 
 /* UART_STATUS ($E7) as g_uart_status says, P3 ($EE) as g_p3, P0 ($F6, counted) 0: the host line P0.2 low, as in the

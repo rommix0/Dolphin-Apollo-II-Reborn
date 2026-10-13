@@ -20,12 +20,21 @@ machine_status hybrid_engine_speak(machine *m, const uint8_t *rom, size_t len, c
                                    const char *only, const char *text, bool include_boot,
                                    frame_list *produced, frame_list *raw, hybrid_stats *stats)
 {
+    engine_input in = { (const uint8_t *)text, strlen(text), true };
+    return hybrid_engine_run_input(m, rom, len, cfg, only, &in, include_boot, produced, raw, stats, NULL);
+}
+
+machine_status hybrid_engine_run_input(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
+                                       const char *only, const engine_input *in, bool include_boot,
+                                       frame_list *produced, frame_list *raw, hybrid_stats *stats,
+                                       const engine_watch *watch)
+{
     hybrid_setup h;
     frame_list scratch = { 0 };
     memset(&h, 0, sizeof h);
     h.only = only;
-    machine_status st = rom_engine_run(m, rom, len, cfg, setup, &h, text, include_boot,
-                                       produced ? produced : &scratch, raw);
+    machine_status st = rom_engine_run_input(m, rom, len, cfg, setup, &h, in, include_boot,
+                                             produced ? produced : &scratch, raw, watch);
     machine_clear_hooks(m);   /* the bridge lives on this stack frame */
     frame_list_free(&scratch);
     if (stats) {

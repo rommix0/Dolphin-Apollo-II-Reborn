@@ -125,12 +125,21 @@ typedef enum fw_wait_kind {
     FW_WAIT_INTERRUPT,     /* a polling loop on a flag an interrupt sets: until an interrupt has been handled */
     FW_WAIT_TIMER2,        /* isr_timer_start's BBC3 ICR2 (inside SEI): until timer 2's request bit is set */
     FW_WAIT_TIMER3,        /* isr_timer_start's BBC5 ICR2 (inside SEI): until timer 3's request bit is set */
+    FW_WAIT_INPUT,         /* isr_idle's WIT (M4.6c2 spec 3.1): until an interrupt has been handled, the machine at the
+                              idle point, where serial bytes are delivered; there the host's idle handler may stop the
+                              run */
 } fw_wait_kind;
+/* How a wait ended: FW_WAIT_RETURNED when it did; FW_WAIT_FAILED when it did not (a fault); FW_WAIT_STOPPED when the
+   run ends there (M4.6c2 spec 3.1, 3.2): the input wait's idle handler stopped it, or an entry row's phase deadline
+   passed. */
+typedef enum { FW_WAIT_FAILED = 0, FW_WAIT_RETURNED, FW_WAIT_STOPPED } fw_wait_result;
 #define FW_WAIT_UART_TX_LOOP  0xC500   /* ser_tx_wait: the ROM loop of FW_WAIT_UART_TX (BBC1 $E7,$C500 / RTS) */
 #define FW_WAIT_TIMER2_LOOP   0xB372   /* isr_timer_start: BBC3 ICR2,$B372, the loop of FW_WAIT_TIMER2 ... */
 #define FW_WAIT_TIMER2_EXIT   0xB375   /* ... and the instruction after it (LDM #$28,T3_RELOAD) */
 #define FW_WAIT_TIMER3_LOOP   0xB37F   /* isr_timer_start: BBC5 ICR2,$B37F, the loop of FW_WAIT_TIMER3 ... */
 #define FW_WAIT_TIMER3_EXIT   0xB382   /* ... and the instruction after it (LDM #$31,T3_RELOAD) */
+#define FW_WAIT_INPUT_LOOP    0xC602   /* isr_idle: the WIT of FW_WAIT_INPUT, the firmware's only one */
+#define FW_RESET_CPU          0xA625   /* boot_reset: the SEI of the CPU set-up, where fw_reset_cpu faults */
 #define FW_DSP_DATA           0x8000   /* DSP_DATA, the DSP port (write only): where fw_dsp_write faults */
 #define FW_FRAME_EVENT        0xB306   /* isr_swap_buffers: the ROM's point of the frame event, where fw_frame_done
                                           faults */
@@ -149,9 +158,9 @@ typedef struct fw_host {
     uint8_t (*read_sfr)(void *ctx, uint8_t addr);
     /* Writes an SFR ($DA-$FF) as the CPU's write would (M4.6a spec 3.1). */
     void (*write_sfr)(void *ctx, uint8_t addr, uint8_t value);
-    /* Waits for the hardware (M4.6a spec 3.3, M4.6b spec 3.2); at is the ROM loop the wait stands for. False when
-       the wait did not end (a fault). */
-    bool (*wait)(void *ctx, fw_wait_kind kind, uint16_t at);
+    /* Waits for the hardware (M4.6a spec 3.3, M4.6b spec 3.2, M4.6c2 spec 3.1); at is the ROM loop the wait stands
+       for. */
+    fw_wait_result (*wait)(void *ctx, fw_wait_kind kind, uint16_t at);
     /* Writes a byte to the DSP port DSP_DATA $8000, as isr_timer_dsp's STA DSP_DATA does (M4.6b spec 3.1). */
     void (*dsp_write)(void *ctx, uint8_t byte);
     /* The frame event: the C timer interrupt is where the ROM's reaches $B306 (isr_swap_buffers), the frame at
@@ -167,6 +176,12 @@ typedef struct fw_host {
     /* As rom_call, but the hook at addr does not fire on this entry (M4.6c1 spec 3.2): the NUL-bug fallback's
        ROM cmd_run_next. */
     fw_call_result (*rom_call_unhooked)(void *ctx, uint16_t addr, fw_regs *regs, uint64_t budget);
+    /* boot_reset's CPU set-up $A625-$A62C (M4.6c2 spec 3.3): SEI, SP = $FF (LDX #$FF / TXS), CLT, CLD, CLC, CLV, so
+       that the ROM code run later and the interrupts see the ROM's flags and SP. */
+    void (*reset_cpu)(void *ctx);
+    /* CLI (enabled) or SEI: the main loop's unpaired ones (M4.6c2 spec 3.3), on which the next wait's interrupts
+       depend. */
+    void (*set_interrupts)(void *ctx, bool enabled);
 } fw_host;
 
 /* Converted ROM data at its original addresses (built by src/firmware/data/fw_data.c). */
@@ -187,6 +202,7 @@ typedef struct fw {
     uint16_t fault_addr;
     jmp_buf *trap;                 /* when set, a fault longjmps here and the routine is abandoned */
     bool unwound;                  /* a ROM call reset the stack: the C was abandoned (not a fault; M4.2 spec 3) */
+    bool stopped;                  /* a wait stopped the run: the C was abandoned (not a fault; M4.6c2 spec 3.1) */
     unsigned tn_flushes;           /* mid-clause flushes by tn_convert_clause (a statistic for the tests) */
 } fw;
 
@@ -230,7 +246,9 @@ void fw_sfr_clb(fw *f, uint8_t addr, unsigned bit);
 bool fw_sfr_bit(fw *f, uint8_t addr, unsigned bit);
 /* Waits for the hardware through the host: the polling loop or wait loop at the ROM address at (JSR ser_tx_wait
    $C500 for FW_WAIT_UART_TX; the polling loop's own address for FW_WAIT_INTERRUPT; $B372 and $B37F for the timer
-   waits). Without a host or wait, or when the wait fails, a fault at at. */
+   waits; isr_idle's WIT $C602 for FW_WAIT_INPUT). Without a host or wait, or when the wait fails, a fault at at.
+   When it stops the run, f->stopped is set and the routine is abandoned like an unwound ROM call (a longjmp to
+   f->trap when set), but it is not a fault (M4.6c2 spec 3.1). */
 void fw_wait(fw *f, fw_wait_kind kind, uint16_t at);
 /* STA DSP_DATA: v written to the DSP port through the host. Without a host or dsp_write, a fault at FW_DSP_DATA. */
 void fw_dsp_write(fw *f, uint8_t v);
@@ -253,5 +271,11 @@ bool fw_rom_call_unhooked(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget);
    enter, then the routine is abandoned like an unwound ROM call (f->unwound set, a longjmp to f->trap when set; it
    is not a fault). Without a host or enter, a fault at addr. */
 void fw_enter(fw *f, uint16_t addr, uint8_t a, uint8_t x);
+/* boot_reset's CPU set-up through the host's reset_cpu (M4.6c2 spec 3.3). Without a host or reset_cpu, a fault at
+   FW_RESET_CPU $A625. */
+void fw_reset_cpu(fw *f);
+/* CLI (enabled) or SEI at the ROM address at through the host's set_interrupts (M4.6c2 spec 3.3). Without a host or
+   set_interrupts, a fault at at. */
+void fw_set_interrupts(fw *f, bool enabled, uint16_t at);
 
 #endif

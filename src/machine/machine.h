@@ -51,6 +51,12 @@ struct machine;
 typedef bool (*machine_hook_fn)(struct machine *m, void *user);
 typedef struct { uint16_t addr; machine_hook_fn fn; void *user; bool ramcode; } machine_hook_entry;
 typedef struct { uint8_t a, x, y, p; } machine_regs;
+/* What the idle handler did (M4.6c2 spec 3.1): it queued more input, or the run ends. */
+typedef enum { MACHINE_STOP = 0, MACHINE_FEED } machine_idle_action;
+/* The idle handler: called when the machine has nothing left to do (machine_idle). */
+typedef machine_idle_action (*machine_idle_fn)(struct machine *m, void *user);
+/* How machine_wait_input ended. */
+typedef enum { MINPUT_FAILED = 0, MINPUT_HANDLED, MINPUT_STOPPED } machine_input_result;
 
 /* Where a CPU read lands under the current P2 (machine_map_read). */
 typedef enum { MACHINE_MAP_RAM, MACHINE_MAP_SFR, MACHINE_MAP_ROM, MACHINE_MAP_EMPTY } machine_map_region;
@@ -95,6 +101,12 @@ typedef struct machine {
     bool irq_hold;                         /* no IRQ line reaches the CPU (machine_hold_irqs) */
     bool skip_hook;                        /* machine_rom_call_unhooked: the hook at skip_hook_pc does not fire ... */
     uint16_t skip_hook_pc;                 /* ... until the instruction there has run once */
+    machine_idle_fn idle_fn;               /* the idle handler (machine_set_idle_handler); NULL: none */
+    void *idle_user;
+    bool idle_stopped;                     /* it returned MACHINE_STOP: it is not called again */
+    uint64_t phase_deadline;               /* the engine's phase deadline (M4.6c2 spec 3.2): the cycle count by which
+                                              the run's current phase must end (0: none); the entry rows' thunks run
+                                              under it */
     uint16_t fault_addr;                   /* MFAULT_FIRMWARE: the address the C code could not read or call */
 } machine;
 
@@ -106,7 +118,14 @@ void machine_set_outputs(machine *m, machine_frame_fn on_frame, void *user);
    grouping at byte 0. Unlike the produced frames, this stream depends on CPU timing. */
 void machine_set_raw_output(machine *m, machine_frame_fn on_raw, void *user);
 bool machine_feed_serial(machine *m, const uint8_t *bytes, size_t n);
+/* Runs until the machine has nothing left to do (MACHINE_IDLE: the CPU waiting at the idle WIT $C602, no queued
+   input, no byte in the UART, timer 3 off, no interrupt line), a fault, or max_cycles. */
 machine_status machine_run(machine *m, uint64_t max_cycles);
+/* Registers the idle handler (M4.6c2 spec 3.1; fn NULL: none) and forgets a stop it returned before. */
+void machine_set_idle_handler(machine *m, machine_idle_fn fn, void *user);
+/* The machine has nothing left to do: the idle handler queues more input (MACHINE_FEED) or ends the run
+   (MACHINE_STOP). Once it has returned MACHINE_STOP, and without a handler, MACHINE_STOP without a call. */
+machine_idle_action machine_idle(machine *m);
 /* One instruction, interrupt entry or hooked routine, with serial delivery, IRQ sync and frame capture as in
    machine_run. Returns false on a fault (m->fault says which). */
 bool machine_step(machine *m);
@@ -151,14 +170,24 @@ void machine_capture_frame(machine *m);
    interrupt (its handler ROM or a hooked replacement) and returns from it. True once the PC and SP are back where
    they were. The PC is a hook's, never the idle WIT's ($C602): no serial byte is delivered. False when max_cycles
    pass first, on a fault, or when a line wakes the CPU with I set (the interrupt could never be taken); the CPU is
-   then no longer waiting, and the PC and SP may be inside the handler (the caller faults: run_frame puts them back). */
+   then no longer waiting, and the PC and SP may be inside the handler (the caller faults: run_frame puts them back).
+   The delivery guard (M4.6c2 spec 3.1): a PC at the idle WIT $C602 or the idle point $C603 is refused (false, nothing
+   run), so that serial bytes are delivered at the input wait only. */
 bool machine_wait_interrupt(machine *m, uint64_t max_cycles);
+/* The input wait (M4.6c2 spec 3.1), isr_idle's WIT at $C602 for the C: the CPU waits at the idle point $C603, where
+   serial bytes are delivered as at the ROM's WIT, until an interrupt has been handled (its handler ROM or a hooked
+   replacement): MINPUT_HANDLED, the PC back as it was. Whenever the machine has nothing left to do there (machine_run's
+   MACHINE_IDLE), machine_idle: on MACHINE_FEED the wait goes on and the byte is delivered; on MACHINE_STOP,
+   MINPUT_STOPPED with the machine left at the idle point (the PC $C603, the CPU waiting), where machine_run returns
+   MACHINE_IDLE. MINPUT_FAILED when max_cycles pass first, on a fault, or when a line wakes the CPU with I set (the PC
+   back, the CPU no longer waiting). */
+machine_input_result machine_wait_input(machine *m, uint64_t max_cycles);
 /* Runs the ROM loop at loop with I set (inside the caller's PHP/SEI ... PLP; M4.6b spec 3.3) until the PC reaches
    exit, then puts the PC and P back as they were. No stack frame. False when max_cycles pass first or on a fault
    (the PC and P put back all the same). */
 bool machine_run_loop(machine *m, uint16_t loop, uint16_t exit, uint64_t max_cycles);
 /* Copies src's whole state into dst for a differential run, without hooks (a pending skip of
-   machine_rom_call_unhooked included), outputs, coverage or the hold. */
+   machine_rom_call_unhooked included), outputs, coverage, the hold or the idle handler. */
 void machine_clone(machine *dst, const machine *src);
 /* The shared address mapper (M4.0 spec section 2.2) behind bus reads, machine_peek and the hook check: where a
    read of addr lands under the current P2 (spec section 1.2). *offset indexes ram for MACHINE_MAP_RAM and the

@@ -242,6 +242,14 @@ static void prepare(machine *m)
     sync_irqs(m);
 }
 
+/* Nothing left to do (after prepare): at the idle WIT with no queued input, no byte in the UART, timer 3 off and no
+   interrupt line. */
+static bool idle(const machine *m)
+{
+    return at_idle(m) && m->q_head == m->q_tail && !m->sfr.uart_rx_full && !(m->sfr.icr2 & ICR2_T3_ENABLE) &&
+           !m->cpu.irq_lines;
+}
+
 static const machine_hook_entry *find_hook(const machine *m)
 {
     uint16_t pc = m->cpu.pc;
@@ -314,8 +322,7 @@ machine_status machine_run(machine *m, uint64_t max_cycles)
     uint64_t end = m->cpu.cycles + max_cycles;
     while (m->cpu.cycles < end) {
         prepare(m);
-        if (at_idle(m) && m->q_head == m->q_tail && !m->sfr.uart_rx_full &&
-            !(m->sfr.icr2 & ICR2_T3_ENABLE) && !m->cpu.irq_lines)
+        if (idle(m))
             return MACHINE_IDLE;
         if (!exec(m))
             return MACHINE_FAULT;
@@ -327,6 +334,22 @@ bool machine_step(machine *m)
 {
     prepare(m);
     return exec(m);
+}
+
+void machine_set_idle_handler(machine *m, machine_idle_fn fn, void *user)
+{
+    m->idle_fn = fn;
+    m->idle_user = user;
+    m->idle_stopped = false;
+}
+
+machine_idle_action machine_idle(machine *m)
+{
+    if (m->idle_stopped || !m->idle_fn)
+        return MACHINE_STOP;
+    machine_idle_action a = m->idle_fn(m, m->idle_user);
+    m->idle_stopped = a == MACHINE_STOP;
+    return a;
 }
 
 static bool add_hook(machine *m, uint16_t addr, machine_hook_fn fn, void *user, bool ramcode)
@@ -444,6 +467,8 @@ bool machine_wait_interrupt(machine *m, uint64_t max_cycles)
     uint16_t pc = c->pc;
     uint8_t s = c->s;
     uint64_t end = c->cycles + max_cycles;
+    if (pc == APOLLO_IDLE_WIT_PC || pc == APOLLO_IDLE_WIT_PC + 1)
+        return false;    /* the delivery guard: serial bytes are delivered at the input wait only */
     c->waiting = true;   /* a WIT at pc: at_idle is false there, so maybe_deliver delivers nothing */
     while (c->cycles < end) {
         prepare(m);
@@ -456,6 +481,35 @@ bool machine_wait_interrupt(machine *m, uint64_t max_cycles)
     }
     c->waiting = false;
     return false;
+}
+
+machine_input_result machine_wait_input(machine *m, uint64_t max_cycles)
+{
+    cpu740 *c = &m->cpu;
+    uint16_t pc = c->pc;
+    uint8_t s = c->s;
+    uint64_t end = c->cycles + max_cycles;
+    c->pc = APOLLO_IDLE_WIT_PC + 1;   /* the WIT at $C602 executed: the CPU waits at the idle point */
+    c->waiting = true;
+    while (c->cycles < end) {
+        prepare(m);
+        if (idle(m)) {
+            if (machine_idle(m) == MACHINE_STOP)
+                return MINPUT_STOPPED;    /* left at the idle point */
+            continue;                     /* fed: the next prepare delivers a byte */
+        }
+        if (c->waiting && c->irq_lines && (c->p & CPU740_I))
+            break;       /* the CPU would wake and run on at $C603 without taking the interrupt */
+        if (!exec(m))
+            break;
+        if (!c->waiting && c->pc == APOLLO_IDLE_WIT_PC + 1 && c->s == s) {
+            c->pc = pc;  /* the handler's RTI is back at the idle point */
+            return MINPUT_HANDLED;
+        }
+    }
+    c->waiting = false;
+    c->pc = pc;
+    return MINPUT_FAILED;
 }
 
 bool machine_run_loop(machine *m, uint16_t loop, uint16_t exit, uint64_t max_cycles)
@@ -482,6 +536,7 @@ void machine_clone(machine *dst, const machine *src)
     dst->on_frame = dst->on_raw = NULL;
     dst->user = dst->raw_user = NULL;
     dst->irq_hold = false;
+    machine_set_idle_handler(dst, NULL, NULL);
     machine_clear_hooks(dst);
 }
 

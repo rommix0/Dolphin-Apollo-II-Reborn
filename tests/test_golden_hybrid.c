@@ -4,7 +4,8 @@
    On bank_select, @=1 enters a bank: where the C runs the dispatch or bank_enter, its call chain must unwind (M4.2
    spec 5.3, M4.6c1 spec 4.5). A routine no corpus text enters (diff_probed, M4.6a spec 4.4) runs no thunk alone;
    diff_serial compares it. Also the fault path of a thunk: a firmware fault stops the run instead of continuing on
-   wrong data; the C entering a bank; and the M4.6c1 plan's Review Focus inputs on both engines (test_review_focus). */
+   wrong data; the C entering a bank; both engines' loop through the idle handler and the phase deadline (M4.6c2 spec
+   3.1, 3.2; test_engine_loop); and the M4.6c1 plan's Review Focus inputs on both engines (test_review_focus). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -291,49 +292,30 @@ typedef struct {
     unsigned unwinds;
 } outcome;
 
-static fw_bridge g_raw_bridge;
-static frame_list g_raw_frames;
-
-static void install_all(machine *m, void *user)
-{
-    (void)user;
-    CHECK(fw_bridge_init(&g_raw_bridge, m) && fw_install(m, &g_raw_bridge, NULL));
-}
-
-static void collect(void *user, const uint8_t f[APOLLO_FRAME_BYTES])
-{
-    frame_list *fl = user;
-    if (fl->count == fl->cap) {
-        fl->cap = fl->cap ? fl->cap * 2 : 256;
-        fl->frames = realloc(fl->frames, fl->cap * sizeof fl->frames[0]);
-        if (!fl->frames)
-            abort();
-    }
-    memcpy(fl->frames[fl->count++], f, APOLLO_FRAME_BYTES);
-}
-
-/* One engine (hybrid: every replacement) booted to idle, then the n raw bytes of in fed to the serial input (a NUL
-   included: no CLI text can hold one) and run to idle, a fault or the speaking budget. */
+/* One engine (hybrid: every replacement) fed a CR, then the n raw bytes of in (a NUL included: no CLI text can hold
+   one), at the end of boot through the engine's own idle handler (M4.6c2 spec 3.1), and run to the next idle, a fault
+   or the speaking budget; the frames from the end of boot on. The CR's empty clause first, as before M4.6c2 (a boot
+   run fed it, then the raw bytes followed): the NUL bug's ROM jumps return through what it left on the stack. */
 static void run_raw(const uint8_t *rom, size_t len, bool hybrid, const char *in, size_t n, outcome *o)
 {
-    frame_list boot = { 0 };
+    frame_list fl = { 0 };
+    hybrid_stats stats = { 0, 0, 0 };
+    uint8_t bytes[256] = { '\r' };
+    CHECK(n < sizeof bytes);
+    if (n >= sizeof bytes)
+        n = sizeof bytes - 1;
+    memcpy(bytes + 1, in, n);
+    engine_input input = { bytes, n + 1, false };
     memset(o, 0, sizeof *o);
-    memset(&g_raw_bridge, 0, sizeof g_raw_bridge);
-    o->st = rom_engine_run(&g_m, rom, len, NULL, hybrid ? install_all : NULL, NULL, "", false, &boot, NULL);
-    frame_list_free(&boot);
-    CHECK_EQ(o->st, MACHINE_IDLE);
-    machine_set_outputs(&g_m, collect, &g_raw_frames);
-    CHECK(machine_feed_serial(&g_m, (const uint8_t *)in, n));
-    o->st = machine_run(&g_m, ROM_ENGINE_SPEAK_CYCLES);
-    machine_set_outputs(&g_m, NULL, NULL);
-    machine_clear_hooks(&g_m);
+    o->st = hybrid ? hybrid_engine_run_input(&g_m, rom, len, NULL, NULL, &input, false, &fl, NULL, &stats, NULL)
+                   : rom_engine_run_input(&g_m, rom, len, NULL, NULL, NULL, &input, false, &fl, NULL, NULL);
     o->fault = g_m.fault;
     o->fault_addr = g_m.fault_addr;
     o->cpu_fault = (uint8_t)g_m.cpu.fault;
     o->opcode = g_m.cpu.fault_opcode;
     o->cpu_fault_pc = g_m.cpu.fault_pc;
-    o->frames = frame_list_hex(&g_raw_frames);
-    frame_list_free(&g_raw_frames);
+    o->frames = frame_list_hex(&fl);
+    frame_list_free(&fl);
     uint16_t rd = (uint16_t)(g_m.ram[SER_TX_READ] | g_m.ram[SER_TX_READ + 1] << 8);
     uint16_t wr = (uint16_t)(g_m.ram[SER_TX_WRITE] | g_m.ram[SER_TX_WRITE + 1] << 8);
     for (uint16_t a = rd; a != wr && o->reply_len < sizeof o->reply; a = (uint16_t)(a == 0x39FF ? 0x3900 : a + 1))
@@ -341,7 +323,7 @@ static void run_raw(const uint8_t *rom, size_t len, bool hybrid, const char *in,
     o->tx_pending = g_m.ram[SER_TX_PENDING];
     o->bank_current = g_m.ram[BANK_CURRENT];
     memcpy(o->bank_ids, g_m.ram + BANK_ID_TABLE, sizeof o->bank_ids);
-    o->unwinds = (unsigned)g_raw_bridge.unwinds;
+    o->unwinds = stats.unwinds;
 }
 
 /* Both engines on in: the same status, fault, frames, queued reply and bank state. Returns the hybrid's unwinds. */
@@ -423,6 +405,67 @@ static void test_review_focus(const uint8_t *rom, size_t len)
     free(b.frames);
 }
 
+/* ---- the engines' loop (M4.6c2 spec 3.1, 3.2) ---- */
+
+typedef struct { unsigned idles, frames, frames_at_idle[4]; } engine_count;
+
+static void count_frame(void *user, machine *m)
+{
+    (void)m;
+    ((engine_count *)user)->frames++;
+}
+
+static void count_idle(void *user, machine *m)
+{
+    engine_count *c = user;
+    (void)m;
+    if (c->idles < 4)
+        c->frames_at_idle[c->idles] = c->frames;
+    c->idles++;
+}
+
+/* One engine (hybrid: every replacement) on in with a watch counting its events. */
+static machine_status run_counted(const uint8_t *rom, size_t len, const machine_config *cfg, bool hybrid,
+                                  const char *in, engine_count *c, frame_list *fl)
+{
+    engine_watch w = { count_frame, count_idle, c };
+    engine_input input = { (const uint8_t *)in, strlen(in), true };
+    memset(c, 0, sizeof *c);
+    return hybrid ? hybrid_engine_run_input(&g_m, rom, len, cfg, NULL, &input, false, fl, NULL, NULL, &w)
+                  : rom_engine_run_input(&g_m, rom, len, cfg, NULL, NULL, &input, false, fl, NULL, &w);
+}
+
+/* Both engines run through the idle handler: on hello each idles twice (the end of boot, the end of the text) and
+   runs on from the first, the boot's frame events before it (the self-test sound) and the text's after it, the
+   frames kept from the first idle on. In parallel mode (DIP bit 0: isr_idle returns at once) neither idles: the run
+   ends at the boot phase's deadline, MACHINE_CYCLE_LIMIT, after the boot's frames. */
+static void test_engine_loop(const uint8_t *rom, size_t len)
+{
+    for (int hybrid = 0; hybrid <= 1; hybrid++) {
+        engine_count c;
+        frame_list fl = { 0 };
+        CHECK_EQ(run_counted(rom, len, NULL, hybrid, "hello", &c, &fl), MACHINE_IDLE);
+        CHECK_EQ(c.idles, 2);
+        CHECK_EQ(c.frames_at_idle[0], 41);
+        CHECK_EQ(c.frames_at_idle[1], c.frames);
+        CHECK_EQ(fl.count, c.frames - 41);
+        CHECK(fl.count > 0);
+        CHECK_EQ(g_m.frames_produced, fl.count);
+        frame_list_free(&fl);
+
+        machine_config cfg;
+        machine_default_config(&cfg);
+        cfg.port_in[4] |= 1;   /* DIP bit 0: the parallel interface */
+        CHECK_EQ(run_counted(rom, len, &cfg, hybrid, "hello", &c, &fl), MACHINE_CYCLE_LIMIT);
+        CHECK_EQ(c.idles, 0);
+        CHECK_EQ(c.frames, 41);
+        CHECK_EQ(fl.count, 0);
+        CHECK(g_m.cpu.cycles >= ROM_ENGINE_BOOT_CYCLES);
+        CHECK_EQ(g_m.fault, MFAULT_NONE);
+        frame_list_free(&fl);
+    }
+}
+
 void suite_golden_hybrid(void)
 {
     size_t len;
@@ -430,6 +473,7 @@ void suite_golden_hybrid(void)
     if (!rom)
         SKIP("ROM not found (set APOLLO2_ROM)");
     test_thunk_faults(rom, len);
+    test_engine_loop(rom, len);
     test_review_focus(rom, len);
     check_corpus(rom, len, NULL);
     for (size_t i = 0; i < fw_replacement_count; i++)

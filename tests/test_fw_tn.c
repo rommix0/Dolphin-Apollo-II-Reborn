@@ -61,7 +61,7 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
    isr_frame_flag bit 0 (a frame is due at every wait). isr_timer_start's first wait sets ser_abort bit 0 (a mute as
    the DSP starts), so the C boot_loop_play of the mid-clause flush plays no segment: par_play goes from its first
    pass to the three rest frames. */
-static bool mock_wait(void *ctx, fw_wait_kind kind, uint16_t at)
+static fw_wait_result mock_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     fw *f = ctx;
     record(f, at, NULL, 0);
@@ -69,7 +69,7 @@ static bool mock_wait(void *ctx, fw_wait_kind kind, uint16_t at)
         fw_wr8(f, ISR_FRAME_FLAG, 1);
     if (kind == FW_WAIT_TIMER2)
         fw_wr8(f, SER_ABORT, 1);
-    return true;
+    return FW_WAIT_RETURNED;
 }
 
 /* UART_STATUS: the transmitter ready (bit 1), nothing received; any other SFR as last written. */

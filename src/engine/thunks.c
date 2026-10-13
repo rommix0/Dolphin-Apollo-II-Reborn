@@ -46,16 +46,21 @@ static void sync_p2(fw_bridge *b)
     b->f.bank = m50734_port_pins(&b->m->sfr, 2) & P2_BANK_BITS;
 }
 
+/* The outermost thunk's bound (0: none): an entry row's is the engine's phase deadline, which each feed moves
+   (M4.6c2 spec 3.2); any other's b->deadline. */
+static uint64_t bridge_deadline(const fw_bridge *b) { return b->phase ? b->m->phase_deadline : b->deadline; }
+
 /* A ROM call from C, hooked (machine_rom_call) or not (machine_rom_call_unhooked), within the bridge deadline; the
    window and the bank are read back after it. */
 static fw_call_result rom_call(fw_bridge *b, uint16_t addr, fw_regs *r, uint64_t budget, bool unhooked)
 {
-    if (b->deadline) {   /* the outermost thunk's bound: at most the cycles left, none once it has passed */
+    uint64_t deadline = bridge_deadline(b);
+    if (deadline) {   /* the outermost thunk's bound: at most the cycles left, none once it has passed */
         uint64_t now = b->m->cpu.cycles;
-        if (now >= b->deadline)
+        if (now >= deadline)
             return FW_CALL_FAILED;
-        if (budget > b->deadline - now)
-            budget = b->deadline - now;
+        if (budget > deadline - now)
+            budget = deadline - now;
     }
     machine_regs mr = { r->a, r->x, r->y, b->m->cpu.p };   /* the routine starts with the machine's flags */
     machine_call_result res = unhooked ? machine_rom_call_unhooked(b->m, addr, &mr, budget)
@@ -122,31 +127,54 @@ static void host_write_sfr(void *ctx, uint8_t addr, uint8_t value)
     m->bus.write(m->bus.ctx, addr, value);
 }
 
-/* The firmware's hardware wait (M4.6a spec 3.3, M4.6b spec 3.2), on the emulated CPU, within the bridge deadline:
+/* A wait for the loop at that did not end: at an outermost entry row's phase deadline the run ends there
+   (FW_WAIT_STOPPED; M4.6c2 spec 3.2: machine_run then returns MACHINE_CYCLE_LIMIT, as the ROM engine's does at its
+   budget), the machine left at that loop, where the ROM engine would be found spinning (not at the hook, whose
+   address would run the thunk again); otherwise a fault. */
+static fw_wait_result wait_ended(fw_bridge *b, uint16_t at)
+{
+    machine *m = b->m;
+    if (!b->phase || m->fault != MFAULT_NONE || m->cpu.cycles < m->phase_deadline)
+        return FW_WAIT_FAILED;
+    m->cpu.pc = at;
+    m->cpu.waiting = false;
+    return FW_WAIT_STOPPED;
+}
+
+/* The firmware's hardware wait (M4.6a spec 3.3, M4.6b spec 3.2, M4.6c2 spec 3.1), on the emulated CPU, within the
+   bridge deadline:
    - FW_WAIT_UART_TX: ser_tx_wait $C500 (BBC1 UART_STATUS,$C500 / RTS) runs as host code through host_rom_call, with
      the machine's own A, X and Y, so with interrupts live and the ROM's cycles. $C500 is never hooked.
    - FW_WAIT_INTERRUPT: the CPU idles as at a WIT at the hook's PC (never the idle WIT $C602, so no serial byte is
      delivered) until an interrupt has been handled, its handler ROM or C (machine_wait_interrupt).
    - FW_WAIT_TIMER2, FW_WAIT_TIMER3: isr_timer_start's loops $B372 and $B37F run with I set, as inside its PHP/SEI
      (machine_run_loop).
-   at is the C's report of the loop; the hybrid host runs the kind's own. The window and the bank are read back after
-   the wait, as after a ROM call: an interrupt handler may have run. */
-static bool host_wait(void *ctx, fw_wait_kind kind, uint16_t at)
+   - FW_WAIT_INPUT: isr_idle's PHA (the machine's A: under isr_idle's own thunk the A of the ROM's JSR), then its WIT:
+     the CPU waits at the idle point $C603 until an interrupt has been handled (machine_wait_input), and the PLA. When
+     the idle handler stops the run there, the machine stays at the idle point, A pushed, as the ROM's isr_idle
+     leaves it (FW_WAIT_STOPPED).
+   at is the C's report of the loop; the hybrid host runs the kind's own, and leaves the machine there when the phase
+   deadline ends the run. The window and the bank are read back after the wait, as after a ROM call: an interrupt
+   handler may have run. */
+static fw_wait_result host_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     fw_bridge *b = ctx;
     machine *m = b->m;
-    (void)at;
     if (kind == FW_WAIT_UART_TX) {
         fw_regs r = { m->cpu.a, m->cpu.x, m->cpu.y, 0 };
-        return rom_call(b, FW_WAIT_UART_TX_LOOP, &r, FW_ROM_CALL_BUDGET, false) == FW_CALL_RETURNED;
+        return rom_call(b, FW_WAIT_UART_TX_LOOP, &r, FW_ROM_CALL_BUDGET, false) == FW_CALL_RETURNED
+                   ? FW_WAIT_RETURNED
+                   : FW_WAIT_FAILED;
     }
-    uint64_t budget = FW_ROM_CALL_BUDGET;
-    if (b->deadline) {   /* the outermost thunk's bound, as host_rom_call's */
+    /* Under an outermost entry row a wait may last until the phase deadline, as the ROM engine's loops do until
+       machine_run's budget (M4.6c2 spec 3.2); any other at most FW_ROM_CALL_BUDGET. */
+    uint64_t budget = b->phase ? UINT64_MAX : FW_ROM_CALL_BUDGET, deadline = bridge_deadline(b);
+    if (deadline) {   /* the outermost thunk's bound, as host_rom_call's */
         uint64_t now = m->cpu.cycles;
-        if (now >= b->deadline)
-            return false;
-        if (budget > b->deadline - now)
-            budget = b->deadline - now;
+        if (now >= deadline)
+            return wait_ended(b, at);
+        if (budget > deadline - now)
+            budget = deadline - now;
     }
     bool ok;
     switch (kind) {
@@ -159,11 +187,37 @@ static bool host_wait(void *ctx, fw_wait_kind kind, uint16_t at)
     case FW_WAIT_TIMER3:
         ok = machine_run_loop(m, FW_WAIT_TIMER3_LOOP, FW_WAIT_TIMER3_EXIT, budget);
         break;
+    case FW_WAIT_INPUT: {
+        m->ram[0x100 + m->cpu.s] = m->cpu.a;   /* PHA */
+        m->cpu.s--;
+        machine_input_result r = machine_wait_input(m, budget);
+        sync_p2(b);
+        if (r == MINPUT_STOPPED)
+            return FW_WAIT_STOPPED;   /* at the idle point, A pushed */
+        m->cpu.s++;                   /* PLA */
+        return r == MINPUT_HANDLED ? FW_WAIT_RETURNED : wait_ended(b, at);
+    }
     default:
-        return false;
+        return FW_WAIT_FAILED;
     }
     sync_p2(b);
-    return ok;
+    return ok ? FW_WAIT_RETURNED : wait_ended(b, at);
+}
+
+/* boot_reset's CPU set-up $A625-$A62C (M4.6c2 spec 3.3) on the machine's CPU: SEI, LDX #$FF / TXS, CLT, CLD, CLC,
+   CLV. */
+static void host_reset_cpu(void *ctx)
+{
+    cpu740 *c = &((fw_bridge *)ctx)->m->cpu;
+    c->p = (uint8_t)((c->p | CPU740_I) & ~(CPU740_T | CPU740_D | CPU740_C | CPU740_V));
+    c->s = 0xFF;
+}
+
+/* CLI or SEI (M4.6c2 spec 3.3): the machine's I flag, on which the next wait's interrupts depend. */
+static void host_set_interrupts(void *ctx, bool enabled)
+{
+    cpu740 *c = &((fw_bridge *)ctx)->m->cpu;
+    c->p = enabled ? (uint8_t)(c->p & ~CPU740_I) : (uint8_t)(c->p | CPU740_I);
 }
 
 /* STA DSP_DATA (M4.6b spec 3.1): the byte written to $8000 through the bus, as the CPU's STA writes it, so the
@@ -187,7 +241,9 @@ bool fw_bridge_init(fw_bridge *b, machine *m)
     b->m = m;
     b->thunk_calls = 0;
     b->unwinds = 0;
+    b->stops = 0;
     b->deadline = 0;
+    b->phase = false;
     b->host.ctx = b;
     b->host.rom_call = host_rom_call;
     b->host.set_low_window = host_set_low_window;
@@ -199,6 +255,8 @@ bool fw_bridge_init(fw_bridge *b, machine *m)
     b->host.read_bank = host_read_bank;
     b->host.enter = host_enter;
     b->host.rom_call_unhooked = host_rom_call_unhooked;
+    b->host.reset_cpu = host_reset_cpu;
+    b->host.set_interrupts = host_set_interrupts;
     fw_init(&b->f, m->ram, img, &b->host);
     return img != NULL;
 }
@@ -207,14 +265,19 @@ bool fw_bridge_init(fw_bridge *b, machine *m)
    made from inside the C overwrites the machine's registers), then sets its output registers. */
 typedef void (*thunk_regs)(fw *f, cpu740 *c);
 
+/* How a thunk exits: like RTS, like RTI (an interrupt handler, M4.6a spec 3.2), or never (an entry, M4.6c2 spec
+   2.3). */
+typedef enum { FRAME_CALL, FRAME_ISR, FRAME_ENTRY } frame_kind;
+
 /* The frame every thunk shares: set the fault trap (saving an outer thunk's, as a ROM call from C can reach
    another thunk on the same bridge), sync the window and the bank, run the routine; then restore the trap and
-   either leave the machine where an unwound ROM call or a bank entry (fw_enter) left it, report the fault, or
-   emulate the RTS (an interrupt handler's RTI when
-   isr is set, M4.6a spec 3.2). The outermost thunk (no deadline active) also bounds the whole call: b->deadline =
-   its entry cycles + FW_ROM_CALL_SPEECH_BUDGET, cleared however it ends, so that a C wait that never ends
-   (par_play's, a whole utterance inside one hook call) faults (thunks.h). */
-static bool run_frame(machine *m, fw_bridge *b, thunk_regs regs, bool isr)
+   either leave the machine where a stopped wait (M4.6c2 spec 3.1), an unwound ROM call or a bank entry (fw_enter)
+   left it, report the fault, or emulate the RTS (an interrupt handler's RTI, M4.6a spec 3.2). The outermost thunk
+   (no deadline active) also bounds the whole call: b->deadline = its entry cycles + FW_ROM_CALL_SPEECH_BUDGET, or for
+   an entry row the engine's phase deadline (b->phase, when the engine set one), cleared however it ends, so that a
+   C wait that never ends (par_play's, a whole utterance inside one hook call) faults or, at the phase deadline, ends
+   the run (thunks.h). */
+static bool run_frame(machine *m, fw_bridge *b, thunk_regs regs, frame_kind kind)
 {
     if (m != b->m) {   /* registers come from m, RAM and host calls from b->m: they must be one machine */
         m->fault = MFAULT_FIRMWARE;
@@ -224,17 +287,29 @@ static bool run_frame(machine *m, fw_bridge *b, thunk_regs regs, bool isr)
     b->thunk_calls++;
     uint16_t entry = m->cpu.pc;
     uint8_t entry_sp = m->cpu.s;
-    bool outermost = b->deadline == 0;
-    if (outermost)
-        b->deadline = m->cpu.cycles + FW_ROM_CALL_SPEECH_BUDGET;
+    bool outermost = b->deadline == 0 && !b->phase;
+    if (outermost) {
+        if (kind == FRAME_ENTRY && m->phase_deadline)
+            b->phase = true;
+        else
+            b->deadline = m->cpu.cycles + FW_ROM_CALL_SPEECH_BUDGET;
+    }
     jmp_buf trap, *saved = b->f.trap;
     b->f.trap = &trap;
     sync_p2(b);
     if (setjmp(trap) == 0)
         regs(&b->f, &m->cpu);
     b->f.trap = saved;
-    if (outermost)
+    if (outermost) {
         b->deadline = 0;
+        b->phase = false;
+    }
+    if (b->f.stopped) {   /* a wait stopped the run: the machine stays where the host left it (the idle point, or
+                             the ROM loop of a wait that reached the phase deadline) */
+        b->f.stopped = false;
+        b->stops++;
+        return true;
+    }
     if (b->f.unwound) {   /* a ROM call reset the stack or the C entered a bank: the C is abandoned, the machine
                              goes on where the ROM went or at the bank entry */
         b->f.unwound = false;
@@ -250,14 +325,14 @@ static bool run_frame(machine *m, fw_bridge *b, thunk_regs regs, bool isr)
         m->cpu.s = entry_sp;
         return true;
     }
-    if (isr)
+    if (kind == FRAME_ISR)
         machine_return_interrupt(m);
     else
         machine_return(m);
     return true;
 }
 
-static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs) { return run_frame(m, b, regs, false); }
+static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs) { return run_frame(m, b, regs, FRAME_CALL); }
 
 /* The registers in, a bank routine (bank.c, M4.6c1), the registers out: A, X and Y as the ROM leaves them. No caller
    reads a flag. */
@@ -1609,7 +1684,7 @@ THUNK(ph_lengthen_count)
 #undef THUNK
 /* The hook of an interrupt handler: its frame exits like RTI. */
 #define ISR_THUNK(name) \
-    static bool t_##name(machine *m, void *user) { return run_frame(m, user, name##_regs, true); }
+    static bool t_##name(machine *m, void *user) { return run_frame(m, user, name##_regs, FRAME_ISR); }
 ISR_THUNK(isr_timer_dsp)
 ISR_THUNK(isr_int1)
 ISR_THUNK(isr_int4_host_line)

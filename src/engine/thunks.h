@@ -18,8 +18,17 @@ enum { FW_OUT_A = 0x01, FW_OUT_X = 0x02, FW_OUT_Y = 0x04, FW_OUT_Z = 0x08 };
    active) sets it to its entry cycles + FW_ROM_CALL_SPEECH_BUDGET and clears it when it returns or unwinds; nested
    thunks leave it alone. Each ROM call from C gets at most the cycles left before it and fails once it has passed,
    so a C wait that never ends (a whole utterance runs inside one hook call, where machine_run's budget is never
-   checked) faults instead of hanging. */
-typedef struct fw_bridge { machine *m; fw f; fw_host host; uint64_t thunk_calls, unwinds, deadline; } fw_bridge;
+   checked) faults instead of hanging. An outermost entry row (phase set; M4.6c2 spec 3.2) runs instead under the
+   engine's phase deadline, m->phase_deadline, which each feed moves: a wait that reaches it stops the run
+   (FW_WAIT_STOPPED), so that machine_run returns MACHINE_CYCLE_LIMIT as the ROM engine's does. stops: C call chains
+   abandoned at a stopped wait (M4.6c2 spec 3.1). */
+typedef struct fw_bridge {
+    machine *m;
+    fw f;
+    fw_host host;
+    uint64_t thunk_calls, unwinds, stops, deadline;
+    bool phase;
+} fw_bridge;
 
 typedef struct {
     const char *name;
@@ -32,6 +41,9 @@ typedef struct {
                                  (machine_return_interrupt) and declares no outputs (M4.6a spec 3.2) */
     bool ramcode;             /* a routine of the RAM copy of bank_ramcode_image ($0200-$03FE): hooked with
                                  machine_hook_ramcode (M4.6c1 spec 3.3) */
+    bool entry;               /* an entry (boot_reset, the re-entries, the bank entries; M4.6c2 spec 2.3): it never
+                                 returns; an outermost one runs under the engine's phase deadline; checked by diff_main,
+                                 not diff_lts */
 } fw_replacement;
 
 extern const fw_replacement fw_replacements[];

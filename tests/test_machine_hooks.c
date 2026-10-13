@@ -658,6 +658,173 @@ static void test_wait_interrupt(void)
     CHECK_EQ(g_m.fault, MFAULT_NONE);
 }
 
+#define SYN_RX_ISR  0xC680   /* the synthetic receive interrupt handler */
+
+static unsigned g_idles;
+
+/* An idle handler that feeds 'A' at its first call and stops the run at every later one. */
+static machine_idle_action idle_feed_once(machine *m, void *user)
+{
+    static const uint8_t byte[] = { 'A' };
+    (void)user;
+    if (g_idles++ > 0)
+        return MACHINE_STOP;
+    CHECK(machine_feed_serial(m, byte, sizeof byte));
+    return MACHINE_FEED;
+}
+
+/* $9000 as load_main, the UART's receive interrupt enabled (UART_CTRL bit 4) and its handler at $C680 (PHA /
+   LDA UART_RX / STA $21 / INC $22 / PLA / RTI) on vec_int1_serial $FFFA, I clear. */
+static void load_rx(void)
+{
+    static const uint8_t rx_isr[] = { 0x48, 0xA5, 0xE5, 0x85, 0x21, 0xE6, 0x22, 0x68, 0x40 };
+    load_main(0xC100);
+    put(SYN_RX_ISR, rx_isr, sizeof rx_isr);
+    vector(0xFFFA, SYN_RX_ISR);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    g_m.bus.write(g_m.bus.ctx, M50734_UART_CTRL, 0x10);
+    g_m.cpu.p = 0;
+    g_idles = 0;
+}
+
+/* machine_wait_input (M4.6c2 spec 3.1): the CPU waits at the idle point $C603. With nothing left to do there the idle
+   handler runs: it feeds a byte, which is delivered there, and the receive interrupt's handler runs; the wait returns
+   with the PC and SP back. At the next idle the handler stops the run: the machine stays at the idle point (waiting),
+   machine_run returns MACHINE_IDLE there, and the handler is not called again. A machine that never idles (timer 3
+   enabled) and takes no interrupt fails after its budget; a line that wakes the CPU with I set fails at once. A clone
+   has no idle handler. */
+static void test_wait_input(void)
+{
+    static const uint8_t byte[] = { 'B' };
+    load_rx();
+    machine_set_idle_handler(&g_m, idle_feed_once, NULL);
+    CHECK_EQ(machine_wait_input(&g_m, 10000), MINPUT_HANDLED);
+    CHECK_EQ(g_idles, 1);
+    CHECK_EQ(g_m.ram[0x21], 'A');
+    CHECK_EQ(g_m.ram[0x22], 1);
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    CHECK(!g_m.cpu.waiting);
+    machine_clone(&g_c, &g_m);
+    CHECK(g_c.idle_fn == NULL);
+
+    CHECK_EQ(machine_wait_input(&g_m, 10000), MINPUT_STOPPED);
+    CHECK_EQ(g_idles, 2);
+    CHECK_EQ(g_m.cpu.pc, 0xC603);
+    CHECK(g_m.cpu.waiting);
+    CHECK_EQ(machine_run(&g_m, 1000), MACHINE_IDLE);
+    CHECK_EQ(machine_idle(&g_m), MACHINE_STOP);
+    CHECK_EQ(g_idles, 2);
+
+    load_rx();
+    machine_set_idle_handler(&g_m, idle_feed_once, NULL);
+    g_m.sfr.icr2 = 0x10;                         /* timer 3 enabled (not running): never idle */
+    uint64_t c0 = g_m.cpu.cycles;
+    CHECK_EQ(machine_wait_input(&g_m, 1000), MINPUT_FAILED);
+    CHECK(g_m.cpu.cycles - c0 >= 1000);
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK(!g_m.cpu.waiting);
+    CHECK_EQ(g_idles, 0);
+
+    g_m.sfr.icr2 = 0;
+    CHECK(machine_feed_serial(&g_m, byte, sizeof byte));   /* delivered at the idle point: the line wakes the CPU */
+    g_m.cpu.p = CPU740_I;
+    c0 = g_m.cpu.cycles;
+    CHECK_EQ(machine_wait_input(&g_m, 1000), MINPUT_FAILED);
+    CHECK_EQ(g_m.cpu.cycles, c0);
+    CHECK(g_m.sfr.uart_rx_full);
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    CHECK(!g_m.cpu.waiting);
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+}
+
+/* The delivery guard (M4.6c2 spec 3.1, the M4.6b deferred item): machine_wait_interrupt refuses the idle WIT $C602
+   and the idle point $C603, running nothing, so a byte in the serial queue is never delivered by it. */
+static void test_delivery_guard(void)
+{
+    static const uint8_t byte[] = { 'C' };
+    load_rx();
+    CHECK(machine_feed_serial(&g_m, byte, sizeof byte));
+    for (uint16_t pc = 0xC602; pc <= 0xC603; pc++) {
+        uint64_t c0 = g_m.cpu.cycles;
+        g_m.cpu.pc = pc;
+        CHECK(!machine_wait_interrupt(&g_m, 1000));
+        CHECK_EQ(g_m.cpu.cycles, c0);
+        CHECK_EQ(g_m.cpu.pc, pc);
+        CHECK(!g_m.cpu.waiting);
+        CHECK(!g_m.sfr.uart_rx_full);
+    }
+}
+
+/* The bridge's input wait (M4.6c2 spec 3.1): isr_idle's PHA of the machine's A, the wait at the idle point, the PLA:
+   SP and the PC back. Stopped: f->stopped, no fault, the machine at the idle point with A pushed, as the ROM's isr_idle
+   leaves it. Under an outermost entry row (b->phase) a wait lasts until the engine's phase deadline, past
+   FW_ROM_CALL_BUDGET, and one that reaches it stops the run (no fault; M4.6c2 spec 3.2), the machine left at the wait's
+   loop (not waiting); so does one made after it has passed. Without phase, the bridge deadline is a fault as before.
+   The CPU calls: reset_cpu sets I and SP $FF and clears T, D, C and V; set_interrupts clears or sets I. */
+static void test_host_input(void)
+{
+    static fw_bridge b;
+    load_rx();
+    CHECK(fw_bridge_init(&b, &g_m));
+    machine_set_idle_handler(&g_m, idle_feed_once, NULL);
+    g_m.cpu.a = 0x5A;
+    fw_wait(&b.f, FW_WAIT_INPUT, FW_WAIT_INPUT_LOOP);
+    CHECK(!b.f.fault);
+    CHECK(!b.f.stopped);
+    CHECK_EQ(g_m.ram[0x21], 'A');
+    CHECK_EQ(g_m.ram[0x1FF], 0x5A);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    CHECK_EQ(g_m.cpu.pc, 0x9000);
+    fw_wait(&b.f, FW_WAIT_INPUT, FW_WAIT_INPUT_LOOP);
+    CHECK(b.f.stopped);
+    CHECK(!b.f.fault);
+    CHECK_EQ(g_m.cpu.pc, 0xC603);
+    CHECK(g_m.cpu.waiting);
+    CHECK_EQ(g_m.cpu.s, 0xFE);
+    CHECK_EQ(g_m.ram[0x1FF], 0x5A);
+
+    load_rx();
+    CHECK(fw_bridge_init(&b, &g_m));
+    b.phase = true;
+    g_m.phase_deadline = g_m.cpu.cycles + 2 * FW_ROM_CALL_BUDGET;   /* no interrupt comes: the deadline ends the wait */
+    fw_wait(&b.f, FW_WAIT_INTERRUPT, 0xA6C2);
+    CHECK(b.f.stopped);
+    CHECK(!b.f.fault);
+    CHECK(g_m.cpu.cycles >= g_m.phase_deadline);
+    CHECK(g_m.cpu.cycles < g_m.phase_deadline + 8);
+    CHECK_EQ(g_m.cpu.pc, 0xA6C2);
+    CHECK(!g_m.cpu.waiting);
+    b.f.stopped = false;
+    g_m.cpu.pc = 0x9000;
+    uint64_t c0 = g_m.cpu.cycles;
+    fw_wait(&b.f, FW_WAIT_INTERRUPT, 0xA6C2);   /* passed: stopped without running */
+    CHECK(b.f.stopped);
+    CHECK_EQ(g_m.cpu.cycles, c0);
+    CHECK_EQ(g_m.cpu.pc, 0xA6C2);
+    g_m.cpu.pc = 0x9000;
+    b.f.stopped = false;
+    b.phase = false;
+    b.deadline = g_m.cpu.cycles + 500;
+    fw_wait(&b.f, FW_WAIT_INTERRUPT, 0xA6C2);
+    CHECK(b.f.fault);
+    CHECK_EQ(b.f.fault_addr, 0xA6C2);
+    CHECK(!b.f.stopped);
+
+    load_main(0xC100);
+    CHECK(fw_bridge_init(&b, &g_m));
+    g_m.cpu.p = 0xFF & ~CPU740_I;
+    g_m.cpu.s = 0x80;
+    fw_reset_cpu(&b.f);
+    CHECK_EQ(g_m.cpu.p, CPU740_N | CPU740_B | CPU740_I | CPU740_Z);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    fw_set_interrupts(&b.f, true, 0xA66E);
+    CHECK_EQ(g_m.cpu.p, CPU740_N | CPU740_B | CPU740_Z);
+    fw_set_interrupts(&b.f, false, 0xA6E7);
+    CHECK_EQ(g_m.cpu.p, CPU740_N | CPU740_B | CPU740_I | CPU740_Z);
+    CHECK(!b.f.fault);
+}
+
 /* The bridge's DSP port and frame event (M4.6b spec 3.1): fw_dsp_write is a bus write of $8000 (counted, grouped
    into the raw frame), fw_frame_done the machine's frame capture. */
 static void test_host_dsp(void)
@@ -974,4 +1141,7 @@ void suite_machine_hooks(void)
     test_rom_call_unhooked();
     test_host_bank();
     test_host_readback();
+    test_wait_input();
+    test_delivery_guard();
+    test_host_input();
 }

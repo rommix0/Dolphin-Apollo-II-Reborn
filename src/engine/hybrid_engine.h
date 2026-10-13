@@ -17,5 +17,10 @@ typedef struct {
 machine_status hybrid_engine_speak(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
                                    const char *only, const char *text, bool include_boot,
                                    frame_list *produced, frame_list *raw, hybrid_stats *stats);
+/* hybrid_engine_speak with the input and the watch of rom_engine_run_input. */
+machine_status hybrid_engine_run_input(machine *m, const uint8_t *rom, size_t len, const machine_config *cfg,
+                                       const char *only, const engine_input *in, bool include_boot,
+                                       frame_list *produced, frame_list *raw, hybrid_stats *stats,
+                                       const engine_watch *watch);
 
 #endif

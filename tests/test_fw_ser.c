@@ -52,12 +52,12 @@ static void stub_write_sfr(void *ctx, uint8_t addr, uint8_t value)
     log_add(LOG_WRITE, addr, value);
 }
 
-static bool stub_wait(void *ctx, fw_wait_kind kind, uint16_t at)
+static fw_wait_result stub_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     (void)ctx;
     log_add(LOG_WAIT, (uint8_t)kind, 0);
     g_wait_at = at;
-    return g_wait_ok;
+    return g_wait_ok ? FW_WAIT_RETURNED : FW_WAIT_FAILED;
 }
 
 /* Counts and fails every ROM call: the serial code makes none. */

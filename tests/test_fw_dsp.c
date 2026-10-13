@@ -50,13 +50,13 @@ static void stub_write_sfr(void *ctx, uint8_t addr, uint8_t value)
     log_add(EV_WRITE, addr, value);
 }
 
-static bool stub_wait(void *ctx, fw_wait_kind kind, uint16_t at)
+static fw_wait_result stub_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     (void)ctx;
     log_add(EV_WAIT, at, (uint8_t)kind);
     if (kind == FW_WAIT_INTERRUPT && g_wait_ok && g_flag_every && ++g_iwaits % g_flag_every == 0)
         g_ram[ISR_FRAME_FLAG] |= 1;
-    return g_wait_ok;
+    return g_wait_ok ? FW_WAIT_RETURNED : FW_WAIT_FAILED;
 }
 
 static void stub_dsp_write(void *ctx, uint8_t byte)

@@ -14,6 +14,7 @@ void fw_init(fw *f, uint8_t *ram, const fw_image *img, const fw_host *host)
     f->fault_addr = 0;
     f->trap = NULL;
     f->unwound = false;
+    f->stopped = false;
     f->tn_flushes = 0;
 }
 
@@ -122,8 +123,15 @@ bool fw_sfr_bit(fw *f, uint8_t addr, unsigned bit) { return ((fw_sfr8(f, addr) >
 
 void fw_wait(fw *f, fw_wait_kind kind, uint16_t at)
 {
-    if (f->host && f->host->wait && f->host->wait(f->host->ctx, kind, at))
+    fw_wait_result r = f->host && f->host->wait ? f->host->wait(f->host->ctx, kind, at) : FW_WAIT_FAILED;
+    if (r == FW_WAIT_RETURNED)
         return;
+    if (r == FW_WAIT_STOPPED) {
+        f->stopped = true;   /* the run ends here: the C is abandoned, as at an unwound ROM call */
+        if (f->trap)
+            longjmp(*f->trap, 1);
+        return;
+    }
     fault(f, at);
 }
 
@@ -192,4 +200,22 @@ void fw_enter(fw *f, uint16_t addr, uint8_t a, uint8_t x)
     f->unwound = true;   /* the C is abandoned as at an unwound ROM call (M4.2 spec 3) */
     if (f->trap)
         longjmp(*f->trap, 1);
+}
+
+void fw_reset_cpu(fw *f)
+{
+    if (f->host && f->host->reset_cpu) {
+        f->host->reset_cpu(f->host->ctx);
+        return;
+    }
+    fault(f, FW_RESET_CPU);
+}
+
+void fw_set_interrupts(fw *f, bool enabled, uint16_t at)
+{
+    if (f->host && f->host->set_interrupts) {
+        f->host->set_interrupts(f->host->ctx, enabled);
+        return;
+    }
+    fault(f, at);
 }
