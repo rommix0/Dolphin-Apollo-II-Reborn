@@ -13,6 +13,7 @@
 - (2026-10-13) M4.6c is two plans: M4.6c1 the banks and the command dispatcher (done), **M4.6c2** boot, the main loop and `isr_idle` (this spec).
 - (2026-10-13) **The C pulls its input.** The engine registers an idle handler on the machine. When the machine has nothing left to do (the ROM engine's `machine_run` returning `MACHINE_IDLE`, or the C's input wait at `$C602` reaching the same condition), the handler feeds the next input or ends the run; ending abandons the C. One code path for both engines; it is what an M5 native host needs. (Rejected: running the C on its own stack as a coroutine; keeping the main loop in ROM.)
 - (2026-10-13) **The stack page is not compared end to end.** With the main loop in C the machine stack no longer holds the ROM's return addresses, so interrupts push onto other bytes: the new end-to-end comparison excludes `$0100–$01FF` (`boot_stack`, the hardware stack page; nothing else lives there) and SP. The per-call comparisons are unchanged. (Rejected: the C mirroring the ROM's stack.)
+- (2026-10-13) **The timer's per-frame counters are compared at frame events only.** `isr_tick_div` `$59`, `isr_word_ofs` `$5A` and `isr_words_left` `$5B` differ at input idles and at a run's end: after an utterance's last frame `isr_speech_stop` stops timer 3 a number of ticks later that depends on how long the main program takes, and the C takes no emulated cycles (true since M4.4b; `diff_play` already leaves them out at exit). `diff_main` compares them at every frame event (the same tick on both engines) and not at idles or a run's end. (Rejected: investigating a way for the C to pass emulated time there.)
 
 ## 1. Goal
 
@@ -56,7 +57,7 @@ Success: the goldens stay byte-identical with all 131 replacements and with each
 
 ### 2.3 Hooks (21 new replacements; 131 in all, 132 `golden_hybrid` modes)
 
-- **Entry rows** (`boot_reset`, `boot_reentry_cold`, `boot_reentry_warm`, `bank_entry_cold`, `bank_entry_warm`): they never return; their thunk runs under the engine's phase deadline (§3.2), and a bank entry from C (`fw_enter`) ends the thunk and lets the machine enter the next one at `$FFD0`/`$FFD4`.
+- **Entry rows** (`boot_reset`, `boot_reentry_cold`, `boot_reentry_warm`, `bank_entry_cold`, `bank_entry_warm`): they never return; their thunk runs under the engine's phase deadline (§3.2), and a bank entry from C (`fw_enter`) ends the thunk and lets the machine enter the next one at `$FFD0`/`$FFD4`. An entry whose C enters its own address again is run afresh by `run_frame` (otherwise the spin guard would fault, e.g. at `$FFD4`); `bank_entry_reset` `$FFD8` is never reached and is not hooked. *(Corrected 2026-10-13 from the plan's proof.)*
 - **Waits rows** (`boot_loop_text`, `boot_get_clause`, `isr_idle`, `boot_selftest_sound`, `cmd_say_phonetic`), as M4.4b's frame-loop rows.
 - **Helper rows** (the ten boot helpers), ordinary.
 - **`isr_unused`**, an `isr` row (it declares no outputs; its thunk exits like RTI).
@@ -64,7 +65,7 @@ Success: the goldens stay byte-identical with all 131 replacements and with each
 
 ### 2.4 The data
 
-Converted: `boot_selftest_ok_cmds` `$A7BE` (7 bytes) and `boot_selftest_fail_cmds` `$A7C5` (15) as strings; `boot_baud_text_300` `$ACCA` (14) and `boot_baud_text_1200` `$ACD8` (16) in the phonetic-text format of `boot_baud_text_19200` (already converted); `boot_prosody_defaults` `$C65B` (26) as numbers with their meaning, one per `@R` letter. `firmware_data` checks them against the ROM.
+Converted: `boot_selftest_ok_cmds` `$A7BE` (7 bytes) and `boot_selftest_fail_cmds` `$A7C5` (15) as strings; `boot_baud_text_300` `$ACCA` (14) and `boot_baud_text_1200` `$ACD8` (16) in the phonetic-text format of `boot_baud_text_19200` (all three baud texts were already converted, since M4.1: the new data is the self-test strings and `boot_prosody_defaults`, 48 bytes, `firmware_data` 49,092) *(Corrected 2026-10-13 from the plan's proof.)*; `boot_prosody_defaults` `$C65B` (26) as numbers with their meaning, one per `@R` letter. `firmware_data` checks them against the ROM.
 
 ### 2.5 `boot_get_clause` and its waits
 
@@ -84,7 +85,7 @@ Converted: `boot_selftest_ok_cmds` `$A7BE` (7 bytes) and `boot_selftest_fail_cmd
 
 ### 3.1 The input wait and the idle handler
 
-- `machine_set_idle_handler(m, fn, user)` (machine API addition, no model change): `fn` is called when the machine has nothing left to do (the idle condition of `machine_run`: at the idle WIT, no queued input, no byte in the UART, timer 3 off, no interrupt line) and returns **feed** (it queued more input) or **stop**.
+- `machine_set_idle_handler(m, fn, user)` (machine API addition, no model change): `fn` is called when the machine has nothing left to do (the idle condition of `machine_run`: at the idle WIT, no queued input, no byte in the UART, timer 3 off, no interrupt line) and returns **feed** (it queued more input) or **stop**. The proof added `machine_idle` and `machine_wait_input` (the hybrid's `FW_WAIT_INPUT`, which parks the PC at `at`) and the engine's `phase_deadline`, all API additions; the host's wait returns `fw_wait_result` (`FW_WAIT_RETURNED`, `FW_WAIT_FAILED`, `FW_WAIT_STOPPED`). *(Corrected 2026-10-13 from the plan's proof.)*
 - `rom_engine_run` becomes a loop: `machine_run`; on `MACHINE_IDLE` the handler; feed runs on, stop returns `MACHINE_IDLE`. The engine's own handler has two phases: at the first idle (the end of boot) it resets the counters, enables the sinks and queues the text and a CR, as `rom_engine_run` does today between its two runs; at the next idle it stops.
 - `FW_WAIT_INPUT` (`at` = `$C602`): `isr_idle`'s WIT. The hybrid host parks the CPU in the WIT at `$C603` (the machine's idle point, where serial bytes are delivered) and runs until an interrupt has been handled. When the machine reaches the idle condition there, the host calls the handler: on feed it waits on and the byte is delivered as on the ROM; on stop the wait returns stopped, the firmware sets `f->stopped` and abandons the C like an unwound call (a longjmp to `f->trap`), and `run_frame` leaves the machine at the idle point, so the outer `machine_run` returns `MACHINE_IDLE`. Where the ROM `boot_get_clause` called the C `isr_idle`, that state is exactly the ROM's (A pushed, the WIT at `$C603`).
 - **Delivery guard** (deferred from M4.6b): `machine_wait_interrupt` refuses the PCs `$C602`/`$C603`; serial bytes are delivered only at the input wait.
@@ -97,7 +98,7 @@ The entry rows carry the run itself, so instead of the outermost thunk's `FW_ROM
 
 - `reset_cpu(ctx)`: `boot_reset`'s `$A625–$A62C` (`SEI`, `LDX #$FF / TXS`, `CLT`, `CLD`, `CLC`, `CLV`), so ROM code that runs later (the wait loops, the NUL fallback) and the interrupts see the ROM's flags and SP.
 - `set_interrupts(ctx, enabled)`: the main loop's unpaired `CLI`/`SEI` (`$A66E`; `boot_get_clause` `$A6D3`, `$A6E7`, `$A6FF`), on which the next wait's interrupts depend. `PHP; SEI ... PLP` pairs stay invisible, as before.
-- `fw_reset_cpu(f)` and `fw_set_interrupts(f, on)` call them; without a host, a fault at the ROM address of the instruction.
+- `fw_reset_cpu(f)` and `fw_set_interrupts(f, on, at)` call them; without a host, a fault at the ROM address of the instruction (`at` for `set_interrupts`). *(Corrected 2026-10-13 from the plan's proof.)*
 
 ### 3.4 Bank entries
 
@@ -113,7 +114,7 @@ The entry rows carry the run itself, so instead of the outermost thunk's `FW_ROM
 ### 4.1 `diff_main` (new)
 
 - The ROM engine and the all-C hybrid on every corpus text and on extra texts: `@=1` (warm re-entry); a cold re-entry injected into both engines (`bank_ver_minor` altered before `@=1`); DIP bit 1 with `@=5`; a query whose status reply waits on the host line; the self-test failing (DIP bit 1 and the machine's P2.1 input high), if the plan's proof shows it reachable that way.
-- Compared at every input idle (the end of boot, the end of each utterance) and at every frame event: all RAM except the stack page `$0100–$01FF`, the SFR state, the DSP outputs, the frame counts and the I flag; the numbers of idles and frame events must be equal.
+- Compared at every input idle (the end of boot, the end of each utterance) and at every frame event: all RAM except the stack page `$0100–$01FF` (and, at idles and a run's end only, `$59–$5B`: the user decision above), the SFR state, the DSP outputs, the frame counts and the I flag; the numbers of idles and frame events must be equal.
 - Parallel-mode boot (DIP bit 0): compared at the frame events of the boot announcement; neither engine idles in that mode, so the run ends at the boot budget and the comparison stops there.
 - This is the comparison of the entry rows and the waits rows.
 
@@ -129,7 +130,7 @@ The probes deferred from M4.6c1's final review: the alternate table's no-match p
 
 `boot_init_baud` with X = 1 (the spoken rate through `cmd_say_phonetic`, each of the three texts); `isr_unused`; the self-test's fail path (and `diff_main` compares it too if it is reachable, §4.1).
 
-### 4.5 Unit tests (new suite `tests/test_fw_boot.c`, `suite_fw_boot`; 39 suites)
+### 4.5 Unit tests (new suite `tests/test_fw_boot.c`, `suite_fw_boot`; with `diff_main`, 40 suites) *(Corrected 2026-10-13 from the plan's proof.)*
 
 - Each ported routine against a stub host that logs SFR access, `reset_cpu`, `set_interrupts`, the waits and `enter`: RAM writes, SFR order, exit registers, every clause end of `boot_get_clause`.
 - The input wait: feed, stop and the deadline, with `f->stopped` and the trap.
@@ -149,7 +150,7 @@ The probes deferred from M4.6c1's final review: the alternate table's no-match p
 3. `diff_main`, `diff_lts`, `diff_play` and `diff_serial` report 0 mismatches; every probe and extra run reached.
 4. The branch probe is recorded, one-sided branches pinned, and a hybrid corpus run executes no ROM firmware code but the host's wait loops.
 5. `golden_hybrid` (48 x 132), `test_timing_invariance` on both engines and the CLI check pass.
-6. The new and updated unit tests pass; the full suite is green (39 suites).
+6. The new and updated unit tests pass; the full suite is green (40 suites).
 7. The parent spec rev 18 (M4.6c2 done, milestone 4 complete), this spec's As built section and the README are updated.
 
 ### 4.8 Task outline (for the plan)
