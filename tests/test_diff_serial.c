@@ -1,16 +1,19 @@
-/* Probe-based differential test of the serial code (M4.6a spec 4.2): the paths no corpus text reaches (the reply
-   transmission, parallel mode, the _INT1 latch, the host-line interrupt, the ring page ends) are compared with the
-   ROM through synthetic calls from real states. Every corpus file and the boot run go through the ROM engine; at
-   every entry of isr_int1 $C2B4 (a received byte: the CPU has just entered the interrupt, PC and P pushed, I set) and
-   of ser_tx_put $C4DD (a reply being queued: the output ring holds the reply's bytes before it), the machine is
-   cloned twice for each probe of that point, both copies with interrupts held. The probe's injection is made to both
-   copies; then copy A runs the ROM routine and copy B the C (its replacement hooked in copy B alone; the ROM routine
-   while there is none), and the two must agree on the exit state with A, X and Y (diff_same, diff_state.h).
-   An interrupt probe starts at the handler's first instruction with the frame the CPU pushed on entering it:
-   isr_int1's own entry; for isr_int4_host_line the same point with the PC set to vec_int4_timerx ($FFF4) and INT4
-   requested and enabled (ICR3 bits 7 and 6), as if the CPU had taken INT4 there instead (take_irq, cpu740.c, pushes
-   the same PC and P and sets I for every line; only the vector differs). Each copy runs to the handler's RTI
-   (machine_finish_routine). A subroutine probe is a machine_rom_call of the routine with the copy's registers.
+/* Probe-based differential test of the serial code (M4.6a spec 4.2) and of speech timing (M4.6b spec 4.3): the paths no
+   corpus text reaches (the reply transmission, parallel mode, the _INT1 latch, the host-line interrupt, the ring page
+   ends; the parallel handshake of isr_par_ready and isr_par_hold, a frame boundary of the timer interrupt with the
+   frame flag still set) are compared with the ROM through synthetic calls from real states. Every corpus file and the
+   boot run go through the ROM engine; at every entry of isr_int1 $C2B4 (a received byte: the CPU has just entered the
+   interrupt, PC and P pushed, I set) and of ser_tx_put $C4DD (a reply being queued: the output ring holds the reply's
+   bytes before it), the machine is cloned twice for each probe of that point, both copies with interrupts held. The
+   probe's injection is made to both copies; then copy A runs the ROM routine and copy B the C (its replacement hooked
+   in copy B alone; the ROM routine while there is none), and the two must agree on the exit state with A, X and Y
+   (diff_same, diff_state.h).
+   An interrupt probe starts at the handler's first instruction with the frame the CPU pushed on entering it: isr_int1's
+   own entry; for isr_int4_host_line the same point with the PC set to vec_int4_timerx ($FFF4) and INT4 requested and
+   enabled (ICR3 bits 7 and 6), as if the CPU had taken INT4 there instead (take_irq, cpu740.c, pushes the same PC and P
+   and sets I for every line; only the vector differs); for isr_timer_dsp likewise with vec_int2_timers ($FFF8) and
+   timer 3's request and enable bits (ICR2 bits 5 and 4). Each copy runs to the handler's RTI (machine_finish_routine).
+   A subroutine probe is a machine_rom_call of the routine with the copy's registers.
    A hook on copy A records whether the probe's target branch went the probe's way (the hook at the destination fires
    with the branch as the last instruction executed, the machine's history), or for a routine without a branch
    whether it was entered; every probe must reach its target at every call. Every routine diff_lts never sees
@@ -26,14 +29,17 @@
 #include "diff_state.h"
 #include "engine/rom_engine.h"
 #include "engine/thunks.h"
+#include "firmware/isr_addr.h"
 #include "firmware/ser_addr.h"
 
 #define PROBE_BUDGET  1000000ULL
 #define VEC_INT4      0xFFF4   /* vec_int4_timerx */
+#define VEC_INT2      0xFFF8   /* vec_int2_timers (timer 3: the DSP tick) */
 #define P0_IN_PAR     0x08     /* P0_DIR in parallel mode (boot_init_ports $AC29): P0.0 and P0.4 inputs */
 #define P0_HOST_LINE  0x04     /* P0.2, the host's handshake line (an input in both modes) */
 #define ICR1_INT1_REQ 0x02
 #define ICR3_INT4     0xC0     /* bit 7 request, bit 6 enable */
+#define ICR2_T3       0x30     /* timer 3: bit 5 request, bit 4 enable */
 #define REGS          (FW_OUT_A | FW_OUT_X | FW_OUT_Y)
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
@@ -103,6 +109,31 @@ static void int4(machine *m, bool high)
 }
 static void inj_int4_high(machine *m) { int4(m, true); }
 static void inj_int4_low(machine *m) { int4(m, false); }
+
+/* isr_timer_dsp: timer 3's interrupt taken instead, at a frame boundary (the 10th tick of the frame's last word:
+   isr_tick_div and isr_words_left 1, isr_word_ofs 18) with isr_frame_flag bit 0 still set, so the frame repeats */
+static void inj_timer_repeat(machine *m)
+{
+    m->sfr.icr2 |= ICR2_T3;
+    m->ram[ISR_TICK_DIV] = 1;
+    m->ram[ISR_WORDS_LEFT] = 1;
+    m->ram[ISR_WORD_OFS] = 18;
+    m->ram[ISR_FRAME_FLAG] |= 1;
+    m->cpu.pc = (uint16_t)(machine_peek(m, VEC_INT2) | machine_peek(m, VEC_INT2 + 1) << 8);
+}
+
+/* isr_par_ready and isr_par_hold in parallel mode (boot_dip bit 0, P0's parallel directions); for isr_par_hold an
+   _INT1 request pending too (ICR1 bit 1), which it clears */
+static void inj_par_ready(machine *m)
+{
+    m->ram[BOOT_DIP] |= 1;
+    m->sfr.port_dir[0] = P0_IN_PAR;
+}
+static void inj_par_hold(machine *m)
+{
+    inj_par_ready(m);
+    m->sfr.icr1 |= ICR1_INT1_REQ;
+}
 
 /* ser_rx_put of the received byte with the input ring's write pointer at $38FF, its last byte */
 static void inj_rx_wrap(machine *m)
@@ -186,6 +217,9 @@ static probe g_probes[] = {
     { "int4_high",        AT_INT1,   "isr_int4_host_line", ROM_ISR_INT4_HOST_LINE, true,  inj_int4_high,   0xC3E0, 0xC3E7 },
     { "int4_low",         AT_INT1,   "isr_int4_host_line", ROM_ISR_INT4_HOST_LINE, true,  inj_int4_low,    0xC3E0, 0xC3E3 },
     { "host_line_high",   AT_INT1,   "isr_host_line_high", ROM_ISR_HOST_LINE_HIGH, false, inj_none,        0, ROM_ISR_HOST_LINE_HIGH },
+    { "timer_repeat",     AT_INT1,   "isr_timer_dsp",      ROM_ISR_TIMER_DSP,      true,  inj_timer_repeat, 0xB300, 0xB303 },
+    { "par_ready",        AT_INT1,   "isr_par_ready",      ROM_ISR_PAR_READY,      false, inj_par_ready,   0xC5D7, 0xC5DA },
+    { "par_hold",         AT_INT1,   "isr_par_hold",       ROM_ISR_PAR_HOLD,       false, inj_par_hold,    0xC5DF, 0xC5E2 },
     { "rx_wrap",          AT_INT1,   "ser_rx_put",         ROM_SER_RX_PUT,         false, inj_rx_wrap,     0xC5EF, 0xC5F2 },
     { "imm_page",         AT_INT1,   "cmd_imm_match",      ROM_CMD_IMM_MATCH,      false, inj_imm_page,    0xC456, 0xC458 },
     { "imm_query_text",   AT_INT1,   "cmd_imm_match",      ROM_CMD_IMM_MATCH,      false, inj_imm_query_text, 0xC4A1, 0xC4A9 },
@@ -310,6 +344,18 @@ static void run_file(const uint8_t *rom, size_t len, const char *name)
     free(text);
 }
 
+/* The probes' routines that are not C yet (M4.6b): their copy B runs the ROM until Tasks 3 and 5 of the M4.6b plan
+   make them C. */
+static const char *const k_not_c_yet[] = { "isr_par_ready", "isr_par_hold", "isr_timer_dsp" };
+
+static bool not_c_yet(const char *routine)
+{
+    for (size_t i = 0; i < sizeof k_not_c_yet / sizeof k_not_c_yet[0]; i++)
+        if (!strcmp(k_not_c_yet[i], routine))
+            return true;
+    return false;
+}
+
 /* Prints each probe's counts; every probe compared and its target reached at every call. */
 static void report(void)
 {
@@ -324,7 +370,7 @@ static void report(void)
                    c ? "C" : "ROM", p->reached);
         CHECK(p->calls > 0);
         CHECK_EQ(p->reached, p->calls);
-        CHECK(c || g_self_check);   /* every probe's routine is C (M4.6a) */
+        CHECK(c || g_self_check || not_c_yet(p->routine));   /* every probe's routine is C (M4.6a, M4.6b) */
     }
 }
 

@@ -12,16 +12,20 @@
    counts: the hook on the JSR par_play at $B2C7 (boot_play_body) arms the next $B877 entry. boot_loop_play is
    entered only by JSR. In a corpus file the boot's own call (from boot_selftest_sound $A7BA) and the par_play inside
    it are the boot run's; they are checked there only.
-   The receive interrupt's two effects that no corpus text reaches are injected into both copies, on the first call
-   of each routine in each run whose ROM copy swapped the buffers at least twice. A reply due: ser_status_due = 1 in
-   the frame callback of the second swap (ser_tx_service from $B89C at every pass after it). A mute: ser_abort bit 0
-   set at the first isr_par_ready entry ($C5D6, ROM in both copies) after the second swap at which isr_frame_flag
-   bit 0 is clear: the frame built after that swap has been finished and the flag cleared, so that par_play's next
-   abort test ($B8A2, right after its JSR isr_par_ready at $B89F) ends it (the end path from $B8A5). Not at the swap
+   The receive interrupt's two effects that no corpus text reaches are injected into both copies at the frame event
+   (M4.6b spec 4.2), on the first call of each routine in each run whose ROM copy swapped the buffers at least
+   twice. The frame event is the machine's frame callback in both copies: the ROM timer interrupt reaches $B306, the
+   C one (isr_timer_dsp, hooked in copy B once it is a replacement) calls frame_done, which the bridge turns into
+   machine_capture_frame. A reply due: ser_status_due = 1 at the second frame event (ser_tx_service from $B89C at
+   every pass after it). A mute: due at the second frame event, ser_abort bit 0 is set on entering the timer
+   interrupt ABORT_TICKS times after it ($B2D9, as the CPU enters it: a hook in both copies, which in copy B runs the
+   C handler after the injection once it is a replacement). By then the ROM has seen the frame flag and is building
+   the frame (thousands of cycles) and the C, which builds it in no time, is waiting at its back edge, so both end
+   at par_play's next abort test ($B8A2) with that one frame built (the end path from $B8A5). Not at the frame event
    itself: there the ROM sees the mute before or after the frame flag depending on the instruction the interrupt
    lands on (at $B8A8, between the two tests, it builds one more frame), which the C, taking no time between its
-   tests, cannot reproduce. Nor at frm_finish_frame ($B9B5), the point used until M4.5: once par_play calls the C
-   frame builder (M4.5), its C copy never executes $B9B5. A hook on copy A counts the calls that executed
+   tests, cannot reproduce. Nor at an isr_par_ready entry ($C5D6), the point used until M4.6b: the C par_play calls
+   the C isr_par_ready (M4.6b), so its copy never executes $C5D6. A hook on copy A counts the calls that executed
    $B8A5 and $B89C. No copy runs past the routine's return: after a ser_status_due injection the ROM never reaches
    idle again (boot_get_clause waits for the host at $A6D4).
    A self-check runs the ROM routine in copy B too, on hello, both injections included: it proves the comparison
@@ -36,7 +40,6 @@
 #include "engine/thunks.h"
 #include "firmware/par_addr.h"
 #include "firmware/isr_addr.h"
-#include "firmware/tn_convert.h"
 
 #define PLAY_BUDGET        1000000000ULL   /* copy A: the longest call (seg_wrap_word, 1,774 frames) is 35.5 M cycles */
 #define PLAY_CALL_SITE     0xB2C7          /* boot_play_body: JSR par_play */
@@ -44,6 +47,7 @@
 #define PLAY_ABORT         0xB8A5          /* par_play: JMP $B8D2 (ser_abort bit 0: the end) */
 #define BOOT_SOUND_RETURN  0xA7BD          /* after boot_selftest_sound's JSR boot_loop_play at $A7BA */
 #define INJECT_SWAP        1               /* the second swap of a call */
+#define ABORT_TICKS        2               /* the mute: at the second timer interrupt after that swap */
 #define WATCH_MAX          2
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
@@ -66,9 +70,11 @@ typedef struct {
     inject_kind inject;
     bool ref;
     size_t swaps;
-    bool abort_due;    /* the abort injection waits for the next isr_par_ready with isr_frame_flag bit 0 clear */
+    unsigned abort_in; /* the abort injection: at the abort_in-th timer interrupt entry from now (0: none due) */
     bool differs;      /* copy B: the first difference is in why */
     char why[160];
+    const fw_replacement *isr;   /* copy B: the timer interrupt's replacement, run by the $B2D9 hook (NULL: ROM) */
+    fw_bridge *bridge;           /* ... on this bridge, the one the watched routine's thunk runs on */
 } recorder;
 
 /* A routine watched at its ROM entry; copy B runs it through run_b. */
@@ -82,7 +88,8 @@ typedef struct watch {
 } watch;
 
 static machine g_m, g_a, g_b;
-static swap_state *g_ref;      /* copy A's swaps: g_ref_n of them, room for g_ref_cap */
+static fw_bridge g_bridge;     /* copy B's */
+static swap_state *g_ref;     /* copy A's swaps: g_ref_n of them, room for g_ref_cap */
 static size_t g_ref_n, g_ref_cap;
 static swap_state g_cur;
 static watch g_watch[WATCH_MAX];
@@ -137,7 +144,7 @@ static void on_swap(void *user, const uint8_t frame[APOLLO_FRAME_BYTES])
     machine *m = rec->m;
     size_t i = rec->swaps++;
     if (i == INJECT_SWAP && rec->inject == INJECT_ABORT)
-        rec->abort_due = true;
+        rec->abort_in = ABORT_TICKS;
     if (i == INJECT_SWAP && rec->inject == INJECT_REPLY)
         m->ram[SER_STATUS_DUE] = 1;
     if (rec->ref) {
@@ -163,16 +170,15 @@ static void on_swap(void *user, const uint8_t frame[APOLLO_FRAME_BYTES])
     }
 }
 
-/* $C5D6, isr_par_ready (ROM in both copies): the abort injection, at its first entry after the second swap with
-   isr_frame_flag bit 0 clear (the frame built after the swap is finished). */
-static bool inject_abort(machine *m, void *user)
+/* $B2D9, isr_timer_dsp entered by the CPU (the hook fires after the interrupt entry): the abort injection, at the
+   ABORT_TICKS-th entry after the second swap; then the handler, ROM (false) or the C replacement on copy B's
+   bridge. */
+static bool on_timer(machine *m, void *user)
 {
     recorder *rec = user;
-    if (rec->abort_due && !(m->ram[ISR_FRAME_FLAG] & 1)) {
+    if (rec->abort_in && --rec->abort_in == 0)
         m->ram[SER_ABORT] |= 1;
-        rec->abort_due = false;
-    }
-    return false;
+    return rec->isr ? rec->isr->thunk(m, rec->bridge) : false;
 }
 
 /* The copy-A hooks: which of the two injected branches the ROM routine executed. */
@@ -199,13 +205,10 @@ static bool run_rom(machine *m, const watch *w)
     return machine_finish_routine(m, PLAY_BUDGET);
 }
 
-/* Copy B, the C thunk of the replacement, on a bridge bound to this copy. */
+/* Copy B, the C thunk of the replacement, on the bridge bound to this copy (g_bridge, check_call). */
 static bool run_thunk_b(machine *m, const watch *w)
 {
-    fw_bridge b;
-    if (!fw_bridge_init(&b, m))
-        return false;
-    w->r->thunk(m, &b);
+    w->r->thunk(m, &g_bridge);
     return m->fault == MFAULT_NONE;
 }
 
@@ -249,19 +252,23 @@ static bool exit_differs(const machine *a, const machine *b, char *why, size_t n
 static size_t check_call(machine *m, watch *w, unsigned call, inject_kind inject)
 {
     char why[200] = "";
-    recorder ra = { &g_a, inject, true, 0, false, false, "" }, rb = { &g_b, inject, false, 0, false, false, "" };
+    recorder ra = { &g_a, inject, true, 0, 0, false, "", NULL, NULL };
+    recorder rb = { &g_b, inject, false, 0, 0, false, "", NULL, &g_bridge };
     machine_clone(&g_a, m);
     g_hit_abort = g_hit_reply = false;
     CHECK(machine_hook(&g_a, PLAY_ABORT, hit_abort, NULL));
     CHECK(machine_hook(&g_a, PLAY_REPLY, hit_reply, NULL));
-    CHECK(machine_hook(&g_a, ROM_ISR_PAR_READY, inject_abort, &ra));
+    CHECK(machine_hook(&g_a, ROM_ISR_TIMER_DSP, on_timer, &ra));
     machine_set_outputs(&g_a, on_swap, &ra);
     bool a_ok = machine_finish_routine(&g_a, PLAY_BUDGET);
     g_ref_n = ra.swaps;
     g_reached_abort += g_hit_abort;
     g_reached_reply += g_hit_reply;
     machine_clone(&g_b, m);
-    CHECK(machine_hook(&g_b, ROM_ISR_PAR_READY, inject_abort, &rb));
+    CHECK(fw_bridge_init(&g_bridge, &g_b));
+    if (w->r)
+        rb.isr = fw_replacement_find("isr_timer_dsp");   /* the C handler, once it is a replacement (M4.6b) */
+    CHECK(machine_hook(&g_b, ROM_ISR_TIMER_DSP, on_timer, &rb));
     machine_set_outputs(&g_b, on_swap, &rb);
     bool b_ok = w->run_b(&g_b, w);
     if (!a_ok)
