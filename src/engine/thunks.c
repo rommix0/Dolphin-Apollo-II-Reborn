@@ -75,15 +75,36 @@ static fw_call_result rom_call(fw_bridge *b, uint16_t addr, fw_regs *r, uint64_t
     return res == MCALL_UNWOUND ? FW_CALL_UNWOUND : FW_CALL_FAILED;
 }
 
+/* The C's ROM call (rom_call). One that failed because the phase deadline of an outermost entry row was reached
+   (M4.6c2 spec 3.2: the ROM engine's call would simply be running when machine_run's budget ends) ends the run as a
+   wait does, not as a fault: f->stopped, the C abandoned (a longjmp to the frame's trap), the machine left in the
+   routine, or at addr when the deadline had passed before it started (not at the hook, whose address would run the
+   thunk again). This includes a call in which a nested thunk's wait reached the deadline first and stopped there. */
+static fw_call_result phase_call(fw_bridge *b, uint16_t addr, fw_regs *r, uint64_t budget, bool unhooked)
+{
+    machine *m = b->m;
+    uint64_t before = m->cpu.cycles;
+    fw_call_result res = rom_call(b, addr, r, budget, unhooked);
+    if (res != FW_CALL_FAILED || !b->phase || m->fault != MFAULT_NONE || m->cpu.cycles < m->phase_deadline)
+        return res;
+    if (m->cpu.cycles == before)
+        m->cpu.pc = addr;
+    m->cpu.waiting = false;
+    b->f.stopped = true;
+    if (b->f.trap)
+        longjmp(*b->f.trap, 1);
+    return res;
+}
+
 static fw_call_result host_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
-    return rom_call(ctx, addr, r, budget, false);
+    return phase_call(ctx, addr, r, budget, false);
 }
 
 /* The NUL-bug fallback's ROM cmd_run_next (M4.6c1 spec 3.4): its own hook does not fire on this entry. */
 static fw_call_result host_rom_call_unhooked(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
-    return rom_call(ctx, addr, r, budget, true);
+    return phase_call(ctx, addr, r, budget, true);
 }
 
 /* A ROM byte under another bank (M4.6c1 spec 3.4): the bus as the CPU sees it, $FF for an empty socket. */
@@ -162,9 +183,10 @@ static fw_wait_result host_wait(void *ctx, fw_wait_kind kind, uint16_t at)
     machine *m = b->m;
     if (kind == FW_WAIT_UART_TX) {
         fw_regs r = { m->cpu.a, m->cpu.x, m->cpu.y, 0 };
-        return rom_call(b, FW_WAIT_UART_TX_LOOP, &r, FW_ROM_CALL_BUDGET, false) == FW_CALL_RETURNED
-                   ? FW_WAIT_RETURNED
-                   : FW_WAIT_FAILED;
+        fw_call_result res = rom_call(b, FW_WAIT_UART_TX_LOOP, &r, FW_ROM_CALL_BUDGET, false);
+        if (res == FW_CALL_RETURNED)
+            return FW_WAIT_RETURNED;
+        return res == FW_CALL_FAILED ? wait_ended(b, FW_WAIT_UART_TX_LOOP) : FW_WAIT_FAILED;   /* the phase deadline */
     }
     /* Under an outermost entry row a wait may last until the phase deadline, as the ROM engine's loops do until
        machine_run's budget (M4.6c2 spec 3.2); any other at most FW_ROM_CALL_BUDGET. */

@@ -756,6 +756,87 @@ static void test_delivery_guard(void)
     }
 }
 
+/* The phase deadline in the UART wait and in a ROM call from C (M4.6c2 spec 3.2), under an outermost entry row
+   (b->phase): the ROM engine at the same point would just be running when machine_run's budget ends, so reaching the
+   deadline ends the run (f->stopped, no fault, the machine left at the ROM loop, or at the call's address when the
+   deadline had passed before it started), where without b->phase, or before the deadline, a failed call is a fault. */
+static void test_phase_calls(void)
+{
+    static const uint8_t spin[] = { 0x80, 0xFE };   /* BRA * : ser_tx_wait's loop that never ends */
+    static fw_bridge b;
+    fw_regs r = { 0, 0, 0, 0 };
+    load_main(0xC100);
+    put(FW_WAIT_UART_TX_LOOP, spin, sizeof spin);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    CHECK(fw_bridge_init(&b, &g_m));
+    b.phase = true;
+    run_to(&g_m, 0x9002);   /* cycles > 0: a phase deadline of 0 is none */
+
+    g_m.phase_deadline = g_m.cpu.cycles;   /* passed before the wait: stopped without running */
+    g_m.cpu.pc = 0x9000;
+    uint64_t c0 = g_m.cpu.cycles;
+    fw_wait(&b.f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);
+    CHECK(b.f.stopped);
+    CHECK(!b.f.fault);
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+    CHECK_EQ(g_m.cpu.cycles, c0);
+    CHECK_EQ(g_m.cpu.pc, FW_WAIT_UART_TX_LOOP);
+    CHECK(!g_m.cpu.waiting);
+
+    b.f.stopped = false;                   /* reached during the wait */
+    g_m.phase_deadline = g_m.cpu.cycles + 200;
+    g_m.cpu.pc = 0x9000;
+    fw_wait(&b.f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);
+    CHECK(b.f.stopped);
+    CHECK(!b.f.fault);
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+    CHECK(g_m.cpu.cycles >= g_m.phase_deadline);
+    CHECK(g_m.cpu.cycles < g_m.phase_deadline + 8);
+    CHECK_EQ(g_m.cpu.pc, FW_WAIT_UART_TX_LOOP);
+
+    for (int unhooked = 0; unhooked <= 1; unhooked++) {   /* a ROM call from C, hooked or not */
+        fw_call_result (*call)(void *, uint16_t, fw_regs *, uint64_t) =
+            unhooked ? b.host.rom_call_unhooked : b.host.rom_call;
+        b.f.stopped = false;
+        g_m.phase_deadline = g_m.cpu.cycles;
+        g_m.cpu.pc = 0x9000;
+        c0 = g_m.cpu.cycles;
+        CHECK_EQ(call(b.host.ctx, FW_WAIT_UART_TX_LOOP, &r, FW_ROM_CALL_BUDGET), FW_CALL_FAILED);
+        CHECK(b.f.stopped);
+        CHECK_EQ(g_m.fault, MFAULT_NONE);
+        CHECK_EQ(g_m.cpu.cycles, c0);
+        CHECK_EQ(g_m.cpu.pc, FW_WAIT_UART_TX_LOOP);   /* not at the hook's address */
+
+        b.f.stopped = false;
+        g_m.phase_deadline = g_m.cpu.cycles + 200;
+        g_m.cpu.pc = 0x9000;
+        CHECK_EQ(call(b.host.ctx, FW_WAIT_UART_TX_LOOP, &r, FW_ROM_CALL_BUDGET), FW_CALL_FAILED);
+        CHECK(b.f.stopped);
+        CHECK_EQ(g_m.fault, MFAULT_NONE);
+        CHECK(g_m.cpu.cycles >= g_m.phase_deadline);
+        CHECK_EQ(g_m.cpu.pc, FW_WAIT_UART_TX_LOOP);
+
+        b.f.stopped = false;                   /* the call's own budget ends before the deadline: a plain failure */
+        g_m.phase_deadline = g_m.cpu.cycles + 100000;
+        CHECK_EQ(call(b.host.ctx, FW_WAIT_UART_TX_LOOP, &r, 100), FW_CALL_FAILED);
+        CHECK(!b.f.stopped);
+        CHECK(g_m.cpu.cycles < g_m.phase_deadline);
+    }
+
+    b.f.stopped = false;                   /* the same failures without b->phase are faults */
+    b.phase = false;
+    b.deadline = g_m.cpu.cycles + 200;
+    g_m.cpu.pc = 0x9000;
+    fw_wait(&b.f, FW_WAIT_UART_TX, FW_WAIT_UART_TX_LOOP);
+    CHECK(b.f.fault);
+    CHECK_EQ(b.f.fault_addr, FW_WAIT_UART_TX_LOOP);
+    CHECK(!b.f.stopped);
+    b.f.fault = false;
+    b.deadline = g_m.cpu.cycles + 200;
+    CHECK_EQ(b.host.rom_call(b.host.ctx, FW_WAIT_UART_TX_LOOP, &r, FW_ROM_CALL_BUDGET), FW_CALL_FAILED);
+    CHECK(!b.f.stopped);
+}
+
 /* The bridge's input wait (M4.6c2 spec 3.1): isr_idle's PHA of the machine's A, the wait at the idle point, the PLA:
    SP and the PC back. Stopped: f->stopped, no fault, the machine at the idle point with A pushed, as the ROM's isr_idle
    leaves it. Under an outermost entry row (b->phase) a wait lasts until the engine's phase deadline, past
@@ -1142,6 +1223,7 @@ void suite_machine_hooks(void)
     test_host_bank();
     test_host_readback();
     test_wait_input();
+    test_phase_calls();
     test_delivery_guard();
     test_host_input();
 }
