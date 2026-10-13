@@ -10,12 +10,15 @@
 
 #define FW_RAM_SIZE  0x4000
 #define FW_TMP_78    0x0078   /* zero-page scratch, unnamed in the annotations: a saved Y, byte counters;
-                                 par_scale_duration's saved Y ($C2A0; not written for a duration of 0) */
+                                 par_scale_duration's saved Y ($C2A0; not written for a duration of 0);
+                                 bank_load_ramcode's saved Y, which bank_restore reloads ($A601, $0258) */
 #define FW_TMP_75    0x0075   /* zero-page scratch, unnamed in the annotations: tn_convert_clause's saved X;
+                                 bank_load_ramcode's saved P2, which bank_restore writes back ($A607, $0252);
                                  isr_set_volume's inverted level << 3 ($ACEF);
                                  frm_clamp_mark_space's 2 x b10 ($B936), frm_raise_formants' (b10 - 32) / 4 ($B969)
                                  and frm_transition_flags' count of the rising amplitudes ($BAA7-$BAB7) */
 #define FW_TMP_76    0x0076   /* zero-page scratch, unnamed in the annotations: cmd_scan_clause's resume index,
+                                 bank_load_ramcode's saved X, which bank_restore reloads ($A603, $0256);
                                  cmd_set_prosody's parameter index; par_scale_voicing's first term at @B2, @B3, @B4,
                                  @B6 and @B7 ($BFE7, $BFF8, $C006/$C00D, $C022, $C030) */
 #define FW_TMP_34    0x0034   /* zero-page scratch, unnamed in the annotations: cmd_hex_byte's high digit */

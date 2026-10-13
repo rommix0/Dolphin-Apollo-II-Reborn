@@ -27,6 +27,7 @@
 #include "firmware/cmd_imm.h"
 #include "firmware/isr_serial.h"
 #include "firmware/isr_dsp.h"
+#include "firmware/bank.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -257,6 +258,64 @@ static bool run_frame(machine *m, fw_bridge *b, thunk_regs regs, bool isr)
 }
 
 static bool run_thunk(machine *m, fw_bridge *b, thunk_regs regs) { return run_frame(m, b, regs, false); }
+
+/* The registers in, a bank routine (bank.c, M4.6c1), the registers out: A, X and Y as the ROM leaves them. No caller
+   reads a flag. */
+static void bank_regs(fw *f, cpu740 *c, void (*fn)(fw *, fw_regs *))
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    fn(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* bank_load_ramcode $A600: A, X and Y in (X and Y saved in $76 and $78). A and Y kept, X = 0 (the copy loop's INX),
+   out. bank_cmd_select ($ABB2) calls bank_enter next, whose PHA and bank_select's TAX read A (the bank); boot_reset
+   ($A678) calls bank_scan, which pushes A and pulls it at its exit. Neither reads X or Y: bank_restore reloads them
+   from $76 and $78, and the bank entries load X first ($021F LDX #$FF, $0237 LDX #$64). Declared: A, X, Y. */
+static void bank_load_ramcode_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_load_ramcode); }
+
+/* bank_enter $0210 (RAM code): A in (the bank). For an absent bank: A kept, X = $76 and Y = $78 (bank_restore), out;
+   its one caller, bank_cmd_select ($ABB5), calls bank_find_current next, which pushes A and X and pulls them back
+   reading neither, then JMP cmd_run_done (PLA / TAX): none is read. A bank entry leaves the C through fw_enter (SP $FF,
+   the I flag set, A and X; the run_frame's unwound branch). Declared: A, X, Y. */
+static void bank_enter_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_enter); }
+
+/* bank_scan $0241 (RAM code): A in, kept (PHA ... PLA); X = $76 and Y = $78 (bank_restore) out. Its one caller,
+   boot_reset ($A67B), calls bank_find_current next (A and X kept, not read), then boot_loop_text, whose
+   boot_get_clause writes X and A before reading them ($A697 LDX #1, $A699 LDA #$20) and Y at $A6EB (LDY #0).
+   Declared: A, X, Y. */
+static void bank_scan_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_scan); }
+
+/* bank_select $025E (RAM code): A in (the bank), kept (PHA ... PLA); X = the table value out; Y untouched. Its callers,
+   bank_enter ($0213) and bank_scan ($0246), call bank_probe next, which keeps A, X and Y and reads none (PHA, then
+   LDA $FFD0). Declared: A, X, Y. */
+static void bank_select_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_select); }
+
+/* bank_probe $0277 (RAM code): A, X and Y kept (PHA ... PLA). bank_enter ($0216) tests bank_absent next and then
+   reloads A, X and Y (bank_restore, or LDX #$FF and LDA $FFE1); bank_scan ($0249) calls bank_read_id, which reads A
+   (the bank: PHA / TAX). Declared: A, X, Y. */
+static void bank_probe_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_probe); }
+
+/* bank_read_id $0285 (RAM code): A in (the bank), kept; X after the last ID byte and Y = 6 (present) or 14 (absent)
+   out. Its one caller, bank_scan ($024C), reads A (DEC A / BNE) and then calls bank_select (TAX first) or falls into
+   bank_restore (LDX, LDY): X and Y are not read. Declared: A, X, Y. */
+static void bank_read_id_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_read_id); }
+
+/* bank_put_id_char $02E1 (RAM code): A and X in; A through bank_safe_char, X + 1, Y untouched, out. Its caller,
+   bank_read_id ($029A ... $02CF), reads Y (INY / CPY #6) and X (the next STA $2026,X, or its own exit) and loads A
+   next. Declared: A, X, Y. */
+static void bank_put_id_char_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_put_id_char); }
+
+/* bank_safe_char $02E9 (RAM code): A in; A ('*' below $20) out; X and Y untouched. Its caller, bank_put_id_char
+   ($02E1), stores A at $2026,X. Declared: A, X, Y. */
+static void bank_safe_char_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_safe_char); }
+
+/* bank_find_current $02F0 (RAM code): A, X and Y kept (PHA / TXA / PHA ... PLA / TAX / PLA). bank_cmd_select ($ABB8)
+   jumps to cmd_run_done next (PLA / TAX: X and A from the stack); boot_reset ($A67E) calls boot_loop_text (see
+   bank_scan): none is read. Declared: A, X, Y. */
+static void bank_find_current_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_find_current); }
 
 /* cmd_apply_speaker $A78C: X, Y in (handed to par_setup_voice, which does not read them). A = the cmd_speaker it
    read, X and Y as par_setup_voice leaves them, out. boot_reset reads all three: after its second call ($A675),
@@ -1426,6 +1485,15 @@ static void ph_lengthen_count_regs(fw *f, cpu740 *c)
 /* The hook of each routine: its register mapping run in the shared thunk frame, user = the bound fw_bridge. */
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
+THUNK(bank_enter)
+THUNK(bank_scan)
+THUNK(bank_select)
+THUNK(bank_probe)
+THUNK(bank_read_id)
+THUNK(bank_put_id_char)
+THUNK(bank_safe_char)
+THUNK(bank_find_current)
+THUNK(bank_load_ramcode)
 THUNK(cmd_apply_speaker)
 THUNK(boot_loop_play)
 THUNK(cmd_run_due)
@@ -1533,6 +1601,15 @@ ISR_THUNK(isr_int4_host_line)
 #undef ISR_THUNK
 
 const fw_replacement fw_replacements[] = {
+    { "bank_enter",         0x0210, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_enter, false, false, true },
+    { "bank_scan",          0x0241, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_scan, false, false, true },
+    { "bank_select",        0x025E, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_select, false, false, true },
+    { "bank_probe",         0x0277, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_probe, false, false, true },
+    { "bank_read_id",       0x0285, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_read_id, false, false, true },
+    { "bank_put_id_char",   0x02E1, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_put_id_char, false, false, true },
+    { "bank_safe_char",     0x02E9, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_safe_char, false, false, true },
+    { "bank_find_current",  0x02F0, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_find_current, false, false, true },
+    { "bank_load_ramcode",  0xA600, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_load_ramcode },
     { "cmd_apply_speaker",  0xA78C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_apply_speaker },
     { "boot_loop_play",     0xA7D4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_loop_play, true },
     { "cmd_run_due",        0xA880, FW_OUT_X | FW_OUT_Y, t_cmd_run_due },

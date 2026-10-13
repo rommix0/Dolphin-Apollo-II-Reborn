@@ -4,6 +4,8 @@
    expected value is worked out from the dump of the routine (build/ghidra740/dump), as the comment beside it says. */
 #include <string.h>
 #include "test.h"
+#include "engine/thunks.h"
+#include "firmware/bank.h"
 #include "firmware/bank_addr.h"
 #include "firmware/data/fw_data.h"
 
@@ -236,6 +238,353 @@ static void test_rom_call_unhooked(void)
     CHECK_EQ(f.fault_addr, 0xA893);
 }
 
+/* ---- the bank code (M4.6c1 Task 4) ---- */
+
+static void check_row(const char *name, uint16_t addr, bool ramcode)
+{
+    const fw_replacement *r = fw_replacement_find(name);
+    CHECK(r != NULL);
+    if (!r)
+        return;
+    CHECK_EQ(r->addr, addr);
+    CHECK_EQ(r->outputs, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    CHECK(!r->waits && !r->isr);
+    CHECK_EQ(r->ramcode, ramcode);
+}
+
+/* The nine rows: the RAM-code routines hooked with machine_hook_ramcode, bank_load_ramcode in the main ROM; A, X and
+   Y declared (the thunk comments name what the callers read). */
+static void test_rows(void)
+{
+    check_row("bank_load_ramcode", ROM_BANK_LOAD_RAMCODE, false);
+    check_row("bank_enter", BANK_ENTER, true);
+    check_row("bank_scan", BANK_SCAN, true);
+    check_row("bank_select", BANK_SELECT, true);
+    check_row("bank_probe", BANK_PROBE, true);
+    check_row("bank_read_id", BANK_READ_ID, true);
+    check_row("bank_put_id_char", BANK_PUT_ID_CHAR, true);
+    check_row("bank_safe_char", BANK_SAFE_CHAR, true);
+    check_row("bank_find_current", BANK_FIND_CURRENT, true);
+}
+
+/* RAM after setup, then the RAM copy as bank_load_ramcode makes it and the version copies boot_init_settings makes
+   ($ADF1-$ADFA: bank_ver_major = $FFE0, bank_ver_minor = $FFE1), P2 = the main bank, nothing logged. */
+static void setup_banks(void)
+{
+    setup();
+    for (uint16_t i = 0; i <= BANK_RAMCODE_LAST - BANK_RAMCODE; i++)
+        g_ram[BANK_RAMCODE + i] = fw_rom8(&g_f, (uint16_t)(BANK_RAMCODE_IMAGE + i));
+    g_ram[BANK_VER_MAJOR] = fw_rom8(&g_f, BANK_HDR_VERSION);
+    g_ram[BANK_VER_MINOR] = fw_rom8(&g_f, BANK_HDR_VERSION + 1);
+    g_sfr[SFR_P2] = P2_MAIN_BANK;
+}
+
+/* bank_load_ramcode $A600: Y, X and P2 (one read) saved in $78, $76, $75; $ADFE-$AFFC copied to $0200-$03FE and
+   nothing beyond; A and Y kept, X = 0. */
+static void test_load_ramcode(void)
+{
+    static const event want[] = { { EV_READ, SFR_P2, 0xF1, 0, 0 } };
+    setup();
+    g_sfr[SFR_P2] = 0xF1;                         /* the window on, the main bank, P2.0 set */
+    g_ram[BANK_RAMCODE - 1] = 0xA5;
+    g_ram[BANK_RAMCODE_LAST + 1] = 0xA5;
+    fw_regs r = { 0x05, 0x12, 0x34, 0 };
+    bank_load_ramcode(&g_f, &r);
+    check_log(want, 1);
+    CHECK_EQ(g_ram[FW_TMP_78], 0x34);
+    CHECK_EQ(g_ram[FW_TMP_76], 0x12);
+    CHECK_EQ(g_ram[FW_TMP_75], 0xF1);
+    unsigned differ = 0;
+    for (uint16_t i = 0; i <= BANK_RAMCODE_LAST - BANK_RAMCODE; i++)
+        differ += g_ram[BANK_RAMCODE + i] != fw_rom8(&g_f, (uint16_t)(BANK_RAMCODE_IMAGE + i));
+    CHECK_EQ(differ, 0);
+    CHECK_EQ(g_ram[BANK_P2_TABLE + 5], P2_BANK_5);
+    CHECK_EQ(g_ram[BANK_ENTER], 0x48);            /* bank_enter's PHA */
+    CHECK_EQ(g_ram[BANK_RAMCODE - 1], 0xA5);
+    CHECK_EQ(g_ram[BANK_RAMCODE_LAST + 1], 0xA5);
+    CHECK_EQ(r.a, 0x05);
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0x34);
+    CHECK(!g_f.fault);
+}
+
+/* bank_select $025E: X = the table entry ($0200,X; with boot_dip bit 1 $0208,X); $77 = P2 & $83; P2 = X | $77 (a read,
+   then a write); f->bank follows. A and Y kept. A bank number of 8-15 indexes $0208-$020F (Review Focus 1): 15 reads
+   bank_p2_table_alt[7], the main bank. */
+static void test_select(void)
+{
+    static const event want[] = { { EV_READ, SFR_P2, 0xF1, 0, 0 }, { EV_WRITE, SFR_P2, 0xF9, 0, 0 } };
+    setup_banks();
+    g_sfr[SFR_P2] = 0xF1;
+    fw_regs r = { 5, 0x11, 0x22, 0 };
+    bank_select(&g_f, &r);
+    check_log(want, 2);
+    CHECK_EQ(r.x, P2_BANK_5);
+    CHECK_EQ(r.a, 5);
+    CHECK_EQ(r.y, 0x22);
+    CHECK_EQ(g_ram[TN_RESUME_POS], 0x81);
+    CHECK_EQ(g_f.bank, P2_BANK_5);
+    CHECK(g_f.low_window);
+
+    g_ram[BOOT_DIP] = DIP_ALT_BANKS;              /* bank_p2_table_alt[5]: the main bank */
+    r.a = 5;
+    bank_select(&g_f, &r);
+    CHECK_EQ(r.x, P2_MAIN_BANK);
+    CHECK_EQ(g_sfr[SFR_P2], 0xF1);
+    r.a = 2;
+    bank_select(&g_f, &r);
+    CHECK_EQ(r.x, P2_BANK_5);
+
+    g_ram[BOOT_DIP] = 0;
+    r.a = 15;
+    bank_select(&g_f, &r);
+    CHECK_EQ(r.x, P2_MAIN_BANK);
+    r.a = 10;                                     /* $020A: bank_p2_table_alt[2] */
+    bank_select(&g_f, &r);
+    CHECK_EQ(r.x, P2_BANK_5);
+    r.a = 0;
+    bank_select(&g_f, &r);
+    CHECK_EQ(r.x, P2_MAIN_BANK);
+    CHECK(!g_f.fault);
+}
+
+/* bank_probe $0277: bank_absent bit 0 set, then cleared when $FFD0 reads $78: the main bank's image (no host call), or
+   another bank through read_bank ($FF: an empty socket, bit 0 stays set). Its other bits kept. */
+static void test_probe(void)
+{
+    static const event want[] = { { EV_BANK, BANK_ENTRY_COLD, 0xFF, 0, 0 }, { EV_BANK, BANK_ENTRY_COLD, 0x78, 0, 0 } };
+    setup_banks();
+    g_ram[BANK_ABSENT] = 0xF1;
+    fw_regs r = { 1, 2, 3, 0 };
+    bank_probe(&g_f, &r);
+    CHECK_EQ(g_ram[BANK_ABSENT], 0xF0);
+    CHECK_EQ(g_nlog, 0);
+    g_f.bank = P2_BANK_7;
+    bank_probe(&g_f, &r);
+    CHECK_EQ(g_ram[BANK_ABSENT], 0xF1);
+    g_other[BANK_ENTRY_COLD] = BANK_SIGNATURE;
+    bank_probe(&g_f, &r);
+    CHECK_EQ(g_ram[BANK_ABSENT], 0xF0);
+    check_log(want, 2);
+    CHECK_EQ(r.a, 1);
+    CHECK_EQ(r.x, 2);
+    CHECK_EQ(r.y, 3);
+}
+
+/* bank_safe_char $02E9 and bank_put_id_char $02E1: below $20 becomes '*', the rest is kept; the byte stored at
+   bank_id_table + X, X + 1 with an 8-bit wrap. */
+static void test_put_id_char(void)
+{
+    setup();
+    fw_regs r = { 0x1F, 0, 0x77, 0 };
+    bank_safe_char(&g_f, &r);
+    CHECK_EQ(r.a, '*');
+    r.a = 0x20;
+    bank_safe_char(&g_f, &r);
+    CHECK_EQ(r.a, 0x20);
+    r.a = 0xFF;
+    bank_safe_char(&g_f, &r);
+    CHECK_EQ(r.a, 0xFF);
+    r.a = 0x00;
+    r.x = 0xFF;
+    bank_put_id_char(&g_f, &r);
+    CHECK_EQ(g_ram[BANK_ID_TABLE + 0xFF], '*');
+    CHECK_EQ(r.a, '*');
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 0x77);
+    CHECK_EQ(g_nlog, 0);
+}
+
+/* bank_read_id $0285: bank 1 present (the main bank's image): its ID "000440" "0201" "0404" at bank_id_table + 0,
+   X = 14, Y = 6; bank 7 absent: 14 spaces at + 84, X = 98, Y = 14; another bank present through read_bank, its
+   control codes as '*'; bank 0 (the add loop runs 255 times: 14 x 255 = 242 in 8 bits) absent: spaces at + 242-255,
+   X = 0. A kept. */
+static void test_read_id(void)
+{
+    setup_banks();
+    fw_regs r = { 1, 0x55, 0x66, 0 };
+    bank_read_id(&g_f, &r);
+    CHECK(memcmp(g_ram + BANK_ID_TABLE, "00044002010404", 14) == 0);
+    CHECK_EQ(r.a, 1);
+    CHECK_EQ(r.x, 14);
+    CHECK_EQ(r.y, 6);
+    CHECK_EQ(g_nlog, 0);
+
+    g_ram[BANK_ABSENT] = 1;
+    r.a = 7;
+    bank_read_id(&g_f, &r);
+    CHECK(memcmp(g_ram + BANK_ID_TABLE + 84, "              ", 14) == 0);
+    CHECK_EQ(r.a, 7);
+    CHECK_EQ(r.x, 98);
+    CHECK_EQ(r.y, 14);
+
+    g_ram[BANK_ABSENT] = 0;
+    g_f.bank = P2_BANK_3;
+    memcpy(g_other + BANK_HDR_LANG_CODE, "AB\x01" "CDE", 6);
+    memcpy(g_other + BANK_HDR_ENGINE_VER_TEXT, "1234", 4);
+    memcpy(g_other + BANK_HDR_LANG_VER_TEXT, "\x1F" "678", 4);
+    r.a = 3;
+    bank_read_id(&g_f, &r);
+    CHECK(memcmp(g_ram + BANK_ID_TABLE + 28, "AB*CDE1234*678", 14) == 0);
+    CHECK_EQ(g_nlog, 14);                          /* every byte through read_bank */
+    CHECK_EQ(g_log[6].addr, BANK_HDR_ENGINE_VER_TEXT);
+    CHECK_EQ(g_log[13].addr, BANK_HDR_LANG_VER_TEXT + 3);
+
+    g_ram[BANK_ABSENT] = 1;
+    r.a = 0;
+    bank_read_id(&g_f, &r);
+    CHECK_EQ(g_ram[BANK_ID_TABLE + 242], ' ');
+    CHECK_EQ(g_ram[BANK_ID_TABLE + 255], ' ');
+    CHECK_EQ(r.x, 0);
+    CHECK_EQ(r.y, 14);
+    CHECK(!g_f.fault);
+}
+
+/* bank_find_current $02F0: one read of P2; bank_current = the first bank 1-7 whose entry equals P2 & $7C (bank 1 for
+   the main bank, though entry 0 holds it too); bank_p2_table_alt with boot_dip bit 1; unchanged when no entry
+   matches. A, X and Y kept. */
+static void test_find_current(void)
+{
+    static const event want[] = { { EV_READ, SFR_P2, 0x7B, 0, 0 } };
+    setup_banks();
+    g_sfr[SFR_P2] = 0x7B;                         /* bank bits $78, P2.0 and P2.1 set */
+    fw_regs r = { 1, 2, 3, 0 };
+    bank_find_current(&g_f, &r);
+    check_log(want, 1);
+    CHECK_EQ(g_ram[BANK_CURRENT], 5);
+    g_ram[BOOT_DIP] = DIP_ALT_BANKS;
+    bank_find_current(&g_f, &r);
+    CHECK_EQ(g_ram[BANK_CURRENT], 2);
+    g_sfr[SFR_P2] = P2_MAIN_BANK;
+    bank_find_current(&g_f, &r);
+    CHECK_EQ(g_ram[BANK_CURRENT], 1);
+    g_sfr[SFR_P2] = 0x0C;                         /* in neither table */
+    g_ram[BANK_CURRENT] = 9;
+    bank_find_current(&g_f, &r);
+    CHECK_EQ(g_ram[BANK_CURRENT], 9);
+    g_ram[BOOT_DIP] = 0;
+    bank_find_current(&g_f, &r);
+    CHECK_EQ(g_ram[BANK_CURRENT], 9);
+    CHECK_EQ(r.a, 1);
+    CHECK_EQ(r.x, 2);
+    CHECK_EQ(r.y, 3);
+    CHECK(!g_f.fault);
+}
+
+/* bank_scan $0241 with $75/$76/$78 as bank_load_ramcode leaves them: banks 7 down to 2 selected (a P2 read and write
+   each) and probed through read_bank (empty sockets: 14 spaces each), bank 1 the main bank (its ID from the image);
+   then P2 = $75 written back, X = $76, Y = $78, A kept. */
+static void test_scan(void)
+{
+    setup_banks();
+    g_ram[FW_TMP_75] = P2_MAIN_BANK;
+    g_ram[FW_TMP_76] = 0x11;
+    g_ram[FW_TMP_78] = 0x22;
+    fw_regs r = { 0x33, 0, 0, 0 };
+    bank_scan(&g_f, &r);
+    CHECK_EQ(g_nlog, 6 * 3 + 2 + 1);
+    CHECK_EQ(g_log[0].kind, EV_READ);             /* bank 7: select, probe */
+    CHECK_EQ(g_log[1].kind, EV_WRITE);
+    CHECK_EQ(g_log[1].a, P2_BANK_7);
+    CHECK_EQ(g_log[2].kind, EV_BANK);
+    CHECK_EQ(g_log[2].addr, BANK_ENTRY_COLD);
+    CHECK_EQ(g_log[16].a, P2_BANK_2);             /* bank 2's P2 write */
+    CHECK_EQ(g_log[19].a, P2_MAIN_BANK);          /* bank 1's */
+    CHECK_EQ(g_log[20].kind, EV_WRITE);           /* bank_restore */
+    CHECK_EQ(g_log[20].a, P2_MAIN_BANK);
+    CHECK(memcmp(g_ram + BANK_ID_TABLE, "00044002010404", 14) == 0);
+    for (unsigned i = 14; i < 98; i++)
+        CHECK_EQ(g_ram[BANK_ID_TABLE + i], ' ');
+    CHECK_EQ(g_ram[BANK_ABSENT] & 1, 0);          /* bank 1, probed last */
+    CHECK_EQ(r.a, 0x33);
+    CHECK_EQ(r.x, 0x11);
+    CHECK_EQ(r.y, 0x22);
+    CHECK_EQ(g_f.bank, P2_MAIN_BANK);
+    CHECK(!g_f.fault);
+}
+
+/* bank_enter $0210, an absent bank (5): select, probe, then bank_restore: P2 = $75, A kept, X = $76, Y = $78; no
+   entry. */
+static void test_enter_absent(void)
+{
+    static const event want[] = {
+        { EV_READ, SFR_P2, P2_MAIN_BANK, 0, 0 }, { EV_WRITE, SFR_P2, P2_BANK_5, 0, 0 },
+        { EV_BANK, BANK_ENTRY_COLD, 0xFF, 0, 0 }, { EV_WRITE, SFR_P2, P2_MAIN_BANK, 0, 0 },
+    };
+    setup_banks();
+    g_ram[FW_TMP_75] = P2_MAIN_BANK;
+    g_ram[FW_TMP_76] = 0x44;
+    g_ram[FW_TMP_78] = 0x55;
+    fw_regs r = { 5, 0, 0, 0 };
+    bank_enter(&g_f, &r);
+    check_log(want, 4);
+    CHECK_EQ(r.a, 5);
+    CHECK_EQ(r.x, 0x44);
+    CHECK_EQ(r.y, 0x55);
+    CHECK(!g_f.unwound);
+    CHECK(!g_f.fault);
+}
+
+/* bank_enter, the main bank present: warm ($FFD4, A = $FFE0, X = $FF) when $FFE1 and $FFE0 equal bank_ver_minor and
+   bank_ver_major, zero page untouched; else cold ($FFD0, A = 0, X = 0) with $01-$64 cleared ($00 and $65 kept): the
+   minor differing (the major not read), or the major alone. Bank 0 is the main bank too (Review Focus 1). Another
+   present bank's header is read through read_bank, $FFE1 then $FFE0. */
+static void test_enter_present(void)
+{
+    static const event warm[] = {
+        { EV_READ, SFR_P2, P2_MAIN_BANK, 0, 0 }, { EV_WRITE, SFR_P2, P2_MAIN_BANK, 0, 0 },
+        { EV_ENTER, BANK_ENTRY_WARM, 2, 0xFF, 0 },
+    };
+    static const event cold[] = {
+        { EV_READ, SFR_P2, P2_MAIN_BANK, 0, 0 }, { EV_WRITE, SFR_P2, P2_MAIN_BANK, 0, 0 },
+        { EV_ENTER, BANK_ENTRY_COLD, 0, 0, 0 },
+    };
+    static const event other[] = {
+        { EV_READ, SFR_P2, P2_MAIN_BANK, 0, 0 }, { EV_WRITE, SFR_P2, P2_BANK_6, 0, 0 },
+        { EV_BANK, BANK_ENTRY_COLD, BANK_SIGNATURE, 0, 0 }, { EV_BANK, BANK_HDR_VERSION + 1, 1, 0, 0 },
+        { EV_BANK, BANK_HDR_VERSION, 2, 0, 0 }, { EV_ENTER, BANK_ENTRY_WARM, 2, 0xFF, 0 },
+    };
+    for (uint8_t bank = 0; bank <= 1; bank++) {
+        setup_banks();
+        memset(g_ram, 0x5A, 0x66);
+        g_ram[BOOT_DIP] = 0;
+        fw_regs r = { bank, 0, 0, 0 };
+        bank_enter(&g_f, &r);
+        check_log(warm, 3);
+        CHECK(g_f.unwound);
+        CHECK_EQ(g_ram[0x01], 0x5A);
+        CHECK_EQ(g_ram[0x64], 0x5A);
+    }
+
+    setup_banks();
+    memset(g_ram, 0x5A, 0x66);
+    g_ram[BOOT_DIP] = 0;
+    g_ram[BANK_VER_MINOR]++;
+    fw_regs r = { 1, 0, 0, 0 };
+    bank_enter(&g_f, &r);
+    check_log(cold, 3);
+    CHECK(g_f.unwound);
+    CHECK_EQ(g_ram[0x00], 0x5A);
+    CHECK_EQ(g_ram[0x01], 0);
+    CHECK_EQ(g_ram[0x64], 0);
+    CHECK_EQ(g_ram[0x65], 0x5A);
+
+    setup_banks();
+    g_ram[BANK_VER_MAJOR]++;
+    bank_enter(&g_f, &r);
+    check_log(cold, 3);
+
+    setup_banks();
+    g_other[BANK_ENTRY_COLD] = BANK_SIGNATURE;
+    g_other[BANK_HDR_VERSION] = 2;
+    g_other[BANK_HDR_VERSION + 1] = 1;
+    r.a = 6;
+    bank_enter(&g_f, &r);
+    check_log(other, 6);
+    CHECK(g_f.unwound);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_bank(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -243,4 +592,14 @@ void suite_fw_bank(void)
     test_rom8_bank();
     test_enter();
     test_rom_call_unhooked();
+    test_rows();
+    test_load_ramcode();
+    test_select();
+    test_probe();
+    test_put_id_char();
+    test_read_id();
+    test_find_current();
+    test_scan();
+    test_enter_absent();
+    test_enter_present();
 }

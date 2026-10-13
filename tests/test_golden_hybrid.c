@@ -60,11 +60,11 @@ static hybrid_stats check(const uint8_t *rom, size_t len, const char *only, cons
     return stats;
 }
 
-/* The modes in which the C reaches cmd_run_due's dispatch, so @= entering a bank resets the stack under C and the
-   C call chain unwinds (M4.2 spec 5.3). */
+/* The modes in which the C reaches cmd_run_due's dispatch or bank_enter, so @= entering a bank resets the stack
+   under C, or the C enters the bank, and the C call chain unwinds (M4.2 spec 5.3, M4.6c1 spec 4.5). */
 static bool runs_c_dispatch(const char *only)
 {
-    return !only || !strcmp(only, "tn_convert_clause") || !strcmp(only, "cmd_run_due");
+    return !only || !strcmp(only, "tn_convert_clause") || !strcmp(only, "cmd_run_due") || !strcmp(only, "bank_enter");
 }
 
 /* The whole corpus in one mode. Matching the goldens proves nothing if no C ever ran, so the mode must have run

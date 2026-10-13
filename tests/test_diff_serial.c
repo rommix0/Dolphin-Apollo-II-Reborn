@@ -51,8 +51,6 @@
 #define P2_NO_BANK    0x0C     /* P2 bank bits in neither bank table */
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
-/* The probes whose routine is not C yet (M4.6c1 Task 3): copy B runs the ROM routine for them on the corpus too. */
-static const char *const k_not_c_yet[] = { "bank_enter", "bank_find_current", "bank_safe_char" };
 
 typedef enum { AT_INT1, AT_TX_PUT, AT_BANK_ENTER, AT_FIND_CURRENT, AT_SAFE_CHAR } probe_point;
 
@@ -407,13 +405,6 @@ static void strip_newline(char *s)
         s[--n] = '\0';
 }
 
-static bool not_c_yet(const char *routine)
-{
-    for (size_t i = 0; i < sizeof k_not_c_yet / sizeof k_not_c_yet[0]; i++)
-        if (!strcmp(k_not_c_yet[i], routine))
-            return true;
-    return false;
-}
 
 static void run_file(const uint8_t *rom, size_t len, const char *name)
 {
@@ -442,7 +433,7 @@ static void report(void)
                    c ? "C" : "ROM", p->reached);
         CHECK(p->calls > 0);
         CHECK_EQ(p->reached, p->calls);
-        CHECK(c || g_self_check || not_c_yet(p->routine));   /* every probe's routine is C (M4.6a-M4.6c1) */
+        CHECK(c || g_self_check);   /* every probe's routine is C (M4.6a, M4.6b, M4.6c1) */
     }
 }
 
