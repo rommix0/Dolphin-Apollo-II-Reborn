@@ -384,7 +384,7 @@ static void test_hex(void)
    (BBC2: still high) and P0.5 set again (SEB5). Last, the line dropping before the second test ($C59B BBC2 taken),
    pinned here: neither the machine (no host line) nor diff_serial (interrupts held, no time passing between two
    reads of an input) can drop it, the ROM's own time between $C585 and $C59B could: no SEB5. A and X kept, Y as
-   ser_tx_get leaves it. */
+   ser_tx_get leaves it. It returns whether it sent a byte (M4.6c2 spec 2.5). */
 static void test_tx_service(void)
 {
     setup();
@@ -392,7 +392,7 @@ static void test_tx_service(void)
     g_sfr[SFR_P0] = 0x04;
     tx_ring(0x3900, 0x3901, 1, 1);
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
-    ser_tx_service(&g_f, &r);
+    CHECK(!ser_tx_service(&g_f, &r));
     check_regs(&r, 0x11, 0x22, 0x33);
     CHECK_EQ(g_nlog, 0);
     CHECK_EQ(g_ram[SER_TX_COUNT], 1);
@@ -401,7 +401,7 @@ static void test_tx_service(void)
     g_sfr[SFR_P0] = 0x20;                         /* busy, the line low */
     tx_ring(0x3900, 0x3901, 1, 1);
     g_ram[SER_STATUS_DUE] = 1;
-    ser_tx_service(&g_f, &r);
+    CHECK(!ser_tx_service(&g_f, &r));
     check_regs(&r, 0x11, 0x22, 0x33);
     CHECK_EQ(g_nlog, 1);
     check_log(0, LOG_READ, SFR_P0, 0x20);
@@ -412,7 +412,7 @@ static void test_tx_service(void)
     g_ram[0x3900] = 'a';
     g_ram[0x3901] = 'b';
     tx_ring(0x3900, 0x3902, 2, 1);
-    ser_tx_service(&g_f, &r);
+    CHECK(ser_tx_service(&g_f, &r));
     check_regs(&r, 0x11, 0x22, 1);
     CHECK_EQ(g_nlog, 5);
     check_log(0, LOG_READ, SFR_P0, 0x24);
@@ -421,7 +421,7 @@ static void test_tx_service(void)
     check_log(3, LOG_WAIT, FW_WAIT_UART_TX, 0);
     check_log(4, LOG_WRITE, SFR_UART_TX, 'a');
     CHECK_EQ(g_ram[SER_STATUS_DUE], 1);
-    ser_tx_service(&g_f, &r);
+    CHECK(ser_tx_service(&g_f, &r));
     check_regs(&r, 0x11, 0x22, 0);
     CHECK_EQ(g_nlog, 14);
     check_log(5, LOG_READ, SFR_P0, 0x04);
@@ -444,7 +444,7 @@ static void test_tx_service(void)
     g_script_n = 3;
     g_ram[0x3900] = 'c';
     tx_ring(0x3900, 0x3901, 1, 1);
-    ser_tx_service(&g_f, &r);
+    CHECK(ser_tx_service(&g_f, &r));
     CHECK_EQ(g_nlog, 7);
     check_log(5, LOG_WAIT, FW_WAIT_UART_TX, 0);
     check_log(6, LOG_READ, SFR_P0, 0x00);

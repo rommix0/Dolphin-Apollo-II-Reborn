@@ -11,7 +11,8 @@
 #define FW_RAM_SIZE  0x4000
 #define FW_TMP_78    0x0078   /* zero-page scratch, unnamed in the annotations: a saved Y, byte counters;
                                  par_scale_duration's saved Y ($C2A0; not written for a duration of 0);
-                                 bank_load_ramcode's saved Y, which bank_restore reloads ($A601, $0258) */
+                                 bank_load_ramcode's saved Y, which bank_restore reloads ($A601, $0258);
+                                 boot_queue_string's Y around each ser_rx_put ($C620, $C625) */
 #define FW_TMP_75    0x0075   /* zero-page scratch, unnamed in the annotations: tn_convert_clause's saved X;
                                  bank_load_ramcode's saved P2, which bank_restore writes back ($A607, $0252);
                                  isr_set_volume's inverted level << 3 ($ACEF);

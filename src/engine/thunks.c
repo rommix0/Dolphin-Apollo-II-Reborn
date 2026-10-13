@@ -29,6 +29,7 @@
 #include "firmware/isr_dsp.h"
 #include "firmware/bank.h"
 #include "firmware/boot.h"
+#include "firmware/boot_input.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -1385,7 +1386,14 @@ static void ser_tx_hex_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_hex); }
    as they came, Y as ser_tx_get leaves it when it ran. Its ROM caller boot_get_clause ($A6D7) goes back to $A6C2
    (LDA ser_rx_write) and reads X, the clause length, at $A706 / $A70D (STA $1B00,X); Y is loaded first ($A6EB LDY
    #0). The C par_play calls the C. No caller reads a flag. Declared: A, X, Y. */
-static void ser_tx_service_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_service); }
+static void ser_tx_service_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    ser_tx_service(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
 
 /* ser_tx_records $C5A4: A, X and Y in and out (pushed at $C5A4-$C5A8, pulled at $C5D0-$C5D4). Its one caller,
    cmd_list_languages ($ABCD; C since M4.2, which calls the C), goes on at cmd_run_done ($A8BD PLA / TAX / RTS to
@@ -1396,16 +1404,16 @@ static void ser_tx_records_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_record
    boot_get_clause reads A and X after $A6FC ($A700 CMP #$0D, $A706 / $A70D STA $1B00,X) and hands all three to
    ser_tx_service after $A6D0 (its thunk); boot_reset ($A672) calls cmd_apply_speaker, which takes X and Y (its thunk);
    boot_queue_string ($C62B) pulls Y and A next ($C62E-$C630). No caller reads a flag (CLI, BBC0, JSR or PLA follow).
-   The C callers (tn_convert_clause, cmd_scan_clause, par_play, the prosody passes) call the C, so in "all" mode the
-   hook fires from boot_reset, boot_get_clause and boot_queue_string. Declared: A, X, Y. */
+   The C callers (tn_convert_clause, cmd_scan_clause, par_play, the prosody passes, boot_get_clause and
+   boot_queue_string) call the C, so in "all" mode the hook fires from boot_reset only. Declared: A, X, Y. */
 static void isr_par_ready_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_par_ready); }
 
 /* isr_par_hold $C5DE: A, X and Y in and out as they came (PHA at $C5DE, PLA at $C5EA; X and Y untouched). boot_reset
    ($A66F) calls isr_par_ready (which keeps them) and cmd_apply_speaker, which takes X and Y (its thunk);
    boot_get_clause ($A6E4) reads X ($A706 / $A70D STA $1B00,X) after loading Y and A ($A6EB LDY #0, $A6ED LDA);
    boot_loop_play ($B2B3) calls par_play_start, which reads none (its thunk); boot_queue_string ($C617) reads the Y it
-   set before ($C615 LDY #0; $C61C LDA ($46),Y). No caller reads a flag. The C boot_loop_play calls the C, so in
-   "all" mode the hook fires from boot_reset, boot_get_clause and boot_queue_string. Declared: A, X, Y. */
+   set before ($C615 LDY #0; $C61C LDA ($46),Y). No caller reads a flag. The C boot_loop_play, boot_get_clause and
+   boot_queue_string call the C, so in "all" mode the hook fires from boot_reset only. Declared: A, X, Y. */
 static void isr_par_hold_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_par_hold); }
 
 /* ser_rx_next_page $C5EC: Y in; Y = the next page out, A and X untouched. ser_rx_put ($C3DC) stores Y and returns;
@@ -1657,6 +1665,49 @@ static void boot_init_host_lines_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_i
    not diff_lts. Declared: A, X, Y. */
 static void cmd_say_phonetic_regs(fw *f, cpu740 *c) { boot_regs(f, c, cmd_say_phonetic); }
 
+/* boot_selftest $C605: A, X and Y untouched (LDM, BBC). Its one caller, boot_selftest_sound ($A7A5), tests
+   boot_selftest_fail, writes cmd_text_ptr (LDM) and calls boot_queue_string, which keeps A, X and Y (its row).
+   Declared: A, X, Y. */
+static void boot_selftest_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_selftest); }
+
+/* boot_queue_string $C612: A, X and Y in and out as they came (A and Y pushed at $C612-$C614 and pulled at
+   $C62E-$C630; X kept by isr_par_hold, ser_rx_put and isr_par_ready). Its one caller, boot_selftest_sound ($A7B1),
+   calls boot_loop_text next, whose boot_get_clause writes X and A first ($A697 LDX #1, $A699 LDA #$20) and Y before
+   reading it ($A6EB LDY #0). Declared: A, X, Y. */
+static void boot_queue_string_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_queue_string); }
+
+/* isr_idle $C5FE: A, X and Y in and out as they came (PHA ... PLA; X and Y untouched). Its one caller,
+   boot_get_clause ($A6DF), loops back to $A6C2 ($A6E2 BRA), which loads A first (LDA ser_rx_write); it reads X, the
+   clause index, at $A70D (STA $1B00,X) and writes Y first ($A6EB LDY #0). It waits for input (FW_WAIT_INPUT), so
+   diff_main checks it, not diff_lts. Declared: A, X, Y. */
+static void isr_idle_regs(fw *f, cpu740 *c) { boot_regs(f, c, isr_idle); }
+
+/* boot_get_clause $A697: no register input ($A697 LDX #1, $A699 LDA #$20; Y written at $A6EB, or first by
+   ser_tx_service's ser_tx_get). A = ' ', X = boot_clause_len and Y = 0, or the page of a page end ($A6F5
+   ser_rx_next_page), out. Its one caller, boot_loop_text ($A68D), calls cmd_scan_clause next, which writes X, Y and A
+   first ($ACFA LDX #0, $ACFC LDY #0, $AD04 LDA #$FF). It waits for input, so diff_main checks it, not diff_lts.
+   Declared: A, X, Y. */
+static void boot_get_clause_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_get_clause); }
+
+/* boot_loop_text $A68D: no register input (boot_get_clause writes them first). No register output: the ROM leaves
+   tn_convert_clause's, which the C tn_convert_clause does not set (its row); its callers, boot_reset ($A681) and
+   boot_selftest_sound ($A7B4), call pros_make_segments next, whose only register read is Y, by isr_par_ready, which
+   keeps it (its row). It waits for input and, at a mid-clause flush, on the timer interrupt, so diff_main checks it,
+   not diff_lts. */
+static void boot_loop_text_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    boot_loop_text(f, &r);
+}
+
+/* boot_selftest_sound $A79F: A, X and Y flow through boot_queue_string (kept) to boot_loop_text, which writes them
+   first. A, X and Y out as boot_loop_play leaves them. Its one caller, boot_reset ($A654), tests boot_dip ($A657
+   BBS0) and then loads X ($A65A LDX #0) for boot_init_baud, which reads no A or Y, or goes on at boot_reentry_warm
+   ($A662 JMP: LDM, CLI, isr_par_hold and isr_par_ready, which keep them, then cmd_apply_speaker, which loads A first
+   and does not read X or Y). It waits on the timer interrupt (boot_loop_play), so diff_main checks it, not diff_lts.
+   Declared: A, X, Y. */
+static void boot_selftest_sound_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_selftest_sound); }
+
 /* The hook of each routine: its register mapping run in the shared thunk frame, user = the bound fw_bridge. */
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
@@ -1669,8 +1720,11 @@ THUNK(bank_put_id_char)
 THUNK(bank_safe_char)
 THUNK(bank_find_current)
 THUNK(bank_load_ramcode)
+THUNK(boot_loop_text)
+THUNK(boot_get_clause)
 THUNK(boot_set_defaults)
 THUNK(cmd_apply_speaker)
+THUNK(boot_selftest_sound)
 THUNK(boot_loop_play)
 THUNK(boot_load_prosody_defaults)
 THUNK(cmd_say_phonetic)
@@ -1762,6 +1816,9 @@ THUNK(isr_par_ready)
 THUNK(isr_par_hold)
 THUNK(ser_rx_next_page)
 THUNK(ser_tx_next_page)
+THUNK(isr_idle)
+THUNK(boot_selftest)
+THUNK(boot_queue_string)
 THUNK(util_shl4)
 THUNK(util_shl3)
 THUNK(ph_append_phrase_pause)
@@ -1795,8 +1852,11 @@ const fw_replacement fw_replacements[] = {
     { "bank_safe_char",     0x02E9, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_safe_char, false, false, true },
     { "bank_find_current",  0x02F0, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_find_current, false, false, true },
     { "bank_load_ramcode",  0xA600, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_load_ramcode },
+    { "boot_loop_text",     0xA68D, 0,                   t_boot_loop_text, true },
+    { "boot_get_clause",    0xA697, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_get_clause, true },
     { "boot_set_defaults",  0xA742, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_set_defaults },
     { "cmd_apply_speaker",  0xA78C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_apply_speaker },
+    { "boot_selftest_sound", 0xA79F, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_selftest_sound, true },
     { "boot_loop_play",     0xA7D4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_loop_play, true },
     { "boot_load_prosody_defaults", 0xA7F0, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_load_prosody_defaults },
     { "cmd_say_phonetic",   0xA876, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_say_phonetic, true },
@@ -1891,6 +1951,9 @@ const fw_replacement fw_replacements[] = {
     { "isr_par_hold",       0xC5DE, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_par_hold },
     { "ser_rx_next_page",   0xC5EC, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_next_page },
     { "ser_tx_next_page",   0xC5F5, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_next_page },
+    { "isr_idle",           0xC5FE, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_idle, true },
+    { "boot_selftest",      0xC605, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_selftest },
+    { "boot_queue_string",  0xC612, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_queue_string },
     { "util_shl4",          0xC656, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_util_shl4 },
     { "util_shl3",          0xC657, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_util_shl3 },
     { "ph_append_phrase_pause", 0xC9B8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ph_append_phrase_pause },

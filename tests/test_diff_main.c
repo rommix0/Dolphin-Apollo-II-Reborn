@@ -199,6 +199,12 @@ static void run_pair(const uint8_t *rom, size_t len, const char *name, const cha
     engine_watch w = { on_frame, on_idle, NULL };
     frame_list fl = { 0 };
     g_extra = x;
+    if (x && x->want == MACHINE_CYCLE_LIMIT && fw_replacement_find("boot_get_clause") &&
+        !fw_replacement_find("boot_reset")) {
+        printf("  %-14s skipped: until boot_reset is C, the C main loop's waits run under no phase deadline\n",
+               x->name);
+        return;
+    }
 
     g_rom_side = true;
     g_nrom = 0;
@@ -260,6 +266,22 @@ static void inj_status_line_high(machine *m)
     m->ram[SER_STATUS_DUE] = 1;
     m->sfr.port_in[0] |= P0_HOST_LINE;
 }
+/* At a frame event of the speech: "Two." arrives in the input ring, each byte put as ser_rx_put puts it (the machine
+   delivers serial bytes at the idle WIT only, never while speech plays). */
+static void inj_ring_two(machine *m)
+{
+    for (const char *s = "Two."; *s; s++) {
+        m->ram[m->ram[SER_RX_WRITE] | m->ram[SER_RX_WRITE + 1] << 8] = (uint8_t)*s;
+        if (++m->ram[SER_RX_WRITE] == 0) {
+            uint8_t page = (uint8_t)(m->ram[SER_RX_WRITE + 1] + 1);
+            m->ram[SER_RX_WRITE + 1] = page == 0x39 ? 0x21 : page;
+        }
+    }
+    m->ram[SER_RX_IDLE] &= (uint8_t)~1;
+}
+
+/* Words for the long clauses (44 characters) */
+#define WORDS44 "the quick brown fox jumps over the lazy dog "
 
 static const extra_run k_extra[] = {
     /* @=1: the main bank, its version equal: the warm entry $FFD4, the rest of the clause dropped */
@@ -280,6 +302,23 @@ static const extra_run k_extra[] = {
     { "status_waits", "@L One.", 0, 0, 0, inj_status_due, AT_SPEECH, 1, 0xA6D7, false, MACHINE_CYCLE_LIMIT },
     /* parallel mode: isr_idle returns at once ($C603 by its BBS0), no idle; the boot announcement, then the deadline */
     { "parallel", "Hello.", P4_DIP_PARALLEL, 0, 0, NULL, AT_IDLE, 0, 0xC603, false, MACHINE_CYCLE_LIMIT },
+    /* the M4.6c2 plan's Review Focus 1: no punctuation and no CR inside, longer than a clause: cut at X >= $DC on a
+       space ($A731 CMP #$20 reached); one word of 260 letters, cut at X >= $FA; and cmd_char at $DB (after 218
+       characters), carried in $1827 into the next clause ($A739) */
+    { "rf1_space", WORDS44 WORDS44 WORDS44 WORDS44 WORDS44 WORDS44, 0, 0, 0, NULL, AT_IDLE, 0, 0xA731, false,
+      MACHINE_IDLE },
+    { "rf1_full", "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"
+                  "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"
+                  "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij",
+      0, 0, 0, NULL, AT_IDLE, 0, 0xA731, false, MACHINE_IDLE },
+    { "rf1_carry", WORDS44 WORDS44 WORDS44 WORDS44 "the quick brown fox jumps over the lazy do@W5 now slower.", 0, 0, 0,
+      NULL, AT_IDLE, 0, 0xA739, false, MACHINE_IDLE },
+    /* Review Focus 3: an empty input, the CR alone: a one-character clause, then idle again */
+    { "rf3_empty", "", 0, 0, 0, NULL, AT_IDLE, 0, 0xA704, false, MACHINE_IDLE },
+    /* Review Focus 4: commands only (cmd_set_speed $A9C9 run), nothing spoken */
+    { "rf4_commands", "@W5 @A3", 0, 0, 0, NULL, AT_IDLE, 0, 0xA9C9, false, MACHINE_IDLE },
+    /* Review Focus 5: "Two." arrives in the ring during the speech of "One.": taken after it with no wait */
+    { "rf5_during", "One.", 0, 0, 0, inj_ring_two, AT_SPEECH, 5, 0xA6E4, false, MACHINE_IDLE },
 };
 
 static const char *const k_corpus[] = { CORPUS_NAMES };

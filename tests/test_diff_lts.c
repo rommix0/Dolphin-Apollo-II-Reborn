@@ -49,7 +49,7 @@ static const char *const k_every_call[] = {
     "isr_timer_start", "isr_timer_dsp", "bank_load_ramcode", "bank_enter", "bank_scan", "bank_select", "bank_probe",
     "bank_read_id", "bank_put_id_char", "bank_safe_char", "bank_find_current", "cmd_run_next", "boot_read_dip",
     "boot_init_ports", "boot_init_settings", "boot_clear_input_state", "boot_set_defaults",
-    "boot_load_prosody_defaults", "boot_init_baud", "boot_init_host_lines",
+    "boot_load_prosody_defaults", "boot_init_baud", "boot_init_host_lines", "boot_selftest", "boot_queue_string",
 };
 
 typedef struct { const fw_replacement *r; unsigned calls; bool every; } observer;

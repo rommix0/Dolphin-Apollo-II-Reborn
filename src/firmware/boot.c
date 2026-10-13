@@ -1,5 +1,6 @@
 #include "boot.h"
 #include "bank_addr.h"
+#include "boot_input.h"
 #include "cmd_apply.h"
 #include "cmd_handlers.h"
 #include "isr_dsp.h"
@@ -180,6 +181,31 @@ void boot_init_host_lines(fw *f, fw_regs *r)
 void cmd_say_phonetic(fw *f, fw_regs *r)
 {
     r->x = cmd_put_phonetic(f, r->x);                            /* $A876: A and Y kept */
+    pros_make_segments(f, r);
+    boot_loop_play(f, r);
+}
+
+void boot_selftest(fw *f, fw_regs *r)
+{
+    (void)r;
+    fw_wr8(f, BOOT_SELFTEST_FAIL, 0);                            /* $C605 LDM #0 */
+    if (!(fw_rd8(f, BOOT_DIP) & DIP_SELFTEST))                   /* BBC1 boot_dip */
+        return;
+    if (!fw_sfr_bit(f, SFR_P2, P2_SELFTEST_PIN))                 /* BBC1 P2 */
+        return;
+    fw_wr8(f, BOOT_SELFTEST_FAIL, 1);
+}
+
+void boot_selftest_sound(fw *f, fw_regs *r)
+{
+    fw_wr16(f, CMD_TEXT_PTR, BOOT_SELFTEST_OK_CMDS);             /* $A79F LDM, LDM */
+    boot_selftest(f, r);
+    if (fw_rd8(f, BOOT_SELFTEST_FAIL) & 1)                       /* $A7A8 BBC0 boot_selftest_fail */
+        fw_wr16(f, CMD_TEXT_PTR, BOOT_SELFTEST_FAIL_CMDS);
+    boot_queue_string(f, r);
+    boot_loop_text(f, r);
+    if (f->fault || f->stopped)
+        return;                                                  /* abandoned (without a trap: a unit test) */
     pros_make_segments(f, r);
     boot_loop_play(f, r);
 }

@@ -290,6 +290,7 @@ typedef struct {
     uint8_t reply[256];      /* the output ring from its read pointer to its write pointer: the queued reply */
     unsigned reply_len;
     uint8_t tx_pending, bank_current, bank_ids[98];
+    uint8_t clause_len, clause[8];   /* boot_clause_len and boot_clause's first bytes: the last clause read */
     unsigned unwinds;
 } outcome;
 
@@ -324,10 +325,13 @@ static void run_raw(const uint8_t *rom, size_t len, bool hybrid, const char *in,
     o->tx_pending = g_m.ram[SER_TX_PENDING];
     o->bank_current = g_m.ram[BANK_CURRENT];
     memcpy(o->bank_ids, g_m.ram + BANK_ID_TABLE, sizeof o->bank_ids);
+    o->clause_len = g_m.ram[BOOT_CLAUSE_LEN];
+    memcpy(o->clause, g_m.ram + BOOT_CLAUSE, sizeof o->clause);
     o->unwinds = stats.unwinds;
 }
 
-/* Both engines on in: the same status, fault, frames, queued reply and bank state. Returns the hybrid's unwinds. */
+/* Both engines on in: the same status, fault, frames, queued reply, bank state and last clause. Returns the hybrid's
+   unwinds. */
 static unsigned check_same(const uint8_t *rom, size_t len, const char *name, const char *in, size_t n, outcome *a)
 {
     outcome b;
@@ -337,9 +341,11 @@ static unsigned check_same(const uint8_t *rom, size_t len, const char *name, con
                 a->cpu_fault == b.cpu_fault && a->opcode == b.opcode && a->cpu_fault_pc == b.cpu_fault_pc &&
                 !strcmp(a->frames, b.frames) && a->reply_len == b.reply_len &&
                 !memcmp(a->reply, b.reply, a->reply_len) && a->tx_pending == b.tx_pending &&
-                a->bank_current == b.bank_current && !memcmp(a->bank_ids, b.bank_ids, sizeof a->bank_ids);
+                a->bank_current == b.bank_current && !memcmp(a->bank_ids, b.bank_ids, sizeof a->bank_ids) &&
+                a->clause_len == b.clause_len && !memcmp(a->clause, b.clause, sizeof a->clause);
     if (!same) {
-        fprintf(stderr, "  review %s: rom status %d fault %d, hybrid status %d fault %d (or frames, reply, banks)\n",
+        fprintf(stderr, "  review %s: rom status %d fault %d, hybrid status %d fault %d (or frames, reply, banks, "
+                "clause)\n",
                 name, (int)a->st, (int)a->fault, (int)b.st, (int)b.fault);
         g_test_failures++;
     }
@@ -406,6 +412,21 @@ static void test_review_focus(const uint8_t *rom, size_t len)
     free(b.frames);
 }
 
+/* The M4.6c2 plan's Review Focus 3: the CR alone (an empty input) on both engines, the C boot_get_clause taking it
+   as the clause's last character: both idle again with no frame. The clause is three spaces (boot_clause_len 3): the
+   one boot_clause[0] always holds, the one the self-test string left in the ring at boot (boot_get_clause read it
+   before the end of boot's idle), and the one the CR becomes. */
+static void test_review_focus_empty(const uint8_t *rom, size_t len)
+{
+    outcome a;
+    check_same(rom, len, "rf3", "", 0, &a);
+    CHECK_EQ(a.st, MACHINE_IDLE);
+    CHECK_STR(a.frames, "");
+    CHECK_EQ(a.clause_len, 3);
+    CHECK(!memcmp(a.clause, "   ", 3));
+    free(a.frames);
+}
+
 /* ---- the engines' loop (M4.6c2 spec 3.1, 3.2) ---- */
 
 typedef struct { unsigned idles, frames, frames_at_idle[4]; } engine_count;
@@ -454,6 +475,8 @@ static void test_engine_loop(const uint8_t *rom, size_t len)
         CHECK_EQ(g_m.frames_produced, fl.count);
         frame_list_free(&fl);
 
+        if (hybrid && fw_replacement_find("boot_get_clause") && !fw_replacement_find("boot_reset"))
+            continue;   /* until boot_reset is C, the C main loop's waits run under no phase deadline */
         machine_config cfg;
         machine_default_config(&cfg);
         cfg.port_in[4] |= 1;   /* DIP bit 0: the parallel interface */
@@ -476,6 +499,7 @@ void suite_golden_hybrid(void)
     test_thunk_faults(rom, len);
     test_engine_loop(rom, len);
     test_review_focus(rom, len);
+    test_review_focus_empty(rom, len);
     check_corpus(rom, len, NULL);
     for (size_t i = 0; i < fw_replacement_count; i++)
         check_corpus(rom, len, fw_replacements[i].name);

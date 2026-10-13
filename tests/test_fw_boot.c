@@ -8,6 +8,7 @@
 #include "engine/thunks.h"
 #include "firmware/boot.h"
 #include "firmware/boot_addr.h"
+#include "firmware/boot_input.h"
 #include "firmware/cmd_apply.h"
 #include "firmware/isr_dsp.h"
 #include "firmware/ser.h"
@@ -27,6 +28,18 @@ static uint8_t g_sfr[0x100];     /* the stub's SFRs: a read returns g_sfr[addr],
 static event g_log[MAX_LOG];
 static unsigned g_nlog, g_ncalls;
 static fw_wait_result g_wait_result;   /* what the stub's wait returns */
+static const char *g_feed[8];          /* a feed script: what each input wait puts into the input ring ... */
+static unsigned g_nfeed, g_feed_pos;   /* ... in turn (none: no script) */
+static unsigned g_mute_at;             /* the feed (1, 2, ...) that also sets ser_abort bit 0 (0: none) */
+
+/* s into the input ring, as the receive interrupt's ser_rx_put puts each byte. */
+static void feed(const char *s)
+{
+    for (; *s; s++) {
+        fw_regs t = { (uint8_t)*s, 0, 0, 0 };
+        ser_rx_put(&g_f, &t);
+    }
+}
 
 static void log_add(ev_kind kind, uint16_t addr, uint8_t value)
 {
@@ -51,7 +64,9 @@ static void stub_write_sfr(void *ctx, uint8_t addr, uint8_t value)
 
 /* Logs the wait. A wait for an interrupt is one handled: the timer interrupt sets isr_frame_flag (a frame is due at
    every wait). isr_timer_start's first wait sets ser_abort bit 0 (a mute as the DSP starts), so a boot_loop_play
-   plays no segment: par_play goes from its first pass to its three rest frames. */
+   plays no segment: par_play goes from its first pass to its three rest frames. With a feed script, an input wait,
+   and a wait for an interrupt at boot_get_clause's loop ($A6C2), takes the script's next string into the input ring
+   (the g_mute_at-th sets ser_abort bit 0 as well); once the script is used up such a wait stops the run. */
 static fw_wait_result stub_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     (void)ctx;
@@ -60,6 +75,13 @@ static fw_wait_result stub_wait(void *ctx, fw_wait_kind kind, uint16_t at)
         g_ram[ISR_FRAME_FLAG] = 1;
     if (kind == FW_WAIT_TIMER2)
         g_ram[SER_ABORT] |= 1;
+    if (g_nfeed && (kind == FW_WAIT_INPUT || (kind == FW_WAIT_INTERRUPT && at == BOOT_GET_CLAUSE_LOOP))) {
+        if (g_feed_pos == g_nfeed)
+            return FW_WAIT_STOPPED;
+        feed(g_feed[g_feed_pos++]);
+        if (g_feed_pos == g_mute_at)
+            g_ram[SER_ABORT] |= 1;
+    }
     return g_wait_result;
 }
 
@@ -103,7 +125,18 @@ static void setup(void)
     g_nlog = 0;
     g_ncalls = 0;
     g_wait_result = FW_WAIT_RETURNED;
+    g_nfeed = g_feed_pos = g_mute_at = 0;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
+    g_ram[SER_RX_READ + 1] = g_ram[SER_RX_WRITE + 1] = 0x21;   /* the input ring empty at $2100, as at boot */
+}
+
+/* A feed script of n strings (setup clears it). */
+static void script(const char *const *s, unsigned n)
+{
+    for (unsigned i = 0; i < n && i < 8; i++)
+        g_feed[i] = s[i];
+    g_nfeed = n;
+    g_feed_pos = 0;
 }
 
 /* The log is exactly the n events of want, and no ROM call was made. */
@@ -448,6 +481,351 @@ static void test_init_host_lines(void)
     }
 }
 
+/* isr_idle $C5FE: in serial mode the WIT, one input wait ($C602); in parallel mode (boot_dip bit 0) nothing. A, X and Y
+   kept. */
+static void test_isr_idle(void)
+{
+    static const event want[] = { { EV_WAIT, FW_WAIT_INPUT_LOOP, FW_WAIT_INPUT } };
+    setup();
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_idle(&g_f, &r);
+    check_log(want, 1);
+    check_regs(&r, 0x11, 0x22, 0x33);
+    setup();
+    g_ram[BOOT_DIP] = DIP_PARALLEL;
+    isr_idle(&g_f, &r);
+    check_log(NULL, 0);
+    check_regs(&r, 0x11, 0x22, 0x33);
+    CHECK(!g_f.fault);
+}
+
+/* boot_clause is " " text " " with boot_clause_len its length. */
+static void check_clause(const char *text)
+{
+    size_t n = strlen(text);
+    CHECK_EQ(g_ram[BOOT_CLAUSE], ' ');
+    CHECK(memcmp(g_ram + BOOT_CLAUSE + 1, text, n) == 0);
+    CHECK_EQ(g_ram[BOOT_CLAUSE + 1 + n], ' ');
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], n + 2);
+}
+
+/* One boot_get_clause in serial mode on the feed script s (one string per input wait), cmd_char '@' (as
+   boot_set_defaults leaves it); A = ' ' and X = boot_clause_len out, no fault, no stop. */
+static void get_clause(const char *const *s, unsigned n)
+{
+    setup();
+    script(s, n);
+    g_ram[CMD_CHAR] = '@';
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    boot_get_clause(&g_f, &r);
+    CHECK(!g_f.fault);
+    CHECK(!g_f.stopped);
+    CHECK_EQ(r.a, ' ');
+    CHECK_EQ(r.x, g_ram[BOOT_CLAUSE_LEN]);
+}
+
+/* boot_get_clause $A697, serial mode, one byte per input wait as the machine delivers them: the entry's writes
+   (boot_clause[0] = ' ', ser_abort, tn_in_word, $6B and boot_speaking 0, ser_rx_idle bit 0 set on the empty ring), then
+   per byte a pass with the ring empty (CLI at $A6D3, isr_idle's input wait) and the read (SEI at $A6E7, CLI at $A6FF);
+   isr_par_ready and isr_par_hold do nothing in serial mode. "Hi." ends at the '.', kept: " Hi. ", 5; boot_speaking
+   bit 0 set by the read, ser_rx_idle's cleared by ser_rx_put. Y = 0. */
+static void test_get_clause_waits(void)
+{
+    static const char *const hi[] = { "H", "i", "." };
+    static const event want[] = {
+        { EV_INT, 0, 1 }, { EV_WAIT, 0xC602, FW_WAIT_INPUT }, { EV_INT, 0, 0 }, { EV_INT, 0, 1 },
+        { EV_INT, 0, 1 }, { EV_WAIT, 0xC602, FW_WAIT_INPUT }, { EV_INT, 0, 0 }, { EV_INT, 0, 1 },
+        { EV_INT, 0, 1 }, { EV_WAIT, 0xC602, FW_WAIT_INPUT }, { EV_INT, 0, 0 }, { EV_INT, 0, 1 },
+    };
+    setup();
+    script(hi, 3);
+    g_ram[SER_ABORT] = g_ram[TN_IN_WORD] = g_ram[FW_UTT_CONTENT] = g_ram[BOOT_SPEAKING] = 0xFF;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    boot_get_clause(&g_f, &r);
+    check_log(want, 12);
+    check_regs(&r, ' ', 5, 0);
+    check_clause("Hi.");
+    CHECK_EQ(g_ram[SER_ABORT], 0);
+    CHECK_EQ(g_ram[TN_IN_WORD], 0);
+    CHECK_EQ(g_ram[FW_UTT_CONTENT], 0);
+    CHECK_EQ(g_ram[BOOT_SPEAKING], 1);
+    CHECK_EQ(g_ram[SER_RX_IDLE], 0);
+    CHECK_EQ(g_ram[SER_RX_READ], 3);
+    CHECK(!g_f.fault);
+    CHECK(!g_f.stopped);
+}
+
+/* Every clause end of boot_get_clause (M4.6c2 spec 2.5): a CR (not kept: a space instead); . , : ; ! ? (kept); X
+   reaching $FA (249 characters); from X $DC on a space (kept, then the space after it), or cmd_char, carried over in
+   $1827 with X stepped back over it, and put first in the next clause. A space before X $DC does not end it. */
+static void test_get_clause_ends(void)
+{
+    static const char *const cr[] = { "ab\r" };
+    get_clause(cr, 1);
+    check_clause("ab");
+    static const char *const ends = ".,:;!?";
+    for (int i = 0; i < 6; i++) {
+        char s[4] = { 'a', ends[i], 'b', 0 };
+        const char *one[] = { s };
+        get_clause(one, 1);
+        char want[3] = { 'a', ends[i], 0 };
+        check_clause(want);
+        CHECK_EQ(g_ram[SER_RX_READ], 2);           /* the 'b' stays in the ring */
+    }
+    static char word[300], spaced[300], carried[300];
+    memset(word, 'w', 260);
+    word[260] = 0;
+    const char *full[] = { word };
+    get_clause(full, 1);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 0xFB);        /* 249 letters at $01-$F9, the space at $FA */
+    CHECK_EQ(g_ram[BOOT_CLAUSE + 0xF9], 'w');
+    CHECK_EQ(g_ram[BOOT_CLAUSE + 0xFA], ' ');
+    CHECK_EQ(g_ram[SER_RX_READ], 249);
+
+    for (int i = 0; i < 218; i++)                  /* words of four letters and a space up to $DA, then a space */
+        spaced[i] = i % 5 == 4 ? ' ' : 'w';
+    spaced[217] = 'w';
+    strcpy(spaced + 218, " more.");
+    const char *sp[] = { spaced };
+    get_clause(sp, 1);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 0xDD);        /* the space at $DB kept, another at $DC */
+    CHECK_EQ(g_ram[BOOT_CLAUSE + 0xDB], ' ');
+    CHECK_EQ(g_ram[BOOT_CLAUSE + 0xDC], ' ');
+    CHECK_EQ(g_ram[BOOT_CLAUSE + 0xDA], 'w');
+    CHECK_EQ(g_ram[FW_CLAUSE_CARRY], 0);
+
+    memset(carried, 'w', 218);
+    strcpy(carried + 218, "@W5.");
+    const char *ca[] = { carried };
+    get_clause(ca, 1);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 0xDC);        /* the '@' at $DB overwritten by the space */
+    CHECK_EQ(g_ram[BOOT_CLAUSE + 0xDB], ' ');
+    CHECK_EQ(g_ram[FW_CLAUSE_CARRY], '@');
+    fw_regs r = { 0, 0, 0, 0 };
+    boot_get_clause(&g_f, &r);                     /* the next clause: the '@' first, then "W5." */
+    check_clause("@W5.");
+    CHECK_EQ(g_ram[FW_CLAUSE_CARRY], 0);
+    CHECK(!g_f.fault);
+}
+
+/* boot_get_clause's other paths: a mute pending when a byte is there (ser_abort bit 0, $A6E8) starts again from the
+   top, dropping what was read; the read pointer's page end ($21FF: ser_rx_next_page, Y = the new page $22; $38FF
+   wraps to $21); a stopped input wait abandons it (f->stopped, boot_clause_len not written). Review Focus 5 (M4.6c2
+   plan): input that arrives while speech plays reaches the ring in one wait, several clauses at once: each later call
+   takes its clause from the ring with no wait. */
+static void test_get_clause_paths(void)
+{
+    static const char *const muted[] = { "ab", "c." };
+    setup();
+    script(muted, 2);
+    g_mute_at = 2;
+    fw_regs r = { 0, 0, 0, 0 };
+    boot_get_clause(&g_f, &r);
+    check_clause("c.");
+    CHECK_EQ(g_ram[SER_ABORT], 0);
+
+    static const uint16_t page[] = { 0x21, 0x38 }, next[] = { 0x22, 0x21 };
+    for (int i = 0; i < 2; i++) {
+        setup();
+        g_ram[SER_RX_READ] = g_ram[SER_RX_WRITE] = 0xFF;
+        g_ram[SER_RX_READ + 1] = g_ram[SER_RX_WRITE + 1] = (uint8_t)page[i];
+        static const char *const dot[] = { "." };
+        script(dot, 1);
+        r = (fw_regs){ 0, 0, 0, 0 };
+        boot_get_clause(&g_f, &r);
+        check_clause(".");
+        CHECK_EQ(r.y, next[i]);
+        CHECK_EQ(g_ram[SER_RX_READ], 0);
+        CHECK_EQ(g_ram[SER_RX_READ + 1], next[i]);
+    }
+
+    setup();
+    static const char *const part[] = { "ab" };
+    script(part, 1);
+    g_ram[BOOT_CLAUSE_LEN] = 0x77;
+    r = (fw_regs){ 0, 0, 0, 0 };
+    boot_get_clause(&g_f, &r);
+    CHECK(g_f.stopped);
+    CHECK(!g_f.fault);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 0x77);
+    CHECK_EQ(g_feed_pos, 1);
+
+    setup();
+    static const char *const two[] = { "One. Two? " };
+    script(two, 1);
+    r = (fw_regs){ 0, 0, 0, 0 };
+    boot_get_clause(&g_f, &r);
+    check_clause("One.");
+    unsigned waits = g_nlog;
+    boot_get_clause(&g_f, &r);
+    check_clause(" Two?");
+    for (unsigned i = waits; i < g_nlog && i < MAX_LOG; i++)
+        CHECK(g_log[i].kind != EV_WAIT);           /* the second clause read with no wait */
+    CHECK_EQ(g_ram[SER_RX_IDLE], 0);               /* the ring was not empty at its start */
+    CHECK(!g_f.fault);
+}
+
+/* boot_get_clause's waits for an interrupt (M4.6c2 spec 2.5), where the ROM would loop with nothing changed. Parallel
+   mode: isr_par_ready (SEB3 P0) twice, isr_idle returning at once, then a wait at $A6C2. A status byte due with the
+   host line low: ser_tx_service reads P0 and sends nothing, a wait at $A6C2. With the host line high it sends (a NAK,
+   nothing pending), a pass that changed state: the next pass follows at once (ser_status_due now 0: isr_idle's input
+   wait). */
+static void test_get_clause_idle_waits(void)
+{
+    static const char *const dot[] = { "." };
+    static const event par[] = {
+        { EV_READ, SFR_P0, 0x00 }, { EV_WRITE, SFR_P0, 0x08 }, { EV_INT, 0, 1 }, { EV_READ, SFR_P0, 0x08 },
+        { EV_WRITE, SFR_P0, 0x08 }, { EV_WAIT, 0xA6C2, FW_WAIT_INTERRUPT }, { EV_READ, SFR_P0, 0x08 },
+        { EV_WRITE, SFR_P0, 0x00 }, { EV_READ, SFR_ICR1, 0x00 }, { EV_WRITE, SFR_ICR1, 0x00 }, { EV_INT, 0, 0 },
+        { EV_READ, SFR_P0, 0x00 }, { EV_WRITE, SFR_P0, 0x08 }, { EV_INT, 0, 1 },
+    };
+    setup();
+    g_ram[BOOT_DIP] = DIP_PARALLEL;
+    script(dot, 1);
+    fw_regs r = { 0, 0, 0, 0 };
+    boot_get_clause(&g_f, &r);
+    check_log(par, 14);
+    check_clause(".");
+
+    static const event low[] = {
+        { EV_INT, 0, 1 }, { EV_READ, SFR_P0, 0x00 }, { EV_WAIT, 0xA6C2, FW_WAIT_INTERRUPT }, { EV_INT, 0, 0 },
+        { EV_INT, 0, 1 },
+    };
+    setup();
+    g_ram[SER_STATUS_DUE] = 1;
+    script(dot, 1);
+    boot_get_clause(&g_f, &r);
+    check_log(low, 5);
+    check_clause(".");
+    CHECK_EQ(g_ram[SER_STATUS_DUE], 1);
+
+    static const event high[] = {
+        { EV_INT, 0, 1 }, { EV_READ, SFR_P0, 0x04 }, { EV_READ, SFR_P0, 0x04 }, { EV_WRITE, SFR_P0, 0x04 },
+        { EV_WAIT, 0xC500, FW_WAIT_UART_TX }, { EV_WRITE, SFR_UART_TX, 0x15 }, { EV_WAIT, 0xC500, FW_WAIT_UART_TX },
+        { EV_READ, SFR_P0, 0x04 }, { EV_READ, SFR_P0, 0x04 }, { EV_WRITE, SFR_P0, 0x24 }, { EV_INT, 0, 1 },
+        { EV_WAIT, 0xC602, FW_WAIT_INPUT }, { EV_INT, 0, 0 }, { EV_INT, 0, 1 },
+    };
+    setup();
+    g_ram[SER_STATUS_DUE] = 1;
+    g_sfr[SFR_P0] = 0x04;
+    script(dot, 1);
+    boot_get_clause(&g_f, &r);
+    check_log(high, 14);
+    check_clause(".");
+    CHECK_EQ(g_ram[SER_STATUS_DUE], 0);
+    CHECK(!g_f.fault);
+}
+
+/* boot_loop_text $A68D: boot_get_clause, then cmd_scan_clause (boot_clause to cmd_text, upper case) and
+   tn_convert_clause (cmd_text to tn_phonetic). A stopped wait in boot_get_clause ends it there: no scan. */
+static void test_loop_text(void)
+{
+    static const char *const hi[] = { "hi." };
+    setup();
+    fw_regs r = { 0, 0, 0, 0 };
+    boot_set_defaults(&g_f, &r);
+    script(hi, 1);
+    boot_loop_text(&g_f, &r);
+    CHECK(!g_f.fault);
+    CHECK(memcmp(g_ram + CMD_TEXT, " HI. ", 5) == 0);
+    CHECK_EQ(g_ram[BOOT_CLAUSE_LEN], 5);
+    CHECK(g_ram[TN_PHON_LEN] > 0);
+
+    setup();
+    g_wait_result = FW_WAIT_STOPPED;
+    g_ram[CMD_TEXT] = 0x77;
+    boot_loop_text(&g_f, &r);
+    CHECK(g_f.stopped);
+    CHECK_EQ(g_ram[CMD_TEXT], 0x77);
+}
+
+/* boot_queue_string $C612: the string at cmd_text_ptr (boot_selftest_ok_cmds) into the input ring up to its zero
+   end, $78 = the index of its last byte; A, X and Y kept. Serial mode: no SFR; parallel mode: isr_par_hold (CLB3 P0,
+   CLB1 ICR1) before and isr_par_ready (SEB3 P0) after. */
+static void test_queue_string(void)
+{
+    static const event par[] = {
+        { EV_READ, SFR_P0, 0x08 }, { EV_WRITE, SFR_P0, 0x00 }, { EV_READ, SFR_ICR1, 0x02 },
+        { EV_WRITE, SFR_ICR1, 0x00 }, { EV_READ, SFR_P0, 0x00 }, { EV_WRITE, SFR_P0, 0x08 },
+    };
+    for (int mode = 0; mode <= 1; mode++) {
+        setup();
+        g_ram[BOOT_DIP] = (uint8_t)mode;
+        g_sfr[SFR_P0] = 0x08;
+        g_sfr[SFR_ICR1] = 0x02;
+        g_ram[SER_RX_IDLE] = 1;
+        fw_wr16(&g_f, CMD_TEXT_PTR, BOOT_SELFTEST_OK_CMDS);
+        fw_regs r = { 0x11, 0x22, 0x33, 0 };
+        boot_queue_string(&g_f, &r);
+        check_log(mode ? par : NULL, mode ? 6 : 0);
+        check_regs(&r, 0x11, 0x22, 0x33);
+        CHECK(memcmp(g_ram + 0x2100, "\030@T5, ", 6) == 0);
+        CHECK_EQ(g_ram[SER_RX_WRITE], 6);
+        CHECK_EQ(g_ram[SER_RX_READ], 0);
+        CHECK_EQ(g_ram[FW_TMP_78], 5);
+        CHECK_EQ(g_ram[SER_RX_IDLE], 0);
+        CHECK(!g_f.fault);
+    }
+}
+
+/* boot_selftest $C605: boot_selftest_fail = 0, and 1 only with boot_dip bit 1 set and P2.1 high (one read of P2;
+   none with bit 1 clear). A, X and Y kept. */
+static void test_selftest(void)
+{
+    static const struct { uint8_t dip, p2, fail; unsigned reads; } k[] = {
+        { 0x00, 0x72, 0, 0 }, { 0x02, 0x70, 0, 1 }, { 0x02, 0x72, 1, 1 },
+    };
+    for (int i = 0; i < 3; i++) {
+        setup();
+        g_ram[BOOT_DIP] = k[i].dip;
+        g_ram[BOOT_SELFTEST_FAIL] = 0x55;
+        g_sfr[SFR_P2] = k[i].p2;
+        fw_regs r = { 0x11, 0x22, 0x33, 0 };
+        boot_selftest(&g_f, &r);
+        CHECK_EQ(g_ram[BOOT_SELFTEST_FAIL], k[i].fail);
+        CHECK_EQ(g_nlog, k[i].reads);
+        check_regs(&r, 0x11, 0x22, 0x33);
+        CHECK(!g_f.fault);
+    }
+}
+
+/* boot_selftest_sound $A79F: cmd_text_ptr = boot_selftest_ok_cmds, or boot_selftest_fail_cmds when the self-test
+   failed (the fail path: M4.6c2 spec 4.4); the string queued into the input ring; its clause taken from the ring with
+   no input wait (up to its ','; the space after it stays in the ring), scanned (its @T commands queued, cmd_count) and
+   converted; then the speech (pros_make_segments, boot_loop_play: the DSP started, the stub's mute ending par_play at
+   once). With the power-up settings, as boot_reset leaves them. */
+static void test_selftest_sound(void)
+{
+    static const char *const text[] = { fw_boot_selftest_ok_cmds, fw_boot_selftest_fail_cmds };
+    static const char *const clause[] = { " \030@T5, ", " \030@T7 @T7 @T7, " };
+    for (int fail = 0; fail <= 1; fail++) {
+        setup();
+        fw_regs r = { 0, 0, 0, 0 };
+        boot_set_defaults(&g_f, &r);
+        r.a = cmd_apply_speaker(&g_f, &r.x, &r.y);
+        g_ram[BOOT_DIP] = fail ? DIP_SELFTEST : 0;
+        g_sfr[SFR_P2] = fail ? 0x72 : 0x70;
+        g_nlog = 0;
+        boot_selftest_sound(&g_f, &r);
+        CHECK(!g_f.fault);
+        CHECK(!g_f.stopped);
+        CHECK_EQ(g_ncalls, 0);
+        CHECK_EQ(g_ram[BOOT_SELFTEST_FAIL], fail);
+        CHECK(memcmp(g_ram + SER_RX_RING, text[fail], strlen(text[fail])) == 0);
+        CHECK_EQ(g_ram[SER_RX_WRITE], strlen(text[fail]));
+        CHECK_EQ(g_ram[SER_RX_READ], strlen(text[fail]) - 1);
+        CHECK(memcmp(g_ram + BOOT_CLAUSE, clause[fail], strlen(clause[fail])) == 0);
+        CHECK_EQ(g_ram[CMD_COUNT], fail ? 3 : 1);   /* the @T commands of the clause */
+        unsigned input = 0, timer2 = 0;
+        for (unsigned k = 0; k < g_nlog && k < MAX_LOG; k++) {
+            input += g_log[k].kind == EV_WAIT && g_log[k].value == FW_WAIT_INPUT;
+            timer2 += g_log[k].kind == EV_WAIT && g_log[k].value == FW_WAIT_TIMER2;
+        }
+        CHECK_EQ(input, 0);
+        CHECK_EQ(timer2, 1);
+    }
+}
+
 /* The rows of the boot helpers and cmd_say_phonetic (M4.6c2 spec 2.3): A, X and Y declared; cmd_say_phonetic waits. */
 static void test_helper_rows(void)
 {
@@ -460,6 +838,18 @@ static void test_helper_rows(void)
     check_row("boot_init_baud", ROM_BOOT_INIT_BAUD, REGS, false, false, false);
     check_row("boot_init_host_lines", ROM_BOOT_INIT_HOST_LINES, REGS, false, false, false);
     check_row("cmd_say_phonetic", ROM_CMD_SAY_PHONETIC, REGS, true, false, false);
+}
+
+/* The rows of the input side and the self-test (M4.6c2 spec 2.3): the waits rows (boot_loop_text declares no output:
+   the C tn_convert_clause sets no register) and two helpers. */
+static void test_input_rows(void)
+{
+    check_row("boot_loop_text", ROM_BOOT_LOOP_TEXT, 0, true, false, false);
+    check_row("boot_get_clause", ROM_BOOT_GET_CLAUSE, REGS, true, false, false);
+    check_row("isr_idle", ROM_ISR_IDLE, REGS, true, false, false);
+    check_row("boot_selftest_sound", ROM_BOOT_SELFTEST_SOUND, REGS, true, false, false);
+    check_row("boot_selftest", ROM_BOOT_SELFTEST, REGS, false, false, false);
+    check_row("boot_queue_string", ROM_BOOT_QUEUE_STRING, REGS, false, false, false);
 }
 
 void suite_fw_boot(void)
@@ -476,4 +866,14 @@ void suite_fw_boot(void)
     test_say_rate();
     test_init_host_lines();
     test_helper_rows();
+    test_isr_idle();
+    test_get_clause_waits();
+    test_get_clause_ends();
+    test_get_clause_paths();
+    test_get_clause_idle_waits();
+    test_loop_text();
+    test_queue_string();
+    test_selftest();
+    test_selftest_sound();
+    test_input_rows();
 }

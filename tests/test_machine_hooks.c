@@ -6,6 +6,7 @@
 #include "machine/machine.h"
 #include "engine/thunks.h"
 #include "firmware/bank_addr.h"
+#include "firmware/boot_addr.h"
 #include "firmware/isr_addr.h"
 #include "firmware/par_addr.h"
 #include "firmware/tn_convert.h"
@@ -906,6 +907,47 @@ static void test_host_input(void)
     CHECK(!b.f.fault);
 }
 
+/* The isr_idle thunk (M4.6c2 spec 3.1) entered by $9002 JSR $C5FE on a synthetic machine (load_rx's receive
+   interrupt, boot_dip $10 = 0: serial mode). The C waits for input at the idle point; fed, the byte's interrupt is
+   handled and the thunk returns as the RTS would, A kept (the STA $10 after it stores 5). Stopped: the run ends there:
+   the machine stays at the idle point $C603, waiting, the JSR's return address and A pushed (SP $FC), one stop
+   counted, the bridge's trap and deadline clear; machine_run then returns MACHINE_IDLE. */
+static void test_isr_idle_thunk(void)
+{
+    static fw_bridge b;
+    static const uint8_t rx_isr[] = { 0x48, 0xA5, 0xE5, 0x85, 0x21, 0xE6, 0x22, 0x68, 0x40 };
+    load_main(ROM_ISR_IDLE);
+    put(SYN_RX_ISR, rx_isr, sizeof rx_isr);
+    vector(0xFFFA, SYN_RX_ISR);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    g_m.bus.write(g_m.bus.ctx, M50734_UART_CTRL, 0x10);
+    CHECK(fw_bridge_init(&b, &g_m));
+    CHECK(fw_install(&g_m, &b, "isr_idle"));
+    machine_set_idle_handler(&g_m, idle_feed_once, NULL);
+    g_idles = 0;
+    g_m.cpu.p = 0;
+    run_to(&g_m, 0x9007);
+    CHECK_EQ(g_idles, 1);
+    CHECK_EQ(g_m.ram[0x21], 'A');
+    CHECK_EQ(g_m.ram[0x10], 0x05);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    CHECK_EQ(b.stops, 0);
+
+    g_m.ram[0x10] = 0;                           /* boot_dip: serial mode again */
+    g_m.cpu.pc = 0x9000;
+    run_to(&g_m, 0xC603);
+    CHECK(g_m.cpu.waiting);
+    CHECK_EQ(g_idles, 2);
+    CHECK_EQ(g_m.cpu.s, 0xFC);
+    CHECK_EQ(g_m.ram[0x1FD], 0x05);
+    CHECK_EQ(b.stops, 1);
+    CHECK(!b.f.stopped);
+    CHECK(b.f.trap == NULL);
+    CHECK_EQ(b.deadline, 0);
+    CHECK_EQ(machine_run(&g_m, 1000), MACHINE_IDLE);
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+}
+
 /* The bridge's DSP port and frame event (M4.6b spec 3.1): fw_dsp_write is a bus write of $8000 (counted, grouped
    into the raw frame), fw_frame_done the machine's frame capture. */
 static void test_host_dsp(void)
@@ -1226,4 +1268,5 @@ void suite_machine_hooks(void)
     test_phase_calls();
     test_delivery_guard();
     test_host_input();
+    test_isr_idle_thunk();
 }

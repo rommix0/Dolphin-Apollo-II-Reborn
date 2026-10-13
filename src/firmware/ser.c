@@ -166,12 +166,12 @@ void ser_tx_hex(fw *f, fw_regs *r)
     ser_tx_put(f, &t);                                           /* the last PLA: A as it came */
 }
 
-void ser_tx_service(fw *f, fw_regs *r)
+bool ser_tx_service(fw *f, fw_regs *r)
 {
     if (fw_rd8(f, BOOT_DIP) & 1)                                 /* $C582 BBS0 boot_dip: parallel mode */
-        return;
+        return false;
     if (!fw_sfr_bit(f, SFR_P0, P0_HOST_LINE))                    /* $C585 BBC2 P0: the host line low */
-        return;
+        return false;
     fw_sfr_clb(f, SFR_P0, P0_BUSY);                              /* CLB5 P0 */
     fw_regs t = *r;
     ser_tx_get(f, &t);
@@ -184,6 +184,7 @@ void ser_tx_service(fw *f, fw_regs *r)
             fw_sfr_seb(f, SFR_P0, P0_BUSY);                      /* SEB5 P0 */
     }
     r->y = t.y;                                                  /* $C5A2 PLA: A as it came */
+    return true;
 }
 
 void ser_tx_records(fw *f, fw_regs *r)

@@ -64,8 +64,10 @@ void ser_hex_digits(fw *f, fw_regs *r, uint8_t pair[2]);
 void ser_tx_hex(fw *f, fw_regs *r);
 /* $C581: in serial mode (boot_dip bit 0 clear) with the host line P0.2 high: the busy line P0.5 cleared, one reply
    byte sent (ser_tx_get, ser_tx_send) and ser_status_due = ser_tx_pending; when that is 0, after the UART is ready
-   again, P0.5 set if P0.2 is still high. A and X kept; Y as ser_tx_get leaves it when it ran. */
-void ser_tx_service(fw *f, fw_regs *r);
+   again, P0.5 set if P0.2 is still high. A and X kept; Y as ser_tx_get leaves it when it ran. True when it sent a
+   byte; false when it returned at once and changed nothing (parallel mode, or P0.2 low: boot_get_clause then waits
+   for an interrupt, M4.6c2 spec 2.5). */
+bool ser_tx_service(fw *f, fw_regs *r);
 /* $C5A4: a record reply: ser_reply_id, then ser_reply_count and ser_reply_size in hex, then ser_reply_count records
    of ser_reply_size bytes from ser_reply_ptr, then CR; ser_reply_count is counted down to 0. A, X and Y kept. */
 void ser_tx_records(fw *f, fw_regs *r);

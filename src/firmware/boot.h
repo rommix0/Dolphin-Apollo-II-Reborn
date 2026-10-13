@@ -17,6 +17,7 @@
 
 #define DIP_PARALLEL     0x01   /* boot_dip bit 0: the parallel interface */
 #define DIP_SELFTEST     0x02   /* boot_dip bit 1: the self-test reads P2.1 (and the alternative bank table) */
+#define P2_SELFTEST_PIN  1      /* P2.1: the self-test input */
 
 /* $ADE0: AD_CTRL = 0, then boot_dip = A = P4 & $0F. X and Y untouched. */
 void boot_read_dip(fw *f, fw_regs *r);
@@ -48,5 +49,12 @@ void boot_init_host_lines(fw *f, fw_regs *r);
 /* $A876: cmd_put_phonetic (the length-prefixed text at tn_rule_ptr to tn_phonetic), pros_make_segments,
    boot_loop_play (C calls C); it waits as boot_loop_play does. A, X and Y as boot_loop_play leaves them. */
 void cmd_say_phonetic(fw *f, fw_regs *r);
+/* $C605: boot_selftest_fail = 1 when boot_dip bit 1 is set and the input P2.1 reads high (one read of P2), else 0.
+   A, X and Y untouched. */
+void boot_selftest(fw *f, fw_regs *r);
+/* $A79F: cmd_text_ptr = boot_selftest_ok_cmds, boot_selftest, boot_selftest_fail_cmds when it failed;
+   boot_queue_string; then the main loop's steps once: boot_loop_text, pros_make_segments, boot_loop_play (C calls
+   C). A, X and Y as boot_loop_play leaves them. */
+void boot_selftest_sound(fw *f, fw_regs *r);
 
 #endif
