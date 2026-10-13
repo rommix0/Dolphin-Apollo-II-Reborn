@@ -9,6 +9,7 @@ void fw_init(fw *f, uint8_t *ram, const fw_image *img, const fw_host *host)
     f->img = img;
     f->host = host;
     f->low_window = false;
+    f->bank = P2_MAIN_BANK;
     f->fault = false;
     f->fault_addr = 0;
     f->trap = NULL;
@@ -31,6 +32,12 @@ static bool converted(const uint8_t *ok, uint32_t i) { return (ok[i >> 3] >> (i 
 uint8_t fw_rom8(fw *f, uint16_t addr)
 {
     const fw_image *img = f->img;
+    if (addr >= 0x8000 && f->bank != P2_MAIN_BANK) {   /* another bank's socket (M4.6c1 spec 3.1) */
+        if (f->host && f->host->read_bank)
+            return f->host->read_bank(f->host->ctx, addr);
+        fault(f, addr);
+        return 0xFF;
+    }
     if (img && addr >= 0x4000) {
         if (f->low_window && addr < 0x8000) {
             if (converted(img->low_ok, addr - 0x4000u))
@@ -77,11 +84,14 @@ uint8_t fw_sfr8(fw *f, uint8_t addr)
     return 0xFF;
 }
 
-/* A value written to P2: the window cache follows its bit 7 (M4.6b spec 3.4). */
+/* A value written to P2: the window cache follows its bit 7 (M4.6b spec 3.4), the selected bank its bits 2-6
+   (M4.6c1 spec 3.1). */
 static void p2_written(fw *f, uint8_t addr, uint8_t v)
 {
-    if (addr == SFR_P2)
+    if (addr == SFR_P2) {
         f->low_window = (v & P2_LOW_WINDOW) != 0;
+        f->bank = v & P2_BANK_BITS;
+    }
 }
 
 void fw_wr_sfr8(fw *f, uint8_t addr, uint8_t v)
@@ -144,11 +154,12 @@ void fw_set_low_window(fw *f, bool on)
         f->host->set_low_window(f->host->ctx, on);
 }
 
-bool fw_rom_call(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget)
+typedef fw_call_result (*rom_call_fn)(void *ctx, uint16_t addr, fw_regs *regs, uint64_t budget);
+
+/* fw_rom_call through the host call call (rom_call or rom_call_unhooked; NULL: none). */
+static bool call_rom(fw *f, rom_call_fn call, uint16_t addr, fw_regs *regs, uint64_t budget)
 {
-    fw_call_result r = FW_CALL_FAILED;
-    if (f->host && f->host->rom_call)
-        r = f->host->rom_call(f->host->ctx, addr, regs, budget);
+    fw_call_result r = call ? call(f->host->ctx, addr, regs, budget) : FW_CALL_FAILED;
     if (r == FW_CALL_RETURNED)
         return true;
     if (r == FW_CALL_UNWOUND) {
@@ -159,4 +170,26 @@ bool fw_rom_call(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget)
     }
     fault(f, addr);
     return false;
+}
+
+bool fw_rom_call(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget)
+{
+    return call_rom(f, f->host ? f->host->rom_call : NULL, addr, regs, budget);
+}
+
+bool fw_rom_call_unhooked(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget)
+{
+    return call_rom(f, f->host ? f->host->rom_call_unhooked : NULL, addr, regs, budget);
+}
+
+void fw_enter(fw *f, uint16_t addr, uint8_t a, uint8_t x)
+{
+    if (!f->host || !f->host->enter) {
+        fault(f, addr);
+        return;
+    }
+    f->host->enter(f->host->ctx, addr, a, x);
+    f->unwound = true;   /* the C is abandoned as at an unwound ROM call (M4.2 spec 3) */
+    if (f->trap)
+        longjmp(*f->trap, 1);
 }

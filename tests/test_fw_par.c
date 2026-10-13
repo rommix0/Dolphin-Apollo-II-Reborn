@@ -149,6 +149,8 @@ static void setup(void)
     g_ncalls = 0;
     g_np3 = 0;
     memset(g_sfr, 0, sizeof g_sfr);
+    g_sfr[SFR_P2] = P2_MAIN_BANK;   /* the main ROM selected, as on the board (the pull-ups and boot_init_ports
+                                       $AC50); isr_dsp_reset's SEB/CLB keep it, so the C reads the converted image */
     g_nsfr_writes = 0;
     g_waits = 0;
     g_flag_every = 0;

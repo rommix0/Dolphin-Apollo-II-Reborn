@@ -16,6 +16,17 @@
    Otherwise false, with the first difference in why. */
 bool diff_same(const machine *a, const machine *b, uint8_t outputs, char *why, size_t n);
 
+/* A routine whose copy reset the stack (bank_enter's LDX #$FF / TXS) is compared where bank_enter jumps, at the bank
+   entry BANK_ENTRY_WARM $FFD4 or BANK_ENTRY_COLD $FFD0 (M4.6c1 spec 4.1). diff_run_to_bank_entry steps m (at most
+   DIFF_ENTRY_STEPS instructions) until its PC is one of them: at once when the C left it there (fw_enter); between
+   the TXS and the jump the ROM only reads (warm) or clears $01-$64 (cold). False on a fault or when it gets there
+   not. */
+#define DIFF_ENTRY_STEPS 1000
+bool diff_run_to_bank_entry(machine *m);
+/* At a bank entry: diff_same with A and X, and the I flag (M4.6c1 spec 4.1). Y and the other flags are not compared:
+   the warm and cold re-entries ($A66B, $A665) write each before reading it. */
+bool diff_same_at_entry(const machine *a, const machine *b, char *why, size_t n);
+
 /* The serial routines no corpus text enters (M4.6a spec 4.4: the machine never raises the host line P0.2, so no
    reply is sent): diff_lts sees no call of them and golden_hybrid runs no thunk of them alone; diff_serial's probes
    compare them, each one the routine of a probe. */

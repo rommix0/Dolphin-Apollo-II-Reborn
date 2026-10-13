@@ -40,6 +40,8 @@ typedef struct { uint16_t addr, pc; bool write; } machine_access;
 
 #define MACHINE_MAX_HOOKS          256
 #define MACHINE_ROM_CALL_SENTINEL  0x0000   /* machine_rom_call's return address: the ROM never runs code at $0000 */
+#define MACHINE_RAMCODE_FIRST      0x0200   /* the RAM copy of bank_ramcode_image (machine_hook_ramcode) ... */
+#define MACHINE_RAMCODE_LAST       0x03FE   /* ... to its last byte */
 
 struct machine;
 /* A C replacement or observer for the ROM routine at a hooked address (M4.0 spec section 3.2). It returns
@@ -47,7 +49,7 @@ struct machine;
    machine_return), false to let the ROM routine run. Setting m->fault stops the run. Returning true with the PC
    still at the hooked address and no fault set is MFAULT_FIRMWARE at that address (it would run forever). */
 typedef bool (*machine_hook_fn)(struct machine *m, void *user);
-typedef struct { uint16_t addr; machine_hook_fn fn; void *user; } machine_hook_entry;
+typedef struct { uint16_t addr; machine_hook_fn fn; void *user; bool ramcode; } machine_hook_entry;
 typedef struct { uint8_t a, x, y, p; } machine_regs;
 
 /* Where a CPU read lands under the current P2 (machine_map_read). */
@@ -91,6 +93,8 @@ typedef struct machine {
     unsigned hook_count;
     uint8_t hook_map[0x10000 / 8];         /* bit set = hooked address (fast test before the table) */
     bool irq_hold;                         /* no IRQ line reaches the CPU (machine_hold_irqs) */
+    bool skip_hook;                        /* machine_rom_call_unhooked: the hook at skip_hook_pc does not fire ... */
+    uint16_t skip_hook_pc;                 /* ... until the instruction there has run once */
     uint16_t fault_addr;                   /* MFAULT_FIRMWARE: the address the C code could not read or call */
 } machine;
 
@@ -113,6 +117,10 @@ bool machine_step(machine *m);
    (zero-cycle spin guard). That would misfire if a JSR's return address were itself a hooked entry (the
    "JSR x / x:" idiom); every M4.0 entry is preceded by an RTS, so it is not hit. */
 bool machine_hook(machine *m, uint16_t addr, machine_hook_fn fn, void *user);
+/* Registers fn for the RAM-code routine at addr ($0200-$03FE; M4.6c1 spec 3.3). It fires as a machine_hook does,
+   but where the PC is addr and the address maps to RAM: only while the CPU executes the RAM copy there. False when
+   addr is outside $0200-$03FE, the table is full or addr is already hooked. */
+bool machine_hook_ramcode(machine *m, uint16_t addr, machine_hook_fn fn, void *user);
 void machine_clear_hooks(machine *m);
 /* Pops a return address and continues after it, like RTS. */
 void machine_return(machine *m);
@@ -130,6 +138,9 @@ void machine_hold_irqs(machine *m, bool hold);
    must not be called while the CPU is waiting at WIT (hooks never fire then). */
 typedef enum { MCALL_FAILED = 0, MCALL_RETURNED, MCALL_UNWOUND } machine_call_result;
 machine_call_result machine_rom_call(machine *m, uint16_t addr, machine_regs *regs, uint64_t max_cycles);
+/* machine_rom_call with the hook at addr skipped once, at the routine's own first instruction (M4.6c1 spec 3.3): it
+   runs as ROM there; any later entry of addr, and every other hook, fires as usual. */
+machine_call_result machine_rom_call_unhooked(machine *m, uint16_t addr, machine_regs *regs, uint64_t max_cycles);
 /* Runs the routine the PC has just entered (by JSR) until the stack pointer rises above its value now, i.e.
    the routine returned, also two levels up. False on a fault or when max_cycles pass first. */
 bool machine_finish_routine(machine *m, uint64_t max_cycles);
@@ -146,7 +157,8 @@ bool machine_wait_interrupt(machine *m, uint64_t max_cycles);
    exit, then puts the PC and P back as they were. No stack frame. False when max_cycles pass first or on a fault
    (the PC and P put back all the same). */
 bool machine_run_loop(machine *m, uint16_t loop, uint16_t exit, uint64_t max_cycles);
-/* Copies src's whole state into dst for a differential run, without hooks, outputs, coverage or the hold. */
+/* Copies src's whole state into dst for a differential run, without hooks (a pending skip of
+   machine_rom_call_unhooked included), outputs, coverage or the hold. */
 void machine_clone(machine *dst, const machine *src);
 /* The shared address mapper (M4.0 spec section 2.2) behind bus reads, machine_peek and the hook check: where a
    read of addr lands under the current P2 (spec section 1.2). *offset indexes ram for MACHINE_MAP_RAM and the

@@ -5,6 +5,7 @@
 #include "rom_fixture.h"
 #include "machine/machine.h"
 #include "engine/thunks.h"
+#include "firmware/bank_addr.h"
 #include "firmware/isr_addr.h"
 #include "firmware/par_addr.h"
 #include "firmware/tn_convert.h"
@@ -683,6 +684,166 @@ static void test_host_dsp(void)
     CHECK_EQ(g_m.unmodelled_count, 0);
 }
 
+static int g_count_a, g_count_b;
+
+/* Counts in *user, then performs the routine: A = $77 and RTS. */
+static bool hook_count_replace(machine *m, void *user)
+{
+    (*(int *)user)++;
+    m->cpu.a = 0x77;
+    machine_return(m);
+    return true;
+}
+
+/* machine_hook_ramcode (M4.6c1 spec 3.3): a hook at a RAM-code address ($0200-$03FE) fires while the CPU executes
+   the RAM there ($9000 JSR $0250, $0250: ASL A / ASL A / RTS in RAM); a main-ROM hook (machine_hook) at a RAM address
+   never fires; addresses outside $0200-$03FE are refused, as is a second hook at a hooked address. */
+static void test_hook_ramcode(void)
+{
+    static const uint8_t shl2[] = { 0x0A, 0x0A, 0x60 };
+    load_main(0x0250);
+    memcpy(g_m.ram + 0x0250, shl2, sizeof shl2);
+    CHECK(machine_hook_ramcode(&g_m, 0x0250, hook_replace, NULL));
+    run_to(&g_m, 0x9007);
+    CHECK_EQ(g_m.ram[0x10], 0x77);
+    CHECK_EQ(g_calls, 1);
+
+    load_main(0x0250);
+    memcpy(g_m.ram + 0x0250, shl2, sizeof shl2);
+    CHECK(machine_hook(&g_m, 0x0250, hook_replace, NULL));
+    run_to(&g_m, 0x9007);
+    CHECK_EQ(g_m.ram[0x10], 0x14);               /* the RAM routine ran: the main-ROM hook did not fire */
+    CHECK_EQ(g_calls, 0);
+
+    load_main(0xC100);
+    CHECK(!machine_hook_ramcode(&g_m, 0x01FF, hook_replace, NULL));
+    CHECK(!machine_hook_ramcode(&g_m, 0x03FF, hook_replace, NULL));
+    CHECK(!machine_hook_ramcode(&g_m, 0xC100, hook_replace, NULL));
+    CHECK(machine_hook_ramcode(&g_m, MACHINE_RAMCODE_FIRST, hook_replace, NULL));
+    CHECK(machine_hook_ramcode(&g_m, MACHINE_RAMCODE_LAST, hook_replace, NULL));
+    CHECK(!machine_hook_ramcode(&g_m, MACHINE_RAMCODE_LAST, hook_replace, NULL));
+    CHECK(!machine_hook(&g_m, MACHINE_RAMCODE_FIRST, hook_replace, NULL));
+    CHECK_EQ(g_m.hook_count, 2);
+}
+
+/* machine_rom_call_unhooked (M4.6c1 spec 3.3): the hook at the called address is skipped at the routine's first
+   instruction only. $C200: JSR $C100 / RTS; $C300: DEX / BEQ $C306 / JSR $C300 / RTS (it enters itself while X is
+   not 0). The skipped hook does not fire, the hook at $C100 does; $C300's own hook fires on its second entry; the
+   skip is gone after the call, and a plain machine_rom_call fires the hook. */
+static void test_rom_call_unhooked(void)
+{
+    static const uint8_t call_c100[] = { 0x20, 0x00, 0xC1, 0x60 };
+    static const uint8_t self[] = { 0xCA, 0xF0, 0x03, 0x20, 0x00, 0xC3, 0x60 };
+    load_main(0xC100);
+    put(0xC200, call_c100, sizeof call_c100);
+    put(0xC300, self, sizeof self);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    g_count_a = g_count_b = 0;
+    CHECK(machine_hook(&g_m, 0xC100, hook_count_replace, &g_count_a));
+    CHECK(machine_hook(&g_m, 0xC200, hook_count_replace, &g_count_b));
+    machine_regs r = { 3, 0, 0, g_m.cpu.p };
+    CHECK_EQ(machine_rom_call_unhooked(&g_m, 0xC100, &r, 1000), MCALL_RETURNED);
+    CHECK_EQ(r.a, 12);                           /* ASL A / ASL A: the ROM routine ran */
+    CHECK_EQ(g_count_a, 0);
+    CHECK(!g_m.skip_hook);
+    r.a = 3;
+    CHECK_EQ(machine_rom_call_unhooked(&g_m, 0xC200, &r, 1000), MCALL_RETURNED);
+    CHECK_EQ(g_count_b, 0);                      /* $C200's hook skipped ... */
+    CHECK_EQ(g_count_a, 1);                      /* ... $C100's fired */
+    CHECK_EQ(r.a, 0x77);
+    r.a = 3;
+    CHECK_EQ(machine_rom_call(&g_m, 0xC100, &r, 1000), MCALL_RETURNED);
+    CHECK_EQ(g_count_a, 2);
+    CHECK_EQ(r.a, 0x77);
+
+    CHECK(machine_hook(&g_m, 0xC300, hook_count_replace, &g_count_b));
+    machine_regs s = { 3, 2, 0, g_m.cpu.p };
+    CHECK_EQ(machine_rom_call_unhooked(&g_m, 0xC300, &s, 1000), MCALL_RETURNED);
+    CHECK_EQ(g_count_b, 1);                      /* the second entry of $C300 */
+    CHECK_EQ(s.x, 1);
+    CHECK_EQ(s.a, 0x77);
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+}
+
+/* The bridge's bank calls (M4.6c1 spec 3.4): read_bank reads the bus as the CPU sees it (the main ROM while it is
+   selected, $FF for an empty socket); fw_rom8 under another bank goes there; enter leaves the machine at the bank
+   entry with SP $FF, I set, A and X; rom_call_unhooked runs the ROM routine past its own hook. */
+static void test_host_bank(void)
+{
+    static fw_bridge b;
+    load_main(0xC100);
+    g_rom[0x9800] = 0x30;
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    CHECK(fw_bridge_init(&b, &g_m));
+    CHECK_EQ(b.host.read_bank(b.host.ctx, 0x9800), 0x30);   /* P2 pulled to $70: the main ROM */
+    fw_wr_sfr8(&b.f, M50734_P2_DIR, 0xFF);
+    fw_wr_sfr8(&b.f, M50734_P2, P2_BANK_5);
+    CHECK_EQ(b.f.bank, P2_BANK_5);
+    CHECK_EQ(b.host.read_bank(b.host.ctx, 0x9800), 0xFF);   /* an empty socket */
+    CHECK_EQ(fw_rom8(&b.f, 0xC561), 0xFF);                  /* converted, but another bank is selected */
+    fw_wr_sfr8(&b.f, M50734_P2, P2_MAIN_BANK);
+    CHECK_EQ(fw_rom8(&b.f, 0xC561), '0');                   /* the converted image again */
+    CHECK(!b.f.fault);
+
+    g_m.cpu.s = 0xE0;
+    g_m.cpu.p = 0;
+    fw_enter(&b.f, BANK_ENTRY_WARM, 0x02, 0xFF);
+    CHECK(b.f.unwound);
+    CHECK(!b.f.fault);
+    CHECK_EQ(g_m.cpu.pc, BANK_ENTRY_WARM);
+    CHECK_EQ(g_m.cpu.s, 0xFF);
+    CHECK_EQ(g_m.cpu.p, CPU740_I);
+    CHECK_EQ(g_m.cpu.a, 0x02);
+    CHECK_EQ(g_m.cpu.x, 0xFF);
+
+    load_main(0xC100);
+    CHECK(fw_bridge_init(&b, &g_m));
+    g_calls = 0;
+    CHECK(machine_hook(&g_m, 0xC100, hook_replace, NULL));
+    fw_regs r = { 3, 0, 0, 0 };
+    CHECK(fw_rom_call_unhooked(&b.f, 0xC100, &r, FW_ROM_CALL_BUDGET));
+    CHECK_EQ(r.a, 12);
+    CHECK_EQ(g_calls, 0);
+    r.a = 3;
+    CHECK(fw_rom_call(&b.f, 0xC100, &r, FW_ROM_CALL_BUDGET));
+    CHECK_EQ(r.a, 0x77);
+    CHECK_EQ(g_calls, 1);
+}
+
+/* After a wait and after a ROM call the bridge reads the window and the bank back from the machine's P2 pins
+   (M4.6b spec 3.4, M4.6c1 spec 3.1; the M4.6b deferred item: the read-back after a wait was untested). The timer
+   interrupt's handler at $0300 (LDM #$F8,P2 / CLB3 ICR2 / RTI) selects bank $78 with the window on; a routine at
+   $0310 (LDM #$70,P2 / RTS) selects the main bank with the window off. Both are in RAM and the wait is at $0320:
+   an instruction in $8000-$FFFF under another bank would be a runaway PC. */
+static void test_host_readback(void)
+{
+    static fw_bridge b;
+    static const uint8_t isr_78[] = { 0x3C, 0xF8, 0xF0, 0x7F, 0xFE, 0x40 };
+    static const uint8_t select_main[] = { 0x3C, 0x70, 0xF0, 0x60 };
+    load_main(0xC100);
+    vector(0xFFF8, 0x0300);
+    CHECK(machine_init(&g_m, g_rom, sizeof g_rom, NULL));
+    memcpy(g_m.ram + 0x0300, isr_78, sizeof isr_78);
+    memcpy(g_m.ram + 0x0310, select_main, sizeof select_main);
+    CHECK(fw_bridge_init(&b, &g_m));
+    fw_wr_sfr8(&b.f, M50734_P2_DIR, 0xFF);
+    fw_wr_sfr8(&b.f, M50734_P2, P2_MAIN_BANK);
+    CHECK(!b.f.low_window);
+    CHECK_EQ(b.f.bank, P2_MAIN_BANK);
+    timer2_on(&g_m, true);
+    g_m.cpu.p = 0;
+    g_m.cpu.pc = 0x0320;
+    fw_wait(&b.f, FW_WAIT_INTERRUPT, 0x0320);
+    CHECK(!b.f.fault);
+    CHECK(b.f.low_window);
+    CHECK_EQ(b.f.bank, P2_BANK_5);
+
+    fw_regs r = { 0, 0, 0, 0 };
+    CHECK(fw_rom_call(&b.f, 0x0310, &r, FW_ROM_CALL_BUDGET));
+    CHECK(!b.f.low_window);
+    CHECK_EQ(b.f.bank, P2_MAIN_BANK);
+}
+
 /* The bridge's cycle deadline (thunks.h): a ROM call from C gets at most the cycles left before b->deadline, and
    none once it has passed; the call fails and fw_rom_call faults, as a call that does not return within its own
    budget does. 0 = no deadline. */
@@ -809,4 +970,8 @@ void suite_machine_hooks(void)
     test_host_dsp();
     test_bridge_deadline();
     test_waits_thunk_deadline();
+    test_hook_ramcode();
+    test_rom_call_unhooked();
+    test_host_bank();
+    test_host_readback();
 }

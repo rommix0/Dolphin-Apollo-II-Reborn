@@ -30,6 +30,8 @@ typedef struct {
                                  not diff_lts */
     bool isr;                 /* an interrupt handler, entered through its vector: the thunk exits like RTI
                                  (machine_return_interrupt) and declares no outputs (M4.6a spec 3.2) */
+    bool ramcode;             /* a routine of the RAM copy of bank_ramcode_image ($0200-$03FE): hooked with
+                                 machine_hook_ramcode (M4.6c1 spec 3.3) */
 } fw_replacement;
 
 extern const fw_replacement fw_replacements[];
@@ -41,5 +43,7 @@ const fw_replacement *fw_replacement_find(const char *name);
 /* Hooks every replacement into m with user b, or only the one named only (NULL = all). False if only names
    none or a hook cannot be added. */
 bool fw_install(machine *m, fw_bridge *b, const char *only);
+/* Hooks fn with user at r's address: machine_hook_ramcode for a ramcode row, else machine_hook. */
+bool fw_hook(machine *m, const fw_replacement *r, machine_hook_fn fn, void *user);
 
 #endif

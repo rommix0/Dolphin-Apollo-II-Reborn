@@ -2,6 +2,7 @@
 #include <string.h>
 #include "diff_state.h"
 #include "engine/thunks.h"
+#include "firmware/bank_addr.h"
 
 #define ICR2_ENABLES 0x15   /* timers 1-3: enable bits 0, 2, 4 */
 
@@ -116,4 +117,23 @@ bool diff_same(const machine *a, const machine *b, uint8_t outputs, char *why, s
         }
     }
     return true;
+}
+
+static bool at_bank_entry(const machine *m) { return m->cpu.pc == BANK_ENTRY_WARM || m->cpu.pc == BANK_ENTRY_COLD; }
+
+bool diff_run_to_bank_entry(machine *m)
+{
+    for (int i = 0; i < DIFF_ENTRY_STEPS && !at_bank_entry(m); i++)
+        if (!machine_step(m))
+            return false;
+    return at_bank_entry(m);
+}
+
+bool diff_same_at_entry(const machine *a, const machine *b, char *why, size_t n)
+{
+    if ((a->cpu.p ^ b->cpu.p) & CPU740_I) {
+        snprintf(why, n, "I: ROM %d, C %d", (a->cpu.p & CPU740_I) != 0, (b->cpu.p & CPU740_I) != 0);
+        return false;
+    }
+    return diff_same(a, b, FW_OUT_A | FW_OUT_X, why, n);
 }

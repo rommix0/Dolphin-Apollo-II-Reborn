@@ -9,8 +9,9 @@
    routines no corpus text enters (diff_probed, M4.6a spec 4.4) print 0 calls: diff_serial's probes compare them.
    A call whose ROM copy reaches boot_loop_play ($A7D4, tn_convert_clause's mid-clause flush) cannot finish with
    interrupts held: it is skipped and counted (golden_hybrid covers it, M4.1 spec 5.1), in tn_convert_clause only. A
-   call whose ROM copy resets the stack (@= entering a bank) stops right after the reset in both copies and is
-   compared like any other (M4.2 spec 3) and counted: bank_select must produce some (M4.2 spec 5.5). The replacements
+   call whose ROM copy resets the stack (@= entering a bank) runs on in both copies to the bank entry it jumps to,
+   $FFD4 or $FFD0, and is compared there: PC, SP, A, X, the I flag, the SFR and DSP state and RAM (M4.6c1 spec 4.1,
+   diff_same_at_entry); it is counted: bank_select must produce some (M4.2 spec 5.5). The replacements
    marked waits (the frame loop, which waits on the timer interrupt) cannot run with interrupts held: they are not
    observed here but in diff_play (M4.4b spec 4.1, 4.2). */
 #include <stdio.h>
@@ -27,7 +28,7 @@
 #define DIFF_FULL_CALLS 1000      /* every call up to this many per routine and corpus file ... */
 #define DIFF_STRIDE     64        /* ... then every 64th (but the routines of k_every_call) */
 #define DIFF_BUDGET     10000000ULL
-#define DIFF_MAX        104
+#define DIFF_MAX        112
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
 /* Extra text, for this test only (not goldens): words whose rules use the % & @ context symbols. */
@@ -86,16 +87,24 @@ static bool observe(machine *m, void *user)
             snprintf(why, sizeof why, "the ROM routine did not return (fault %d)", (int)g_ref.fault);
     } else {
         g_checked[o - g_obs]++;
-        if (g_ref.cpu.s > m->cpu.s + (o->r->isr ? 3 : 2))
-            g_unwound++;   /* SP above the return address (RTI: P too): the routine reset the stack (bank_enter) */
+        /* SP above the return address (RTI: P too): the routine reset the stack (bank_enter) */
+        bool unwound = g_ref.cpu.s > m->cpu.s + (o->r->isr ? 3 : 2);
+        g_unwound += unwound;
         machine_clone(&g_c, m);
         machine_hold_irqs(&g_c, true);
-        if (!fw_bridge_init(&b, &g_c)) {
+        if (unwound && !diff_run_to_bank_entry(&g_ref)) {
+            snprintf(why, sizeof why, "the ROM copy reset the stack and reached no bank entry (PC $%04X)",
+                     g_ref.cpu.pc);
+        } else if (!fw_bridge_init(&b, &g_c)) {
             snprintf(why, sizeof why, "no firmware data image");
         } else {
             o->r->thunk(&g_c, &b);
             if (g_c.fault != MFAULT_NONE)
                 snprintf(why, sizeof why, "the C faulted (fault %d at $%04X)", (int)g_c.fault, g_c.fault_addr);
+            else if (unwound && !diff_run_to_bank_entry(&g_c))
+                snprintf(why, sizeof why, "the C copy reached no bank entry (PC $%04X)", g_c.cpu.pc);
+            else if (unwound)
+                same = diff_same_at_entry(&g_ref, &g_c, why, sizeof why);
             else
                 same = diff_same(&g_ref, &g_c, o->r->isr ? (uint8_t)(FW_OUT_A | FW_OUT_X | FW_OUT_Y) : o->r->outputs,
                                  why, sizeof why);
@@ -118,7 +127,7 @@ static void install(machine *m, void *user)
         g_obs[i].every = false;
         for (size_t k = 0; k < sizeof k_every_call / sizeof k_every_call[0]; k++)
             g_obs[i].every |= !strcmp(fw_replacements[i].name, k_every_call[k]);
-        CHECK(machine_hook(m, fw_replacements[i].addr, observe, &g_obs[i]));
+        CHECK(fw_hook(m, &fw_replacements[i], observe, &g_obs[i]));
     }
 }
 

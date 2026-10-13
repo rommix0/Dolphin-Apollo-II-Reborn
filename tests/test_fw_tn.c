@@ -107,6 +107,8 @@ static void setup_n(const char *text, size_t n)
     g_window = false;
     g_ncalls = 0;
     memset(g_sfr, 0, sizeof g_sfr);
+    g_sfr[0xF0] = P2_MAIN_BANK;                 /* P2: the main ROM selected, as on the board (the pull-ups and
+                                                   boot_init_ports $AC50); isr_dsp_reset's SEB/CLB keep it */
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
     g_ram[BOOT_DIP] = 1;                        /* parallel mode: isr_par_ready and isr_par_hold are recorded */
     memcpy(g_ram + CMD_TEXT, text, n);

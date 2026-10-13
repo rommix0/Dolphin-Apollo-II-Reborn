@@ -250,11 +250,11 @@ static const machine_hook_entry *find_hook(const machine *m)
         return NULL;
     if (m->cpu.waiting || (m->cpu.irq_lines && !(m->cpu.p & CPU740_I)))
         return NULL;   /* the interrupt is taken first; the hook fires when the routine is entered again */
-    if (machine_map_read(m, pc, &off) != MACHINE_MAP_ROM || off != pc)
-        return NULL;   /* the lower-ROM window or an option socket, not the main ROM routine */
+    machine_map_region region = machine_map_read(m, pc, &off);
+    bool main_rom = region == MACHINE_MAP_ROM && off == pc;   /* not the lower-ROM window or an option socket */
     for (unsigned i = 0; i < m->hook_count; i++)
         if (m->hooks[i].addr == pc)
-            return &m->hooks[i];
+            return (m->hooks[i].ramcode ? region == MACHINE_MAP_RAM : main_rom) ? &m->hooks[i] : NULL;
     return NULL;
 }
 
@@ -269,6 +269,10 @@ static bool exec(machine *m)
         capture_frame(m);
     const machine_hook_entry *h = find_hook(m);
     uint16_t hook_pc = m->cpu.pc;
+    if (h && m->skip_hook && hook_pc == m->skip_hook_pc) {
+        h = NULL;   /* machine_rom_call_unhooked: the routine's first instruction runs as ROM, once */
+        m->skip_hook = false;
+    }
     if (h && h->fn(m, h->user)) {
         if (m->fault == MFAULT_NONE && m->cpu.pc == hook_pc) {
             m->fault = MFAULT_FIRMWARE;   /* claimed the routine without leaving it: it would run again forever */
@@ -325,22 +329,36 @@ bool machine_step(machine *m)
     return exec(m);
 }
 
-bool machine_hook(machine *m, uint16_t addr, machine_hook_fn fn, void *user)
+static bool add_hook(machine *m, uint16_t addr, machine_hook_fn fn, void *user, bool ramcode)
 {
     if (m->hook_count == MACHINE_MAX_HOOKS || (m->hook_map[addr >> 3] & (1u << (addr & 7))))
         return false;
     m->hooks[m->hook_count].addr = addr;
     m->hooks[m->hook_count].fn = fn;
     m->hooks[m->hook_count].user = user;
+    m->hooks[m->hook_count].ramcode = ramcode;
     m->hook_count++;
     m->hook_map[addr >> 3] |= (uint8_t)(1u << (addr & 7));
     return true;
+}
+
+bool machine_hook(machine *m, uint16_t addr, machine_hook_fn fn, void *user)
+{
+    return add_hook(m, addr, fn, user, false);
+}
+
+bool machine_hook_ramcode(machine *m, uint16_t addr, machine_hook_fn fn, void *user)
+{
+    if (addr < MACHINE_RAMCODE_FIRST || addr > MACHINE_RAMCODE_LAST)
+        return false;
+    return add_hook(m, addr, fn, user, true);
 }
 
 void machine_clear_hooks(machine *m)
 {
     m->hook_count = 0;
     memset(m->hook_map, 0, sizeof m->hook_map);
+    m->skip_hook = false;
 }
 
 void machine_return(machine *m)
@@ -393,6 +411,15 @@ machine_call_result machine_rom_call(machine *m, uint16_t addr, machine_regs *re
     regs->p = c->p;
     c->pc = saved_pc;
     return MCALL_RETURNED;
+}
+
+machine_call_result machine_rom_call_unhooked(machine *m, uint16_t addr, machine_regs *regs, uint64_t max_cycles)
+{
+    m->skip_hook = true;
+    m->skip_hook_pc = addr;
+    machine_call_result r = machine_rom_call(m, addr, regs, max_cycles);
+    m->skip_hook = false;   /* also when the call ended before the routine's first instruction ran */
+    return r;
 }
 
 bool machine_finish_routine(machine *m, uint64_t max_cycles)

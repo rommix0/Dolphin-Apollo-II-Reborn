@@ -131,6 +131,8 @@ typedef enum fw_wait_kind {
 #define FW_DSP_DATA           0x8000   /* DSP_DATA, the DSP port (write only): where fw_dsp_write faults */
 #define FW_FRAME_EVENT        0xB306   /* isr_swap_buffers: the ROM's point of the frame event, where fw_frame_done
                                           faults */
+#define P2_BANK_BITS          0x7C     /* P2 bits 2-6: the selected ROM bank (M4.6c1 spec 3.1) */
+#define P2_MAIN_BANK          0x70     /* the main ROM's bank bits (boot_init_ports $AC50 LDM #$70,P2) */
 
 /* The machine or native host. In hybrid runs it is the emulator (src/engine/thunks.c). */
 typedef struct fw_host {
@@ -152,6 +154,16 @@ typedef struct fw_host {
     /* The frame event: the C timer interrupt is where the ROM's reaches $B306 (isr_swap_buffers), the frame at
        isr_fill_ptr complete (M4.6b spec 3.1). */
     void (*frame_done)(void *ctx);
+    /* A ROM byte at addr ($8000-$FFFF) as the CPU reads it while another bank than the main ROM is selected
+       (M4.6c1 spec 3.1): an empty socket reads $FF. */
+    uint8_t (*read_bank)(void *ctx, uint16_t addr);
+    /* Leaves the C through a bank entry (bank_entry_cold $FFD0, bank_entry_warm $FFD4; M4.6c1 spec 3.2): the CPU
+       goes on at addr with SP $FF, the I flag set and A and X as given, as bank_enter's LDX #$FF / TXS, SEI and
+       JMP leave them. */
+    void (*enter)(void *ctx, uint16_t addr, uint8_t a, uint8_t x);
+    /* As rom_call, but the hook at addr does not fire on this entry (M4.6c1 spec 3.2): the NUL-bug fallback's
+       ROM cmd_run_next. */
+    fw_call_result (*rom_call_unhooked)(void *ctx, uint16_t addr, fw_regs *regs, uint64_t budget);
 } fw_host;
 
 /* Converted ROM data at its original addresses (built by src/firmware/data/fw_data.c). */
@@ -167,6 +179,7 @@ typedef struct fw {
     const fw_image *img;
     const fw_host *host;           /* NULL: no ROM to call, no port to drive */
     bool low_window;               /* P2 bit 7: $4000-$7FFF read the LOW overlay */
+    uint8_t bank;                  /* P2 bits 2-6 as last written (P2_MAIN_BANK: the main ROM; M4.6c1 spec 3.1) */
     bool fault;                    /* a read outside the converted data, or a failed ROM call */
     uint16_t fault_addr;
     jmp_buf *trap;                 /* when set, a fault longjmps here and the routine is abandoned */
@@ -186,7 +199,9 @@ static inline void fw_wr16(fw *f, uint16_t a, uint16_t v)
 
 void fw_init(fw *f, uint8_t *ram, const fw_image *img, const fw_host *host);
 /* A ROM data byte as the CPU reads it at addr (>= $4000) under the current window. A byte outside the
-   converted data is a fault: it longjmps to f->trap when set, else reads $FF. */
+   converted data is a fault: it longjmps to f->trap when set, else reads $FF. While another bank than the main ROM
+   is selected (f->bank), $8000-$FFFF are read through the host's read_bank; without a host or read_bank, a fault
+   at addr (M4.6c1 spec 3.1). */
 uint8_t fw_rom8(fw *f, uint16_t addr);
 /* A data byte anywhere: RAM below $4000 (an SFR address is a fault), else fw_rom8. */
 uint8_t fw_mem8(fw *f, uint16_t addr);
@@ -199,12 +214,13 @@ void fw_wr_ind_y(fw *f, uint8_t zp, uint8_t y, uint8_t v);
    $DA, a fault: it longjmps to f->trap when set, else reads $FF. */
 uint8_t fw_sfr8(fw *f, uint8_t addr);
 /* STA/LDM to an SFR: v written through the host. Without a host or write_sfr, or below $DA, a fault (nothing
-   written). A write of P2 ($F0) sets f->low_window from bit 7 of v (M4.6b spec 3.4). */
+   written). A write of P2 ($F0) sets f->low_window from bit 7 of v (M4.6b spec 3.4) and f->bank from bits 2-6
+   (M4.6c1 spec 3.1). */
 void fw_wr_sfr8(fw *f, uint8_t addr, uint8_t v);
 /* SEB bit,addr / CLB bit,addr on an SFR: a read, then a write of the value with the bit set or cleared, as the CPU
    does them (cpu740.c, M_SEB/M_CLB): a port reads its pins, so an input pin's level reaches the latch. Without a
    host, read_sfr or write_sfr, or below $DA, a fault (nothing read or written). On P2 ($F0) f->low_window follows
-   bit 7 of the value written (M4.6b spec 3.4). */
+   bit 7 of the value written (M4.6b spec 3.4) and f->bank its bits 2-6. */
 void fw_sfr_seb(fw *f, uint8_t addr, unsigned bit);
 void fw_sfr_clb(fw *f, uint8_t addr, unsigned bit);
 /* BBS bit,addr / BBC bit,addr on an SFR: the bit of one read (fw_sfr8, its faults included). */
@@ -227,5 +243,12 @@ void fw_set_low_window(fw *f, bool on);
    when the call fails, a fault. When the ROM reset the stack (unwound), f->unwound is set and the routine is
    abandoned like a fault (a longjmp to f->trap), but it is not a fault. */
 bool fw_rom_call(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget);
+/* fw_rom_call through the host's rom_call_unhooked: the hook at addr does not fire on this entry (M4.6c1 spec 3.2).
+   Without a host or rom_call_unhooked, or when the call fails, a fault at addr. */
+bool fw_rom_call_unhooked(fw *f, uint16_t addr, fw_regs *regs, uint64_t budget);
+/* Leaves the C through the bank entry addr ($FFD0 or $FFD4) with A = a and X = x (M4.6c1 spec 3.2): the host's
+   enter, then the routine is abandoned like an unwound ROM call (f->unwound set, a longjmp to f->trap when set; it
+   is not a fault). Without a host or enter, a fault at addr. */
+void fw_enter(fw *f, uint16_t addr, uint8_t a, uint8_t x);
 
 #endif
