@@ -550,6 +550,18 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
         check_end(&e, "ser_hex_chars", at, SER_HEX_CHARS_END);
     }
     put_bank_code(&e);
+    /* 13. The boot data (M4.6c2 spec 2.4): the self-test's two command strings back to back, each with its zero end,
+       ending where boot_loop_play's code starts; boot_prosody_defaults. */
+    {
+        uint32_t at = put_text(&e, false, BOOT_SELFTEST_OK_CMDS, fw_boot_selftest_ok_cmds, false);
+        put(&e, false, at++, 0);
+        check_end(&e, "boot_selftest_ok_cmds", at, BOOT_SELFTEST_FAIL_CMDS);
+        at = put_text(&e, false, at, fw_boot_selftest_fail_cmds, false);
+        put(&e, false, at++, 0);
+        check_end(&e, "boot_selftest_fail_cmds", at, BOOT_SELFTEST_CMDS_END);
+        for (uint32_t i = 0; i < BOOT_PROSODY_PARAMS; i++)
+            put(&e, false, BOOT_PROSODY_DEFAULTS + i, fw_boot_prosody_defaults[i]);
+    }
     return e.ok;
 }
 

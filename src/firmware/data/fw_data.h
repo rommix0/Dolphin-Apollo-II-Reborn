@@ -156,6 +156,13 @@ typedef struct { uint8_t mnem, mode, opcode; } fw_opcode;
 #define SER_HEX_CHARS       0xC561   /* char[16]: the hex digit per nibble; ser_tx_hex's code follows at $C571 */
 #define SER_HEX_CHARS_END   0xC571
 
+/* Pinned addresses of the boot data (ghidra740/annotations: boot.txt; M4.6c2 spec 2.4) */
+#define BOOT_SELFTEST_OK_CMDS     0xA7BE   /* char[7]: queued when the self-test passes ... */
+#define BOOT_SELFTEST_FAIL_CMDS   0xA7C5   /* char[15]: ... and when it fails; boot_loop_play's code follows at $A7D4 */
+#define BOOT_SELFTEST_CMDS_END    0xA7D4
+#define BOOT_PROSODY_DEFAULTS     0xC65B   /* byte[26]: pros_params at power-up; the unconverted unused_C675 follows */
+#define BOOT_PROSODY_PARAMS       26
+
 /* lts_char_class bits */
 #define CC_LETTER       0x80   /* also the apostrophe and the underscore */
 #define CC_VOWEL        0x40   /* A E I O U Y (also the underscore and lower-case x) */
@@ -251,6 +258,8 @@ extern const uint8_t fw_par_target_bias[10], fw_frm_snapshot_map[10];
 extern const uint8_t fw_par_slot_map[10];
 extern const uint8_t fw_frm_template[FRAME_SIZE], fw_frm_source_codes[4], fw_frm_filter_codes[2];
 extern const char fw_ser_hex_chars[17];   /* the 16 digits, then C's terminating 0 (not encoded) */
+extern const char fw_boot_selftest_ok_cmds[7], fw_boot_selftest_fail_cmds[15];   /* each with its zero end */
+extern const uint8_t fw_boot_prosody_defaults[BOOT_PROSODY_PARAMS];
 extern const uint8_t fw_cmd_sound_flags[CMD_SOUND_MAX];
 extern const fw_cmd_sound_effect fw_cmd_sound_effects[CMD_SOUND_EFFECTS];
 extern const fw_cmd_sound fw_cmd_sound_table[CMD_SOUND_EFFECTS];
