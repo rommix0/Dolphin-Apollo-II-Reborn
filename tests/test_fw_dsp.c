@@ -26,6 +26,7 @@ static event g_log[MAX_LOG];
 static unsigned g_nlog;
 static bool g_wait_ok;           /* what the stub's wait returns */
 static unsigned g_iwaits;        /* FW_WAIT_INTERRUPT waits so far */
+static uint8_t g_at_event[4];    /* isr_tick_div, isr_word_ofs, isr_words_left and isr_frame_flag at the frame event */
 static unsigned g_flag_every;    /* the scripted timer interrupt sets isr_frame_flag bit 0 at every n-th (0: never) */
 
 static void log_add(ev_kind kind, uint16_t addr, uint8_t value)
@@ -68,6 +69,8 @@ static void stub_frame_done(void *ctx)
 {
     (void)ctx;
     log_add(EV_FRAME, FW_FRAME_EVENT, 0);
+    for (int i = 0; i < 4; i++)
+        g_at_event[i] = g_ram[ISR_TICK_DIV + i];
 }
 
 /* Zeroed RAM and SFRs, the stub host (no ROM call, no window call: speech timing makes neither), nothing logged. */
@@ -239,6 +242,14 @@ static void check_row(const char *name, uint16_t addr, uint8_t outputs)
 
 static void test_rows(void)
 {
+    const fw_replacement *t = fw_replacement_find("isr_timer_dsp");   /* an interrupt handler: no outputs */
+    CHECK(t != NULL);
+    if (t) {
+        CHECK_EQ(t->addr, 0xB2D9);
+        CHECK_EQ(t->outputs, 0);
+        CHECK(!t->waits);
+        CHECK(t->isr);
+    }
     check_row("isr_set_volume", 0xACE8, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
     check_row("isr_volume_half", 0xB46C, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
     check_row("isr_par_ready", 0xC5D6, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
@@ -532,6 +543,121 @@ static void test_wait_frames_two(void)
     CHECK(!g_f.fault);
 }
 
+/* isr_timer_dsp's state: isr_tick_div, isr_word_ofs, isr_words_left, isr_frame_flag and isr_swap_phase; the
+   ping-pong pointers at isr_frame_a (play) and isr_frame_b (fill); the 40 bytes of the two frames $16A5-$16CC =
+   $40 + i; ICR2 with timer 3's request and enable bits ($30). */
+static void timer_setup(uint8_t tick, uint8_t ofs, uint8_t words, uint8_t flag, uint8_t phase)
+{
+    setup();
+    g_ram[ISR_TICK_DIV] = tick;
+    g_ram[ISR_WORD_OFS] = ofs;
+    g_ram[ISR_WORDS_LEFT] = words;
+    g_ram[ISR_FRAME_FLAG] = flag;
+    g_ram[ISR_SWAP_PHASE] = phase;
+    fw_wr16(&g_f, ISR_PLAY_PTR, ISR_FRAME_A);
+    fw_wr16(&g_f, ISR_FILL_PTR, ISR_FRAME_B);
+    for (int i = 0; i < 40; i++)
+        g_ram[ISR_FRAME_A + i] = (uint8_t)(0x40 + i);
+    g_sfr[SFR_ICR2] = 0x30;
+}
+
+/* isr_timer_dsp $B2D9: A, X and Y as they came. */
+static void run_timer(void)
+{
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_timer_dsp(&g_f, &r);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0x22);
+    CHECK_EQ(r.y, 0x33);
+    CHECK(!g_f.fault);
+}
+
+/* isr_timer_dsp: a tick not due (isr_tick_div 3 -> 2): CLB5 ICR2 (timer 3's request cleared), nothing else. A word
+   due (isr_tick_div 1 -> 0, isr_words_left 5 -> 4): the word at isr_frame_a + 4 to the DSP port, even byte first,
+   isr_word_ofs 4 -> 6, isr_tick_div = 10. isr_word_ofs $FE: Y wraps (INY, 8 bits): $FE, $FF, then 0. */
+static void test_timer_word(void)
+{
+    static const event tick[] = { { EV_READ, SFR_ICR2, 0x30 }, { EV_WRITE, SFR_ICR2, 0x10 } };
+    timer_setup(3, 4, 5, 0, 2);
+    run_timer();
+    check_log(tick, 2);
+    CHECK_EQ(g_ram[ISR_TICK_DIV], 2);
+    CHECK_EQ(g_ram[ISR_WORD_OFS], 4);
+    CHECK_EQ(g_ram[ISR_WORDS_LEFT], 5);
+
+    static const event word[] = {
+        { EV_READ, SFR_ICR2, 0x30 }, { EV_WRITE, SFR_ICR2, 0x10 }, { EV_DSP, FW_DSP_DATA, 0x44 },
+        { EV_DSP, FW_DSP_DATA, 0x45 },
+    };
+    timer_setup(1, 4, 5, 0, 2);
+    run_timer();
+    check_log(word, 4);
+    CHECK_EQ(g_ram[ISR_TICK_DIV], 10);
+    CHECK_EQ(g_ram[ISR_WORD_OFS], 6);
+    CHECK_EQ(g_ram[ISR_WORDS_LEFT], 4);
+    CHECK_EQ(g_ram[ISR_FRAME_FLAG], 0);
+
+    timer_setup(1, 0xFE, 5, 0, 2);
+    fw_wr16(&g_f, ISR_PLAY_PTR, 0x1600);
+    g_ram[0x16FE] = 0x5A;
+    g_ram[0x16FF] = 0xA5;
+    run_timer();
+    CHECK_EQ(g_log[2].value, 0x5A);
+    CHECK_EQ(g_log[3].value, 0xA5);
+    CHECK_EQ(g_ram[ISR_WORD_OFS], 0);
+}
+
+/* isr_timer_dsp at a frame boundary (the last word: isr_tick_div 1, isr_words_left 1, isr_word_ofs 18), the flag
+   clear: the word, then the frame event ($B306) with the counters already reset (isr_tick_div and isr_words_left 10,
+   isr_word_ofs 0) and the flag still clear, then isr_frame_flag = 1 and the swap. Phase 2 -> 1: isr_play_ptr's low
+   byte $B9, isr_fill_ptr's $A5; phase 1 -> 0: $A5 and $B9, the phase 2 again. The high bytes are not written. */
+static void test_timer_swap(void)
+{
+    static const event log[] = {
+        { EV_READ, SFR_ICR2, 0x30 }, { EV_WRITE, SFR_ICR2, 0x10 }, { EV_DSP, FW_DSP_DATA, 0x52 },
+        { EV_DSP, FW_DSP_DATA, 0x53 }, { EV_FRAME, FW_FRAME_EVENT, 0 },
+    };
+    static const uint8_t at_event[4] = { 10, 0, 10, 0 };
+    timer_setup(1, 18, 1, 0, 2);
+    run_timer();
+    check_log(log, 5);
+    CHECK(memcmp(g_at_event, at_event, 4) == 0);
+    CHECK_EQ(g_ram[ISR_FRAME_FLAG], 1);
+    CHECK_EQ(g_ram[ISR_SWAP_PHASE], 1);
+    CHECK_EQ(fw_rd16(&g_f, ISR_PLAY_PTR), ISR_FRAME_B);
+    CHECK_EQ(fw_rd16(&g_f, ISR_FILL_PTR), ISR_FRAME_A);
+
+    timer_setup(1, 18, 1, 0, 1);
+    g_ram[ISR_FILL_PTR + 1] = 0x55;             /* a high byte the LDMs leave */
+    run_timer();
+    check_log(log, 5);
+    CHECK_EQ(g_ram[ISR_FRAME_FLAG], 1);
+    CHECK_EQ(g_ram[ISR_SWAP_PHASE], 2);
+    CHECK_EQ(fw_rd16(&g_f, ISR_PLAY_PTR), ISR_FRAME_A);
+    CHECK_EQ(g_ram[ISR_FILL_PTR], 0xB9);
+    CHECK_EQ(g_ram[ISR_FILL_PTR + 1], 0x55);
+}
+
+/* isr_timer_dsp at a frame boundary with isr_frame_flag bit 0 still set ($03): the frame repeats: no frame event,
+   the flag byte, the phase and the pointers unchanged; the counters reset as at any boundary. */
+static void test_timer_repeat(void)
+{
+    static const event log[] = {
+        { EV_READ, SFR_ICR2, 0x30 }, { EV_WRITE, SFR_ICR2, 0x10 }, { EV_DSP, FW_DSP_DATA, 0x52 },
+        { EV_DSP, FW_DSP_DATA, 0x53 },
+    };
+    timer_setup(1, 18, 1, 0x03, 2);
+    run_timer();
+    check_log(log, 4);
+    CHECK_EQ(g_ram[ISR_FRAME_FLAG], 0x03);
+    CHECK_EQ(g_ram[ISR_SWAP_PHASE], 2);
+    CHECK_EQ(fw_rd16(&g_f, ISR_PLAY_PTR), ISR_FRAME_A);
+    CHECK_EQ(fw_rd16(&g_f, ISR_FILL_PTR), ISR_FRAME_B);
+    CHECK_EQ(g_ram[ISR_TICK_DIV], 10);
+    CHECK_EQ(g_ram[ISR_WORD_OFS], 0);
+    CHECK_EQ(g_ram[ISR_WORDS_LEFT], 10);
+}
+
 void suite_fw_dsp(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -549,4 +675,7 @@ void suite_fw_dsp(void)
     test_speech_start();
     test_wait_frame();
     test_wait_frames_two();
+    test_timer_word();
+    test_timer_swap();
+    test_timer_repeat();
 }

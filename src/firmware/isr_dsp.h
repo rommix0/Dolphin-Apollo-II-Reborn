@@ -17,6 +17,15 @@
 #define SFR_P2          0xF0   /* bit 0: the DSP reset line */
 #define SFR_ICR2        0xFE   /* timers 1-3: enable bits 0, 2, 4, request bits 1, 3, 5 */
 
+/* $B2D9, an interrupt handler, entered through vec_int2_timers $FFF8 (timer 3, the 10 kHz DSP tick): CLB5 ICR2;
+   isr_tick_div counted down; at 0 the word at (isr_play_ptr),Y with Y = isr_word_ofs goes to the DSP port, its even
+   byte first (fw_dsp_write twice), isr_word_ofs + 2 (8 bits), isr_tick_div = 10 and isr_words_left counted down; at
+   0 isr_words_left = 10 and isr_word_ofs = 0, and with isr_frame_flag bit 0 clear the frame event (fw_frame_done,
+   where the ROM reaches $B306), isr_frame_flag = 1 (LDM) and the buffers swapped by isr_swap_phase counted down (to
+   1: isr_play_ptr's low byte $B9, isr_fill_ptr's $A5; to 0: $A5, $B9 and the phase 2 again); with the flag still set
+   the frame repeats. A, X and Y as they came (PHA / TYA / PHA ... PLA / TAY / PLA; RTI). */
+void isr_timer_dsp(fw *f, fw_regs *r);
+
 /* $ACE8: A = the volume 0-15 (0 silent): P3 bits 3-6 = its inverted level, (A ^ $F) & $F shifted left 3
    (util_shl3), kept in the scratch byte $75; the other P3 bits kept (AND #$87). A = the value written to P3; X and Y
    untouched. */

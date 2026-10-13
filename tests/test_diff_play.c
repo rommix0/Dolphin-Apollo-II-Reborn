@@ -104,6 +104,7 @@ static size_t g_nwatch;
 static const char *g_source;
 static bool g_boot_run, g_blp_checked, g_play_armed, g_frames_armed, g_frame_armed;
 static unsigned g_mismatches, g_reached_abort, g_reached_reply;
+static uint64_t g_isr_c;       /* timer interrupts copy B ran in C */
 static bool g_hit_abort, g_hit_reply;
 
 static void take(swap_state *s, const machine *m, const uint8_t frame[APOLLO_FRAME_BYTES])
@@ -185,7 +186,10 @@ static bool on_timer(machine *m, void *user)
     recorder *rec = user;
     if (rec->abort_in && --rec->abort_in == 0)
         m->ram[SER_ABORT] |= 1;
-    return rec->isr ? rec->isr->thunk(m, rec->bridge) : false;
+    if (!rec->isr)
+        return false;
+    g_isr_c++;
+    return rec->isr->thunk(m, rec->bridge);
 }
 
 /* The copy-A hooks: which of the two injected branches the ROM routine executed. */
@@ -529,6 +533,7 @@ void suite_diff_play(void)
     CHECK_EQ(g_nwatch, 5);   /* par_play and boot_loop_play (M4.4b spec 2.5), the frame waits (M4.6b spec 2.4) */
     if (g_nwatch > 0) {
         g_reached_abort = g_reached_reply = 0;
+        g_isr_c = 0;
         run_corpus(rom, len);
         for (size_t i = 0; i < g_nwatch; i++) {
             printf("  %-20s %u calls checked, %u with both injections\n", g_watch[i].name, g_watch[i].calls,
@@ -538,6 +543,8 @@ void suite_diff_play(void)
         printf("  $B8A5 (abort) reached in %u calls, $B89C (reply due) in %u\n", g_reached_abort, g_reached_reply);
         CHECK(g_reached_abort > 0);
         CHECK(g_reached_reply > 0);
+        printf("  %llu timer interrupts run in C in copy B\n", (unsigned long long)g_isr_c);
+        CHECK(g_isr_c > 0);   /* isr_timer_dsp is a replacement (M4.6b): copy B's interrupts are C */
     }
     CHECK_EQ(g_mismatches, 0);
     free(g_ref);

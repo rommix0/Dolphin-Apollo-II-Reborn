@@ -372,6 +372,21 @@ static void tn_convert_clause_regs(fw *f, cpu740 *c)
     tn_convert_clause(f);
 }
 
+/* isr_timer_dsp $B2D9, an interrupt handler (isr): entered by the CPU through vec_int2_timers $FFF8, with the PC and P
+   pushed and I set. A, X and Y in; every path leaves them as they came (the RTI at $B2DF touches none; the word path
+   pushes A and Y at $B2E0-$B2E2 and pulls them at $B31F-$B321), and the RTI pulls P and the PC
+   (machine_return_interrupt): the interrupted code goes on with its own registers. The C makes no ROM call (the DSP
+   port and the frame event go through the host), so the machine's registers stay; they are set back from the entry
+   values all the same. No outputs declared (M4.6a spec 3.2). */
+static void isr_timer_dsp_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_timer_dsp(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
 /* isr_speech_start $B323: no register input (X and A are written first: $B323 LDX #0, $B32B LDA). A = 0 ($B344 LDA
    #0) and X = 0 (isr_wait_frames' DEX) out, Y untouched (isr_dsp_reset, isr_timer_start and isr_wait_frames keep A
    and Y). Its one caller, boot_play_body ($B2B9), calls isr_volume_half next, which loads A first ($B46C LDA
@@ -1468,6 +1483,7 @@ THUNK(ph_lengthen_count)
 /* The hook of an interrupt handler: its frame exits like RTI. */
 #define ISR_THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_frame(m, user, name##_regs, true); }
+ISR_THUNK(isr_timer_dsp)
 ISR_THUNK(isr_int1)
 ISR_THUNK(isr_int4_host_line)
 #undef ISR_THUNK
@@ -1490,6 +1506,7 @@ const fw_replacement fw_replacements[] = {
     { "tn_append_phonetic", 0xB154, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_tn_append_phonetic },
     { "lts_convert_char",   0xB172, 0,                   t_lts_convert_char },
     { "tn_convert_clause",  0xB1E6, 0,                   t_tn_convert_clause },
+    { "isr_timer_dsp",      0xB2D9, 0,                   t_isr_timer_dsp, false, true },
     { "isr_speech_start",   0xB323, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_speech_start, true },
     { "isr_wait_frames",    0xB356, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_wait_frames, true },
     { "isr_timer_start",    0xB35D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_timer_start },

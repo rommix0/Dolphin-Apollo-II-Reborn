@@ -344,18 +344,6 @@ static void run_file(const uint8_t *rom, size_t len, const char *name)
     free(text);
 }
 
-/* The probes' routines that are not C yet (M4.6b): their copy B runs the ROM until Task 5 of the M4.6b plan makes it
-   C. */
-static const char *const k_not_c_yet[] = { "isr_timer_dsp" };
-
-static bool not_c_yet(const char *routine)
-{
-    for (size_t i = 0; i < sizeof k_not_c_yet / sizeof k_not_c_yet[0]; i++)
-        if (!strcmp(k_not_c_yet[i], routine))
-            return true;
-    return false;
-}
-
 /* Prints each probe's counts; every probe compared and its target reached at every call. */
 static void report(void)
 {
@@ -370,7 +358,7 @@ static void report(void)
                    c ? "C" : "ROM", p->reached);
         CHECK(p->calls > 0);
         CHECK_EQ(p->reached, p->calls);
-        CHECK(c || g_self_check || not_c_yet(p->routine));   /* every probe's routine is C (M4.6a, M4.6b) */
+        CHECK(c || g_self_check);   /* every probe's routine is C (M4.6a, M4.6b) */
     }
 }
 

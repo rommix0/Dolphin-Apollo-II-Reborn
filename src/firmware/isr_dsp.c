@@ -15,6 +15,48 @@
 #define T3_RELOAD_TICK  0x31   /* $B382: 4 x 50 CPU cycles, the 10 kHz tick */
 #define ISR_TICKS       10     /* isr_tick_div's start: ticks per DSP word */
 #define ISR_WORDS       10     /* isr_words_left's start: words per frame */
+#define ISR_FRAME_A_LO  0xA5   /* the low bytes of the ping-pong buffers isr_frame_a $16A5 ... */
+#define ISR_FRAME_B_LO  0xB9   /* ... and isr_frame_b $16B9 */
+#define ISR_SWAP_PHASES 2      /* $B313: isr_swap_phase counts 2 -> 1 -> 2 */
+
+/* ---- isr_timer_dsp $B2D9 ---- */
+
+void isr_timer_dsp(fw *f, fw_regs *r)
+{
+    (void)r;                                         /* PHA / TYA / PHA ... PLA / TAY / PLA; RTI: A, X, Y kept */
+    fw_sfr_clb(f, SFR_ICR2, ICR2_T3_REQ);            /* CLB5 ICR2 */
+    uint8_t t = (uint8_t)(fw_rd8(f, ISR_TICK_DIV) - 1);   /* DEC isr_tick_div; BEQ */
+    fw_wr8(f, ISR_TICK_DIV, t);
+    if (t != 0)
+        return;                                      /* $B2DF RTI */
+    uint8_t y = fw_rd8(f, ISR_WORD_OFS);             /* LDY isr_word_ofs */
+    fw_dsp_write(f, fw_ind_y(f, ISR_PLAY_PTR, y));   /* LDA (isr_play_ptr),Y; STA DSP_DATA */
+    y = (uint8_t)(y + 1);                            /* INY */
+    fw_dsp_write(f, fw_ind_y(f, ISR_PLAY_PTR, y));
+    y = (uint8_t)(y + 1);
+    fw_wr8(f, ISR_WORD_OFS, y);                      /* STY isr_word_ofs */
+    fw_wr8(f, ISR_TICK_DIV, ISR_TICKS);              /* LDM #$0A */
+    uint8_t w = (uint8_t)(fw_rd8(f, ISR_WORDS_LEFT) - 1);   /* DEC isr_words_left; BNE */
+    fw_wr8(f, ISR_WORDS_LEFT, w);
+    if (w != 0)
+        return;
+    fw_wr8(f, ISR_WORDS_LEFT, ISR_WORDS);            /* LDM #$0A */
+    fw_wr8(f, ISR_WORD_OFS, 0);                      /* LDM #0 */
+    if (fw_rd8(f, ISR_FRAME_FLAG) & 1)               /* BBC0 isr_frame_flag: still set, the frame repeats */
+        return;
+    fw_frame_done(f);                                /* $B306 isr_swap_buffers: the frame event */
+    fw_wr8(f, ISR_FRAME_FLAG, 1);                    /* LDM #1 */
+    uint8_t phase = (uint8_t)(fw_rd8(f, ISR_SWAP_PHASE) - 1);   /* DEC isr_swap_phase; BNE */
+    fw_wr8(f, ISR_SWAP_PHASE, phase);
+    if (phase == 0) {
+        fw_wr8(f, ISR_PLAY_PTR, ISR_FRAME_A_LO);     /* LDM: the low bytes only */
+        fw_wr8(f, ISR_FILL_PTR, ISR_FRAME_B_LO);
+        fw_wr8(f, ISR_SWAP_PHASE, ISR_SWAP_PHASES);
+    } else {
+        fw_wr8(f, ISR_PLAY_PTR, ISR_FRAME_B_LO);     /* $B319 */
+        fw_wr8(f, ISR_FILL_PTR, ISR_FRAME_A_LO);
+    }
+}
 
 /* ---- isr_set_volume $ACE8, isr_volume_half $B46C ---- */
 
