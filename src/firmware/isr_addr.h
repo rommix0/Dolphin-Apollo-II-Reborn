@@ -18,9 +18,9 @@
 #define ROM_ISR_PAR_READY      0xC5D6   /* parallel mode: ready for the next host byte; A, X, Y preserved. Called by
                                            tn_convert_clause $B1F6, cmd_scan_clause $AD09, par_play $B89F, $B8AB,
                                            $B8C9, $B8E6, $B8F7, $B908, pros_append_segment $CA3B, pros_mark_stress
-                                           $CB1F, pros_mark_phrases $CF28, pros_phrase_gen $D155 (and boot_reset
+                                           $CB1F, pros_mark_phrases $CF28, pros_phrase_gen $D155 (and boot_reentry_warm
                                            $A672, boot_get_clause $A6D0, $A6DC, $A6FC, boot_queue_string $C62B) */
-#define ROM_ISR_PAR_HOLD       0xC5DE   /* called by boot_loop_play $B2B3 (and boot_reset $A66F, boot_get_clause
+#define ROM_ISR_PAR_HOLD       0xC5DE   /* called by boot_loop_play $B2B3 (and boot_reentry_warm $A66F, boot_get_clause
                                            $A6E4, boot_queue_string $C617) */
 
 #endif

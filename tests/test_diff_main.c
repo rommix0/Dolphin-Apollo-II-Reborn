@@ -303,8 +303,8 @@ static const extra_run k_extra[] = {
     /* parallel mode: isr_idle returns at once ($C603 by its BBS0), no idle; the boot announcement, then the deadline */
     { "parallel", "Hello.", P4_DIP_PARALLEL, 0, 0, NULL, AT_IDLE, 0, 0xC603, false, MACHINE_CYCLE_LIMIT },
     /* the M4.6c2 plan's Review Focus 1: no punctuation and no CR inside, longer than a clause: cut at X >= $DC on a
-       space ($A731 CMP #$20 reached); one word of 260 letters, cut at X >= $FA; and cmd_char at $DB (after 218
-       characters), carried in $1827 into the next clause ($A739) */
+       space ($A731 CMP #$20 reached); one word of 260 letters, cut at X >= $FA; and cmd_char at $DC (after the
+       self-test's space at boot_clause[1] and 218 characters), carried in $1827 into the next clause ($A739) */
     { "rf1_space", WORDS44 WORDS44 WORDS44 WORDS44 WORDS44 WORDS44, 0, 0, 0, NULL, AT_IDLE, 0, 0xA731, false,
       MACHINE_IDLE },
     { "rf1_full", "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"
@@ -316,7 +316,8 @@ static const extra_run k_extra[] = {
     /* Review Focus 2: several sentences in one input, each punctuation the end of a clause ($A704), spoken in order
        with no idle between */
     { "rf2_sentences", "One. Two? Three!", 0, 0, 0, NULL, AT_IDLE, 0, 0xA704, false, MACHINE_IDLE },
-    /* Review Focus 3: an empty input, the CR alone: a one-character clause, then idle again */
+    /* Review Focus 3: an empty input, the CR alone: the clause "   " (boot_clause[0], the self-test's space,
+       the CR's), then idle again */
     { "rf3_empty", "", 0, 0, 0, NULL, AT_IDLE, 0, 0xA704, false, MACHINE_IDLE },
     /* Review Focus 4: commands only (cmd_set_speed $A9C9 run), nothing spoken */
     { "rf4_commands", "@W5 @A3", 0, 0, 0, NULL, AT_IDLE, 0, 0xA9C9, false, MACHINE_IDLE },

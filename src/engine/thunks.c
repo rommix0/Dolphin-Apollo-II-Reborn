@@ -380,9 +380,10 @@ static void bank_regs(fw *f, cpu740 *c, void (*fn)(fw *, fw_regs *))
 }
 
 /* bank_load_ramcode $A600: A, X and Y in (X and Y saved in $76 and $78). A and Y kept, X = 0 (the copy loop's INX),
-   out. bank_cmd_select ($ABB2) calls bank_enter next, whose PHA and bank_select's TAX read A (the bank); boot_reset
-   ($A678) calls bank_scan, which pushes A and pulls it at its exit. Neither reads X or Y: bank_restore reloads them
-   from $76 and $78, and the bank entries load X first ($021F LDX #$FF, $0237 LDX #$64). Declared: A, X, Y. */
+   out. bank_cmd_select ($ABB2) calls bank_enter next, whose PHA and bank_select's TAX read A (the bank);
+   boot_reentry_warm ($A678) calls bank_scan, which pushes A and pulls it at its exit. Neither reads X or Y:
+   bank_restore reloads them from $76 and $78, and the bank entries load X first ($021F LDX #$FF, $0237 LDX #$64).
+   Declared: A, X, Y. */
 static void bank_load_ramcode_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_load_ramcode); }
 
 /* bank_enter $0210 (RAM code): A in (the bank). For an absent bank: A kept, X = $76 and Y = $78 (bank_restore), out;
@@ -392,7 +393,7 @@ static void bank_load_ramcode_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_load
 static void bank_enter_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_enter); }
 
 /* bank_scan $0241 (RAM code): A in, kept (PHA ... PLA); X = $76 and Y = $78 (bank_restore) out. Its one caller,
-   boot_reset ($A67B), calls bank_find_current next (A and X kept, not read), then boot_loop_text, whose
+   boot_reentry_warm ($A67B), calls bank_find_current next (A and X kept, not read), then boot_loop_text, whose
    boot_get_clause writes X and A before reading them ($A697 LDX #1, $A699 LDA #$20) and Y at $A6EB (LDY #0).
    Declared: A, X, Y. */
 static void bank_scan_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_scan); }
@@ -422,14 +423,14 @@ static void bank_put_id_char_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_put_i
 static void bank_safe_char_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_safe_char); }
 
 /* bank_find_current $02F0 (RAM code): A, X and Y kept (PHA / TXA / PHA ... PLA / TAX / PLA). bank_cmd_select ($ABB8)
-   jumps to cmd_run_done next (PLA / TAX: X and A from the stack); boot_reset ($A67E) calls boot_loop_text (see
+   jumps to cmd_run_done next (PLA / TAX: X and A from the stack); boot_reentry_warm ($A67E) calls boot_loop_text (see
    bank_scan): none is read. Declared: A, X, Y. */
 static void bank_find_current_regs(fw *f, cpu740 *c) { bank_regs(f, c, bank_find_current); }
 
 /* cmd_apply_speaker $A78C: X, Y in (handed to par_setup_voice, which does not read them). A = the cmd_speaker it
-   read, X and Y as par_setup_voice leaves them, out. boot_reset reads all three: after its second call ($A675),
-   bank_load_ramcode saves X in $76 and Y in $78; A is preserved into bank_scan and, after the first call
-   ($A651), through boot_selftest_sound. */
+   read, X and Y as par_setup_voice leaves them, out. boot_reset and boot_reentry_warm read all three: after
+   boot_reentry_warm's call ($A675), bank_load_ramcode saves X in $76 and Y in $78; A is preserved into bank_scan
+   and, after boot_reset's call ($A651), through boot_selftest_sound. */
 static void cmd_apply_speaker_regs(fw *f, cpu740 *c)
 {
     uint8_t x = c->x, y = c->y;
@@ -439,10 +440,10 @@ static void cmd_apply_speaker_regs(fw *f, cpu740 *c)
 }
 
 /* boot_loop_play $A7D4: A, X, Y in; none is read (A is loaded first; X and Y flow into isr_par_hold, which keeps them,
-   and par_play_start, which writes Y and keeps X). Out: A = the byte at FW_UTT_CONTENT ($6B) and X, Y untouched when
-   it does not play ($A7DE RTS); else the A, X and Y isr_speech_stop leaves (its RTS at $B3A3). The C's ROM calls
-   overwrite the machine's registers, so all three are set from the C. Nothing reads them after a call: boot_reset
-   ($A687) jumps to boot_loop_text, whose boot_get_clause writes X and A first ($A697 LDX #1, $A699 LDA #$20);
+   and par_play_start, which writes Y and keeps X). Out: A = the byte at FW_UTT_CONTENT ($6B) and X, Y untouched when it
+   does not play ($A7DE RTS); else the A, X and Y isr_speech_stop leaves (its RTS at $B3A3). The C's ROM calls overwrite
+   the machine's registers, so all three are set from the C. Nothing reads them after a call: boot_reentry_warm ($A687)
+   jumps to boot_loop_text, whose boot_get_clause writes X and A first ($A697 LDX #1, $A699 LDA #$20);
    boot_selftest_sound ($A7BA) returns to $A657 (BBS0 boot_dip, then LDX #0 or JMP $A66B: LDM, CLI, the isr_par_* calls
    that keep the registers, and cmd_apply_speaker, whose par_setup_voice reads none); cmd_say_phonetic ($A87C,
    unreachable) returns; the C tn_convert_clause (and the ROM's $B207 JMP $B1E9) writes X first (LDX #0). No caller
@@ -685,7 +686,7 @@ static void isr_speech_stop_regs(fw *f, cpu740 *c)
    at X = 9 ($B436 CPX #8), frm_clamp_mark_space ends with LDA #$0B and Y = $0A + 1 ($B930-$B954); the C calls the C
    frame builder (M4.5), and all three are set from the C. Its one ROM caller, cmd_apply_pitch ($A845),
    restores A (PLA at $A848) and returns; X and Y reach RAM: cmd_apply_speaker ($A798) calls cmd_apply_speed, which
-   keeps A and Y and does not touch X, and after boot_reset's second call ($A675) bank_load_ramcode stores them
+   keeps A and Y and does not touch X, and after boot_reentry_warm's call ($A675) bank_load_ramcode stores them
    (STY $78, STX $76 at $A601/$A603). No caller reads a flag. The C cmd_apply_pitch calls the C directly, so the
    hook fires only while the ROM cmd_apply_pitch runs (its "alone" mode). Declared: A, X, Y. */
 static void par_setup_voice_regs(fw *f, cpu740 *c)
@@ -1412,14 +1413,15 @@ static void ser_tx_records_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_record
 
 /* isr_par_ready $C5D6: A, X and Y in and out as they came (PHA at $C5D6, PLA at $C5EA; X and Y untouched).
    boot_get_clause reads A and X after $A6FC ($A700 CMP #$0D, $A706 / $A70D STA $1B00,X) and hands all three to
-   ser_tx_service after $A6D0 (its thunk); boot_reset ($A672) calls cmd_apply_speaker, which takes X and Y (its thunk);
-   boot_queue_string ($C62B) pulls Y and A next ($C62E-$C630). No caller reads a flag (CLI, BBC0, JSR or PLA follow).
-   The C callers (tn_convert_clause, cmd_scan_clause, par_play, the prosody passes, boot_reentry_warm,
+   ser_tx_service after $A6D0 (its thunk); boot_reentry_warm ($A672) calls cmd_apply_speaker, which takes X and Y (its
+   thunk); boot_queue_string ($C62B) pulls Y and A next ($C62E-$C630). No caller reads a flag (CLI, BBC0, JSR or PLA
+   follow). The C callers (tn_convert_clause, cmd_scan_clause, par_play, the prosody passes, boot_reentry_warm,
    boot_get_clause and boot_queue_string) call the C, so in "all" mode the hook never fires. Declared: A, X, Y. */
 static void isr_par_ready_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_par_ready); }
 
-/* isr_par_hold $C5DE: A, X and Y in and out as they came (PHA at $C5DE, PLA at $C5EA; X and Y untouched). boot_reset
-   ($A66F) calls isr_par_ready (which keeps them) and cmd_apply_speaker, which takes X and Y (its thunk);
+/* isr_par_hold $C5DE: A, X and Y in and out as they came (PHA at $C5DE, PLA at $C5EA; X and Y untouched).
+   boot_reentry_warm ($A66F) calls isr_par_ready (which keeps them) and cmd_apply_speaker, which takes X and Y (its
+   thunk);
    boot_get_clause ($A6E4) reads X ($A706 / $A70D STA $1B00,X) after loading Y and A ($A6EB LDY #0, $A6ED LDA);
    boot_loop_play ($B2B3) calls par_play_start, which reads none (its thunk); boot_queue_string ($C617) reads the Y it
    set before ($C615 LDY #0; $C61C LDA ($46),Y). No caller reads a flag. The C boot_loop_play, boot_reentry_warm,
@@ -1507,7 +1509,7 @@ static void pros_reset_seg_ptrs_regs(fw *f, cpu740 *c)
 /* pros_make_segments $CA92: A, X, Y in; only Y is read, by pros_mark_stress's first isr_par_ready ($CB1F; A is
    written by the parameter copies, X by pros_mark_stress's TAX at $CAEC). A, X and Y out as pros_phrase_gen leaves
    them (RTS at $CABC). The C's ROM calls overwrite the machine's registers, so all three are set from the C. Its
-   ROM callers, boot_reset ($A684), boot_selftest_sound ($A7B7) and cmd_say_phonetic ($A879, unreachable), call
+   ROM callers, boot_reentry_warm ($A684), boot_selftest_sound ($A7B7) and cmd_say_phonetic ($A879, unreachable), call
    boot_loop_play next ($A687, $A7BA, $A87C), which loads A from $6B first ($A7D4) and, when that is 0 or the host
    aborted, returns with X and Y untouched; the C tn_convert_clause hands them to boot_loop_play the same way. No
    reader of X or Y was found; no caller reads a flag. They are defined, so all three are declared. */
@@ -1564,11 +1566,11 @@ static void pros_store_phrase_len_regs(fw *f, cpu740 *c)
     c->x = fw_rd8(f, PROS_POS);
 }
 
-/* pros_phrase_gen $D129: no register input. A, X and Y out as the ROM leaves them: A = pros_seg_count's low byte
-   before the final DEC, X = pros_pos (= tn_phon_len), Y = the second end pause's LDY pros_seg_count. Its one ROM
-   caller, pros_make_segments, returns at once ($CABC RTS); its callers (boot_reset $A687, boot_selftest_sound $A7BA
-   and the C tn_convert_clause) call boot_loop_play next, which loads A from $6B and, when that is 0, returns with X
-   and Y untouched. No reader of them was found; they are defined, so all three are declared. */
+/* pros_phrase_gen $D129: no register input. A, X and Y out as the ROM leaves them: A = pros_seg_count's low byte before
+   the final DEC, X = pros_pos (= tn_phon_len), Y = the second end pause's LDY pros_seg_count. Its one ROM caller,
+   pros_make_segments, returns at once ($CABC RTS); its callers (boot_reentry_warm $A687, boot_selftest_sound $A7BA and
+   the C tn_convert_clause) call boot_loop_play next, which loads A from $6B and, when that is 0, returns with X and Y
+   untouched. No reader of them was found; they are defined, so all three are declared. */
 static void pros_phrase_gen_regs(fw *f, cpu740 *c)
 {
     uint8_t x, y;
@@ -1643,8 +1645,9 @@ static void boot_init_ports_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_init_p
 static void boot_init_settings_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_init_settings); }
 
 /* boot_clear_input_state $ABF0: no register input (LDA #0 first). A = 0, X and Y untouched, out. Its caller,
-   boot_init_settings ($ADEB), calls boot_set_defaults next, which writes A ($A754 LDA #$40) and Y
-   (boot_load_prosody_defaults) before reading them and reads no X. Declared: A, X, Y. */
+   boot_init_settings ($ADEB), calls boot_set_defaults next, which writes A ($A754 LDA #$40) before
+   reading it, reads Y only to save and restore it (cmd_clear_formant's TYA / PHA ... PLA / TAY) before
+   boot_load_prosody_defaults writes it ($A7F0 LDY #0), and reads no X. Declared: A, X, Y. */
 static void boot_clear_input_state_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_clear_input_state); }
 
 /* boot_set_defaults $A742: Y in, kept through cmd_clear_formant (PHA / TYA / PHA ... PLA / TAY / PLA), then written by
@@ -1657,7 +1660,8 @@ static void boot_set_defaults_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_set_
    untouched, out. Its caller, boot_set_defaults ($A788), returns them ($A78B RTS; its row). Declared: A, X, Y. */
 static void boot_load_prosody_defaults_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_load_prosody_defaults); }
 
-/* boot_init_baud $AC7E: X in (1: speak the rate; boot_reset passes 0, $A65A LDX #0). A, X and Y untouched out (LDM,
+/* boot_init_baud $AC7E: X in (1: speak the rate; boot_reset passes 0, $A65A LDX #0); with X = 1 Y too, which
+   cmd_say_phonetic hands on to pros_make_segments (A is written first, $AC8E LDA). A, X and Y untouched out (LDM,
    BBS, CPX), or with X = 1 as cmd_say_phonetic leaves them. Its caller, boot_reset ($A65C), calls
    boot_init_host_lines next, which loads A first ($AC6B LDA #$4C) and reads neither X nor Y. Declared: A, X, Y. */
 static void boot_init_baud_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_init_baud); }
@@ -1668,7 +1672,9 @@ static void boot_init_baud_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_init_ba
 static void boot_init_host_lines_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_init_host_lines); }
 
 /* cmd_say_phonetic $A876: X in, to cmd_put_phonetic, whose tn_append_phonetic writes it (X = tn_phon_len) before
-   reading it unless the length is 0; A and Y are written first (LDY #0, LDA (tn_rule_ptr),Y). A, X and Y out as
+   reading it unless the length is 0; A and Y in too: cmd_put_phonetic saves and restores them ($A868 PHA / TYA /
+   PHA ... $A872 PLA / TAY / PLA) around its LDY #0 / LDA (tn_rule_ptr),Y and hands them to pros_make_segments,
+   which reads only Y (isr_par_ready keeps it; its row). A, X and Y out as
    boot_loop_play leaves them. Its one caller, boot_init_baud ($AC96, $ACAC, $ACBF), returns at once ($AC99, $ACAF,
    $ACC2 RTS) to boot_reset, which calls boot_init_host_lines (see boot_init_baud). Unreachable: boot_init_baud is
    called with X = 0 only. It waits on the timer interrupt (boot_loop_play), so diff_main checks it (where reachable),
@@ -1700,7 +1706,7 @@ static void isr_idle_regs(fw *f, cpu740 *c) { boot_regs(f, c, isr_idle); }
 static void boot_get_clause_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_get_clause); }
 
 /* boot_loop_text $A68D: no register input (boot_get_clause writes them first). No register output: the ROM leaves
-   tn_convert_clause's, which the C tn_convert_clause does not set (its row); its callers, boot_reset ($A681) and
+   tn_convert_clause's, which the C tn_convert_clause does not set (its row); its callers, boot_reentry_warm ($A681) and
    boot_selftest_sound ($A7B4), call pros_make_segments next, whose only register read is Y, by isr_par_ready, which
    keeps it (its row). It waits for input and, at a mid-clause flush, on the timer interrupt, so diff_main checks it,
    not diff_lts. */

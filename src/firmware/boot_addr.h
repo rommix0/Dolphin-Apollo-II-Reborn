@@ -11,7 +11,7 @@
                                                     code reaches) */
 
 /* The main loop's routines that wait */
-#define ROM_BOOT_LOOP_TEXT              0xA68D   /* called by boot_reset $A681, boot_selftest_sound $A7B4 */
+#define ROM_BOOT_LOOP_TEXT              0xA68D   /* called by boot_reentry_warm $A681, boot_selftest_sound $A7B4 */
 #define ROM_BOOT_GET_CLAUSE             0xA697   /* called by boot_loop_text $A68D */
 #define ROM_ISR_IDLE                    0xC5FE   /* called by boot_get_clause $A6DF */
 #define ROM_BOOT_SELFTEST_SOUND         0xA79F   /* called by boot_reset $A654 */

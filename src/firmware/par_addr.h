@@ -4,7 +4,7 @@
    builder (M4.5 spec 2.2), checked against build/ghidra740/dump and the JSR/JMP operands in the ROM image (the
    interrupt routines they call are in isr_addr.h, M4.6b). A caller in parentheses was ROM until M4.6c2: it is C now
    and calls the C. */
-#define ROM_BOOT_LOOP_PLAY         0xA7D4   /* called by tn_convert_clause $B204 (and boot_reset $A687,
+#define ROM_BOOT_LOOP_PLAY         0xA7D4   /* called by tn_convert_clause $B204 (and boot_reentry_warm $A687,
                                                boot_selftest_sound $A7BA, cmd_say_phonetic $A87C) */
 #define ROM_PAR_SETUP_VOICE        0xB3A4   /* called by cmd_apply_pitch $A845; the C cmd_apply_pitch calls the C */
 #define ROM_FRM_BUILD_REST_FRAME   0xB41D   /* called by par_setup_voice $B404 */

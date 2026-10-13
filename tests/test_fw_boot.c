@@ -455,6 +455,7 @@ static void test_say_rate(void)
         for (unsigned k = 0; k < g_nlog && k < MAX_LOG; k++)
             timer2 += g_log[k].kind == EV_WAIT && g_log[k].value == FW_WAIT_TIMER2;
         CHECK_EQ(timer2, text[i] ? 1 : 0);
+        CHECK(g_nlog <= MAX_LOG);
         if (text[i] && g_nlog <= MAX_LOG) {
             CHECK_EQ(g_sfr[SFR_ICR2], 0);
             CHECK_EQ(g_log[g_nlog - 1].kind, EV_WRITE);

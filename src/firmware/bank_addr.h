@@ -10,14 +10,14 @@
 #define BANK_P2_TABLE             0x0200   /* byte[8]: P2 per bank 0-7 while DIP bit 1 is clear (entry 0 unused) */
 #define BANK_P2_TABLE_ALT         0x0208   /* byte[8]: the same while DIP bit 1 is set */
 #define BANK_ENTER                0x0210   /* called by bank_cmd_select $ABB5 */
-#define BANK_SCAN                 0x0241   /* called by (boot_reset $A67B) */
+#define BANK_SCAN                 0x0241   /* called by (boot_reentry_warm $A67B) */
 #define BANK_RESTORE              0x0252   /* bank_scan's tail, also bank_enter's exit ($021C JMP) */
 #define BANK_SELECT               0x025E   /* called by bank_enter $0213, bank_scan $0246 */
 #define BANK_PROBE                0x0277   /* called by bank_enter $0216, bank_scan $0249 */
 #define BANK_READ_ID              0x0285   /* called by bank_scan $024C */
 #define BANK_PUT_ID_CHAR          0x02E1   /* called by bank_read_id $029A, $02A5 ... $02CF (nine calls) */
 #define BANK_SAFE_CHAR            0x02E9   /* called by bank_put_id_char $02E1 */
-#define BANK_FIND_CURRENT         0x02F0   /* called by bank_cmd_select $ABB8 (and boot_reset $A67E) */
+#define BANK_FIND_CURRENT         0x02F0   /* called by bank_cmd_select $ABB8 (and boot_reentry_warm $A67E) */
 #define BANK_RAMCODE_LTS          0x0313   /* the copy of the letter-to-sound code $AF11-$AFFC (never run in RAM) */
 #define BANK_RAMCODE_LAST         0x03FE   /* the copy's last byte */
 
@@ -27,7 +27,7 @@
 #define BANK_RAMCODE_OFFSET       0xABFE   /* ROM address - RAM address of the copied bytes */
 
 /* Main-ROM routines */
-#define ROM_BANK_LOAD_RAMCODE     0xA600   /* called by bank_cmd_select $ABB2 (and boot_reset $A678) */
+#define ROM_BANK_LOAD_RAMCODE     0xA600   /* called by bank_cmd_select $ABB2 (and boot_reentry_warm $A678) */
 #define ROM_BOOT_REENTRY_COLD     0xA665   /* bank_entry_cold's JMP target (boot_reset's tail: boot_read_dip, ...) */
 #define ROM_BOOT_REENTRY_WARM     0xA66B   /* bank_entry_warm's JMP target */
 

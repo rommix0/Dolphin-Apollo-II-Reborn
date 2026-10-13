@@ -1,9 +1,9 @@
 #ifndef FW_BOOT_H
 #define FW_BOOT_H
-/* Boot (ROM $A61C-$A68C, $A742-$A7D3, $A876-$A87F, $ABF0-$ACC6, $ADE0-$ADFD, $C3DF, $C605-$C611), decompiled
-   (M4.6c2 spec 2.1). Each routine takes the registers at entry in r and leaves in r the A, X and Y the ROM leaves at
-   its RTS; r->p is not used: no caller reads a flag. SFRs are read and written through the host in the ROM's order
-   (fw_sfr*), each SEB/CLB as a read then a write. */
+/* Boot (ROM $A61C-$A68C, $A742-$A78B, $A79F-$A7BD, $A7F0-$A7FD, $A876-$A87F, $ABF0-$ACC6, $ADE0-$ADFD, $C3DF,
+   $C605-$C611), decompiled (M4.6c2 spec 2.1). Each routine takes the registers at entry in r and leaves in r the A, X
+   and Y the ROM leaves at its RTS; r->p is not used: no caller reads a flag. SFRs are read and written through the host
+   in the ROM's order (fw_sfr*), each SEB/CLB as a read then a write. */
 #include "fw.h"
 
 /* The SFRs of boot (ghidra740/annotations/sfr.txt) that ser.h and isr_dsp.h do not name */
