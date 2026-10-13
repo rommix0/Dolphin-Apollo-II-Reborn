@@ -15,6 +15,9 @@
    none. The DSP outputs too: port_writes, raw_pos and raw_buf, dsp_resets and dsp_reset_level, frames_produced.
    Otherwise false, with the first difference in why. */
 bool diff_same(const machine *a, const machine *b, uint8_t outputs, char *why, size_t n);
+/* The SFR model state of diff_same alone (diff_main, M4.6c2 spec 4.1): true when a (the ROM's) and b (the C's) agree,
+   else false with the first difference in why. */
+bool diff_same_sfr(const m50734 *a, const m50734 *b, char *why, size_t n);
 
 /* A routine whose copy reset the stack (bank_enter's LDX #$FF / TXS) is compared where bank_enter jumps, at the bank
    entry BANK_ENTRY_WARM $FFD4 or BANK_ENTRY_COLD $FFD0 (M4.6c1 spec 4.1). diff_run_to_bank_entry steps m (at most

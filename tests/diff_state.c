@@ -19,7 +19,7 @@ bool diff_is_probed(const char *name)
     return false;
 }
 
-static bool sfr_same(const m50734 *a, const m50734 *b, char *why, size_t n)
+bool diff_same_sfr(const m50734 *a, const m50734 *b, char *why, size_t n)
 {
     for (int p = 0; p < 4; p++) {
         if (a->port_latch[p] != b->port_latch[p] || a->port_dir[p] != b->port_dir[p]) {
@@ -104,7 +104,7 @@ bool diff_same(const machine *a, const machine *b, uint8_t outputs, char *why, s
         snprintf(why, n, "Z: ROM %d, C %d", (a->cpu.p & CPU740_Z) != 0, (b->cpu.p & CPU740_Z) != 0);
         return false;
     }
-    if (!sfr_same(&a->sfr, &b->sfr, why, n) || !dsp_same(a, b, why, n))
+    if (!diff_same_sfr(&a->sfr, &b->sfr, why, n) || !dsp_same(a, b, why, n))
         return false;
     for (uint32_t addr = 0; addr < MACHINE_RAM_SIZE; addr++) {
         if (addr >= M50734_SFR_FIRST && addr <= 0xFF)

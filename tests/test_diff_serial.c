@@ -2,7 +2,9 @@
    code (M4.6c1 spec 4.2): the paths no corpus text reaches (the reply transmission, parallel mode, the _INT1 latch, the
    host-line interrupt, the ring page ends; the parallel handshake of isr_par_ready and isr_par_hold, a frame boundary
    of the timer interrupt with the frame flag still set; a bank's cold entry, DIP bit 1, an ID byte below $20 and P2
-   bank bits in neither bank table) are compared with the ROM through synthetic calls from real states. Every corpus
+   bank bits in neither bank table; M4.6c2 spec 4.3: P2 bank bits in neither table and P2 bank bits $78 under DIP bit
+   1, which the two tables tell apart, and a space, the first ID byte bank_safe_char keeps) are compared with the ROM
+   through synthetic calls from real states. Every corpus
    file and the boot run go through the ROM engine, and bank_select once more with the P4 input's DIP bit 1 set (P2.1
    low, so boot_selftest passes); at every entry of isr_int1 $C2B4 (a received byte: the CPU has just entered the
    interrupt, PC and P pushed, I set), of ser_tx_put $C4DD (a reply being queued: the output ring holds the reply's
@@ -231,8 +233,14 @@ static void inj_no_bank(machine *m)
 {
     m->sfr.port_latch[2] = (uint8_t)((m->sfr.port_latch[2] & ~P2_BANK_BITS) | P2_NO_BANK);
 }
-/* bank_safe_char with a control code */
+/* bank_safe_char with a control code; with a space, the first character it keeps */
 static void inj_safe_char(machine *m) { m->cpu.a = 0x1F; }
+static void inj_safe_space(machine *m) { m->cpu.a = 0x20; }
+/* bank_find_current with P2's bank bits $78: bank 5 in bank_p2_table, bank 2 in bank_p2_table_alt (DIP bit 1) */
+static void inj_bank_78(machine *m)
+{
+    m->sfr.port_latch[2] = (uint8_t)((m->sfr.port_latch[2] & ~P2_BANK_BITS) | P2_BANK_5);
+}
 
 static probe g_probes[] = {
     { "int1_latch",       AT_INT1,   "isr_int1",           ROM_ISR_INT1,           true,  inj_latch,       0xC341, 0xC367 },
@@ -271,6 +279,11 @@ static probe g_probes[] = {
       true },
     { "no_bank",     AT_FIND_CURRENT, "bank_find_current", BANK_FIND_CURRENT, false, inj_no_bank,    0x0309, 0x030B },
     { "safe_char",   AT_SAFE_CHAR,    "bank_safe_char",    BANK_SAFE_CHAR,    false, inj_safe_char,  0x02EB, 0x02ED },
+    { "dip_no_bank", AT_FIND_CURRENT, "bank_find_current", BANK_FIND_CURRENT, false, inj_no_bank,    0x0309, 0x030B, false,
+      true },
+    { "dip_bank_78", AT_FIND_CURRENT, "bank_find_current", BANK_FIND_CURRENT, false, inj_bank_78,    0x0304, 0x030D, false,
+      true },
+    { "safe_space",  AT_SAFE_CHAR,    "bank_safe_char",    BANK_SAFE_CHAR,    false, inj_safe_space, 0x02EB, 0x02EF },
 };
 #define PROBE_COUNT (sizeof g_probes / sizeof g_probes[0])
 
