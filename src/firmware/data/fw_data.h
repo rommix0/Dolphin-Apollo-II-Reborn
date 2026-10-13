@@ -113,6 +113,10 @@ typedef struct { uint8_t mnem, mode, opcode; } fw_opcode;
 /* The version texts (phonetic texts converted in M4.1, fw_phonetic_texts) that cmd_say_version passes by tn_rule_ptr */
 #define CMD_VERSION_ENGINE_TEXT 0x9804   /* cmd_version_engine_text */
 #define CMD_VERSION_LANG_TEXT   0xF75B   /* cmd_version_lang_text */
+/* The baud texts (phonetic texts converted in M4.1) that boot_init_baud passes by tn_rule_ptr with X = 1 */
+#define BOOT_BAUD_TEXT_19200    0xACC7   /* boot_baud_text_19200: silent */
+#define BOOT_BAUD_TEXT_300      0xACCA   /* boot_baud_text_300 */
+#define BOOT_BAUD_TEXT_1200     0xACD8   /* boot_baud_text_1200 */
 #define CMD_SPEED_MAPS      0xC87B   /* ptr[10], indexed by speed - 1 */
 #define CMD_SPEED_LIMITS    0xC88F   /* byte[9], indexed by speed - 1 */
 #define CMD_SPEED_MAP_DATA  0xC898   /* byte[9][32], converted with the prosody data: cmd_speed_maps point into it */

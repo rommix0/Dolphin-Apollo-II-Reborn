@@ -18,9 +18,9 @@ static void set_below(fw *f, uint16_t setting, uint8_t a, uint8_t limit)
         fw_wr8(f, setting, v);
 }
 
-/* $A868: append the length-prefixed phonetic text at tn_rule_ptr to tn_phonetic. The ROM preserves A and Y and
-   returns the X tn_append_phonetic leaves (cmd_run_done restores the handler's X at the end). */
-static uint8_t cmd_put_phonetic(fw *f, uint8_t x)
+/* $A868 (cmd_handlers.h): the ROM preserves A and Y and returns the X tn_append_phonetic leaves (cmd_say_version's
+   cmd_run_done restores the handler's X at the end). */
+uint8_t cmd_put_phonetic(fw *f, uint8_t x)
 {
     uint8_t y = 0;
     tn_append_phonetic(f, fw_ind_y(f, (uint8_t)TN_RULE_PTR, 0), &x, &y);

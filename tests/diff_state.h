@@ -37,4 +37,12 @@ extern const char *const diff_probed[];
 extern const size_t diff_probed_count;
 bool diff_is_probed(const char *name);
 
+/* The main loop's rows that wait for input or never return (M4.6c2 spec 4.1): the entries and the waits rows of boot,
+   which diff_main compares end to end, not diff_lts or diff_play. */
+bool diff_is_main_row(const char *name);
+/* The rows no corpus text enters and no probe compares (M4.6c2 spec 4.1, 4.4): the unreachable cmd_say_phonetic and
+   isr_unused, pinned by unit tests, and the cold re-entry, which diff_main's injected run compares. golden_hybrid
+   runs no thunk of them alone. */
+bool diff_is_unreached(const char *name);
+
 #endif

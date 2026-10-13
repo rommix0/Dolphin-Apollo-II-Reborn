@@ -28,6 +28,7 @@
 #include "firmware/isr_serial.h"
 #include "firmware/isr_dsp.h"
 #include "firmware/bank.h"
+#include "firmware/boot.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -1593,6 +1594,69 @@ static void ph_lengthen_count_regs(fw *f, cpu740 *c)
     c->y = n;
 }
 
+/* The registers in, a boot routine (boot.c, M4.6c2), the registers out: A, X and Y as the ROM leaves them. No caller
+   reads a flag. */
+static void boot_regs(fw *f, cpu740 *c, void (*fn)(fw *, fw_regs *))
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    fn(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* boot_read_dip $ADE0: no register input (LDA P4). A = boot_dip, X and Y untouched, out. boot_reset ($A645) calls
+   boot_init_ports next, which writes A first ($AC25 LDA #0, $AC31 LDA #$48) and reads neither X nor Y;
+   boot_reentry_cold ($A665) calls boot_init_settings, whose boot_clear_input_state writes A first ($ABF0 LDA #0) and
+   which reads no X, and Y only to push and pull it (cmd_clear_formant) before boot_load_prosody_defaults writes it
+   ($A7F0 LDY #0). Declared: A, X, Y. */
+static void boot_read_dip_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_read_dip); }
+
+/* boot_init_ports $AC22: no register input. A = 0 (both modes end on an LDA #0: $AC25 parallel, $AC47 serial), X and Y
+   untouched, out. Its caller, boot_reset ($A648), writes ICR1 ($A64B LDM) and calls boot_init_settings, which reads
+   no register (see boot_read_dip). Declared: A, X, Y. */
+static void boot_init_ports_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_init_ports); }
+
+/* boot_init_settings $ADEB: no register read (see boot_read_dip). A = the bank header's $FFE1 byte ($ADF7 LDA), X
+   untouched, Y = $1A (boot_load_prosody_defaults' count) out. boot_reset ($A64E) calls cmd_apply_speaker next, which
+   loads A first ($A78C LDA cmd_speaker) and hands X and Y to par_setup_voice, which does not read them (its row);
+   boot_reentry_cold ($A668) falls into boot_reentry_warm: LDM ser_abort, CLI, isr_par_hold and isr_par_ready (A, X
+   and Y kept), cmd_apply_speaker. Declared: A, X, Y. */
+static void boot_init_settings_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_init_settings); }
+
+/* boot_clear_input_state $ABF0: no register input (LDA #0 first). A = 0, X and Y untouched, out. Its caller,
+   boot_init_settings ($ADEB), calls boot_set_defaults next, which writes A ($A754 LDA #$40) and Y
+   (boot_load_prosody_defaults) before reading them and reads no X. Declared: A, X, Y. */
+static void boot_clear_input_state_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_clear_input_state); }
+
+/* boot_set_defaults $A742: Y in, kept through cmd_clear_formant (PHA / TYA / PHA ... PLA / TAY / PLA), then written by
+   boot_load_prosody_defaults. A = boot_prosody_defaults' last byte, X untouched, Y = $1A out, as
+   boot_load_prosody_defaults leaves them. Its caller, boot_init_settings ($ADEE), loads A next ($ADF1 LDA $FFE0) and
+   returns X and Y as its own (its row). Declared: A, X, Y. */
+static void boot_set_defaults_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_set_defaults); }
+
+/* boot_load_prosody_defaults $A7F0: no register input (LDY #0 first). A = the last byte copied, Y = $1A, X
+   untouched, out. Its caller, boot_set_defaults ($A788), returns them ($A78B RTS; its row). Declared: A, X, Y. */
+static void boot_load_prosody_defaults_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_load_prosody_defaults); }
+
+/* boot_init_baud $AC7E: X in (1: speak the rate; boot_reset passes 0, $A65A LDX #0). A, X and Y untouched out (LDM,
+   BBS, CPX), or with X = 1 as cmd_say_phonetic leaves them. Its caller, boot_reset ($A65C), calls
+   boot_init_host_lines next, which loads A first ($AC6B LDA #$4C) and reads neither X nor Y. Declared: A, X, Y. */
+static void boot_init_baud_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_init_baud); }
+
+/* boot_init_host_lines $AC68: no register input. A = $4C ($AC6B LDA; isr_host_line_high and _low keep A, X and Y), X
+   and Y untouched, out. Its caller, boot_reset ($A65F), falls into boot_reentry_warm ($A662 JMP): LDM, CLI,
+   isr_par_hold and isr_par_ready (kept), cmd_apply_speaker (A loaded first; X and Y not read). Declared: A, X, Y. */
+static void boot_init_host_lines_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_init_host_lines); }
+
+/* cmd_say_phonetic $A876: X in, to cmd_put_phonetic, whose tn_append_phonetic writes it (X = tn_phon_len) before
+   reading it unless the length is 0; A and Y are written first (LDY #0, LDA (tn_rule_ptr),Y). A, X and Y out as
+   boot_loop_play leaves them. Its one caller, boot_init_baud ($AC96, $ACAC, $ACBF), returns at once ($AC99, $ACAF,
+   $ACC2 RTS) to boot_reset, which calls boot_init_host_lines (see boot_init_baud). Unreachable: boot_init_baud is
+   called with X = 0 only. It waits on the timer interrupt (boot_loop_play), so diff_main checks it (where reachable),
+   not diff_lts. Declared: A, X, Y. */
+static void cmd_say_phonetic_regs(fw *f, cpu740 *c) { boot_regs(f, c, cmd_say_phonetic); }
+
 /* The hook of each routine: its register mapping run in the shared thunk frame, user = the bound fw_bridge. */
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
@@ -1605,13 +1669,22 @@ THUNK(bank_put_id_char)
 THUNK(bank_safe_char)
 THUNK(bank_find_current)
 THUNK(bank_load_ramcode)
+THUNK(boot_set_defaults)
 THUNK(cmd_apply_speaker)
 THUNK(boot_loop_play)
+THUNK(boot_load_prosody_defaults)
+THUNK(cmd_say_phonetic)
 THUNK(cmd_run_due)
 THUNK(cmd_run_next)
+THUNK(boot_clear_input_state)
+THUNK(boot_init_ports)
+THUNK(boot_init_host_lines)
+THUNK(boot_init_baud)
 THUNK(isr_set_volume)
 THUNK(cmd_scan_clause)
 THUNK(cmd_match_table)
+THUNK(boot_read_dip)
+THUNK(boot_init_settings)
 THUNK(lts_affix_next)
 THUNK(lts_affix_prev)
 THUNK(lts_sym_vowel)
@@ -1722,13 +1795,22 @@ const fw_replacement fw_replacements[] = {
     { "bank_safe_char",     0x02E9, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_safe_char, false, false, true },
     { "bank_find_current",  0x02F0, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_find_current, false, false, true },
     { "bank_load_ramcode",  0xA600, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_load_ramcode },
+    { "boot_set_defaults",  0xA742, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_set_defaults },
     { "cmd_apply_speaker",  0xA78C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_apply_speaker },
     { "boot_loop_play",     0xA7D4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_loop_play, true },
+    { "boot_load_prosody_defaults", 0xA7F0, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_load_prosody_defaults },
+    { "cmd_say_phonetic",   0xA876, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_say_phonetic, true },
     { "cmd_run_due",        0xA880, FW_OUT_X | FW_OUT_Y, t_cmd_run_due },
     { "cmd_run_next",       0xA893, FW_OUT_A | FW_OUT_X, t_cmd_run_next },
+    { "boot_clear_input_state", 0xABF0, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_clear_input_state },
+    { "boot_init_ports",    0xAC22, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_init_ports },
+    { "boot_init_host_lines", 0xAC68, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_init_host_lines },
+    { "boot_init_baud",     0xAC7E, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_init_baud },
     { "isr_set_volume",     0xACE8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_set_volume },
     { "cmd_scan_clause",    0xACFA, 0,                   t_cmd_scan_clause },
     { "cmd_match_table",    0xADBF, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_match_table },
+    { "boot_read_dip",      0xADE0, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_read_dip },
+    { "boot_init_settings", 0xADEB, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_init_settings },
     { "lts_affix_next",     0xAF11, FW_OUT_A | FW_OUT_Y, t_lts_affix_next },
     { "lts_affix_prev",     0xAF1C, FW_OUT_A | FW_OUT_Y, t_lts_affix_prev },
     { "lts_sym_vowel",      0xB007, FW_OUT_A,            t_lts_sym_vowel },

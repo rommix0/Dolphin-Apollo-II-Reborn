@@ -35,6 +35,9 @@
 #define FW_PROS_DEV_QUARTER  0x1814  /* d >> 2 ($BDF6) */
 #define FW_UTT_CONTENT         0x006B   /* unnamed in the annotations: "the utterance has content", $FF (LDM) at each
                                            word pause and each phoneme triple; boot_loop_play tests it */
+#define FW_CLAUSE_CARRY        0x1827   /* unnamed in the annotations: a command character boot_get_clause cut off
+                                           at a clause's end ($A739), put first in the next clause ($A6A3) and
+                                           cleared; 0 when none. boot_set_defaults clears it ($A782) */
 #define FW_PROS_STRESS_TOGGLE  0x1C0D   /* unnamed in the annotations: pros_phrase_gen's "a stress or an accent seen
                                            in this word" (0 at each word start). pros_mark_stress: the syllable's
                                            stress, $FF at its start, at each word end and at '}', 0 at '~', '{' and

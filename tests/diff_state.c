@@ -11,12 +11,31 @@ const char *const diff_probed[] = {
 };
 const size_t diff_probed_count = sizeof diff_probed / sizeof diff_probed[0];
 
-bool diff_is_probed(const char *name)
+static bool listed(const char *const *list, size_t n, const char *name)
 {
-    for (size_t i = 0; i < diff_probed_count; i++)
-        if (!strcmp(diff_probed[i], name))
+    for (size_t i = 0; i < n; i++)
+        if (!strcmp(list[i], name))
             return true;
     return false;
+}
+
+bool diff_is_probed(const char *name) { return listed(diff_probed, diff_probed_count, name); }
+
+bool diff_is_main_row(const char *name)
+{
+    static const char *const k_main[] = {
+        "boot_reset", "boot_reentry_cold", "boot_reentry_warm", "bank_entry_cold", "bank_entry_warm",
+        "boot_loop_text", "boot_get_clause", "isr_idle", "boot_selftest_sound", "cmd_say_phonetic",
+    };
+    return listed(k_main, sizeof k_main / sizeof k_main[0], name);
+}
+
+bool diff_is_unreached(const char *name)
+{
+    static const char *const k_unreached[] = {
+        "cmd_say_phonetic", "isr_unused", "bank_entry_cold", "boot_reentry_cold",
+    };
+    return listed(k_unreached, sizeof k_unreached / sizeof k_unreached[0], name);
 }
 
 bool diff_same_sfr(const m50734 *a, const m50734 *b, char *why, size_t n)

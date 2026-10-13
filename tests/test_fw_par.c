@@ -7,6 +7,7 @@
 #include <string.h>
 #include "test.h"
 #include "engine/thunks.h"
+#include "firmware/boot_addr.h"
 #include "firmware/cmd_addr.h"
 #include "firmware/cmd_play_event.h"
 #include "firmware/frm_build.h"
@@ -2044,12 +2045,15 @@ static void test_play_rows(void)
     for (size_t i = 0; i < fw_replacement_count; i++)
         if (fw_replacements[i].waits) {
             uint16_t a = fw_replacements[i].addr;
-            waits++;
-            CHECK(a == ROM_BOOT_LOOP_PLAY || a == ROM_PAR_PLAY || a == ROM_ISR_SPEECH_START ||
-                  a == ROM_ISR_WAIT_FRAMES || a == ROM_ISR_WAIT_FRAME);
+            bool frame = a == ROM_BOOT_LOOP_PLAY || a == ROM_PAR_PLAY || a == ROM_ISR_SPEECH_START ||
+                         a == ROM_ISR_WAIT_FRAMES || a == ROM_ISR_WAIT_FRAME;
+            waits += frame;
+            CHECK(frame || a == ROM_BOOT_LOOP_TEXT || a == ROM_BOOT_GET_CLAUSE || a == ROM_ISR_IDLE ||
+                  a == ROM_BOOT_SELFTEST_SOUND || a == ROM_CMD_SAY_PHONETIC);
         }
     CHECK_EQ(waits, 5);   /* the two loops and the three frame waits wait on the timer interrupt: diff_play checks
-                             them, diff_lts not (M4.6b spec 2.4) */
+                             them, diff_lts not (M4.6b spec 2.4); the main loop's waits rows wait for input too:
+                             diff_main checks them (M4.6c2 spec 4.1) */
 }
 
 /* Record i is the P0 write of isr_par_ready (addr ROM_ISR_PAR_READY) or isr_par_hold (ROM_ISR_PAR_HOLD) in parallel

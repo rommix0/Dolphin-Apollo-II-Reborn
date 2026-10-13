@@ -43,6 +43,11 @@ void cmd_list_languages(fw *f, uint8_t x, uint8_t a);     /* $ABBE @L */
 void bank_cmd_select(fw *f, uint8_t x, uint8_t a);        /* $ABAF @=: the bank cmd_hex_value(a); enters it, or returns
                                                              when it is absent */
 
+/* $A868, a helper of cmd_say_version (cmd_set.c) and cmd_say_phonetic (boot.c, M4.6c2): the length-prefixed phonetic
+   text at tn_rule_ptr appended to tn_phonetic (tn_append_phonetic). A and Y kept; returns the X tn_append_phonetic
+   leaves (x as it came for a length of 0). */
+uint8_t cmd_put_phonetic(fw *f, uint8_t x);
+
 /* The Y a ROM handler is entered with: cmd_next - 1 (cmd_run_due's LDY, before cmd_run_next's INC). */
 static inline uint8_t cmd_handler_y(const fw *f) { return (uint8_t)(fw_rd8(f, CMD_NEXT) - 1); }
 

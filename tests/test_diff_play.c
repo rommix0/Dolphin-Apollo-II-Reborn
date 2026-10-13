@@ -43,6 +43,7 @@
 #include "engine/thunks.h"
 #include "firmware/par_addr.h"
 #include "firmware/isr_addr.h"
+#include "diff_state.h"
 
 #define PLAY_BUDGET        1000000000ULL   /* copy A: the longest call (seg_wrap_word, 1,774 frames) is 35.5 M cycles */
 #define PLAY_CALL_SITE     0xB2C7          /* boot_play_body: JSR par_play */
@@ -521,8 +522,8 @@ void suite_diff_play(void)
     g_nwatch = 0;
     for (size_t i = 0; i < fw_replacement_count; i++) {
         const fw_replacement *r = &fw_replacements[i];
-        if (!r->waits)
-            continue;
+        if (!r->waits || diff_is_main_row(r->name))
+            continue;   /* the main loop's waits rows: diff_main's (M4.6c2 spec 4.1) */
         CHECK(g_nwatch < WATCH_MAX && (r->addr == ROM_PAR_PLAY || r->addr == ROM_BOOT_LOOP_PLAY ||
                                        r->addr == ROM_ISR_SPEECH_START || r->addr == ROM_ISR_WAIT_FRAMES ||
                                        r->addr == ROM_ISR_WAIT_FRAME));

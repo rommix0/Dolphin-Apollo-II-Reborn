@@ -3,9 +3,10 @@
    take its mid-clause flush on long_clause (all-routines mode and tn_convert_clause alone; M4.1 spec 5.2).
    On bank_select, @=1 enters a bank: where the C runs the dispatch or bank_enter, its call chain must unwind (M4.2
    spec 5.3, M4.6c1 spec 4.5). A routine no corpus text enters (diff_probed, M4.6a spec 4.4) runs no thunk alone;
-   diff_serial compares it. Also the fault path of a thunk: a firmware fault stops the run instead of continuing on
-   wrong data; the C entering a bank; both engines' loop through the idle handler and the phase deadline (M4.6c2 spec
-   3.1, 3.2; test_engine_loop); and the M4.6c1 plan's Review Focus inputs on both engines (test_review_focus). */
+   diff_serial compares it; nor does a row no corpus text or probe reaches (diff_is_unreached, M4.6c2 spec 4.4).
+   Also the fault path of a thunk: a firmware fault stops the run instead of continuing on wrong data; the C entering
+   a bank; both engines' loop through the idle handler and the phase deadline (M4.6c2 spec 3.1, 3.2;
+   test_engine_loop); and the M4.6c1 plan's Review Focus inputs on both engines (test_review_focus). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -99,7 +100,7 @@ static void check_corpus(const uint8_t *rom, size_t len, const char *only)
         free(text);
     }
     check(rom, len, only, "boot", "", true);
-    if (g_thunk_calls == 0 && !(only && diff_is_probed(only))) {
+    if (g_thunk_calls == 0 && !(only && (diff_is_probed(only) || diff_is_unreached(only)))) {
         fprintf(stderr, "  hybrid (%s): no thunk ran over the whole corpus\n", only ? only : "all");
         g_test_failures++;
     }

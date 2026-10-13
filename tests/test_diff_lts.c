@@ -28,7 +28,7 @@
 #define DIFF_FULL_CALLS 1000      /* every call up to this many per routine and corpus file ... */
 #define DIFF_STRIDE     64        /* ... then every 64th (but the routines of k_every_call) */
 #define DIFF_BUDGET     10000000ULL
-#define DIFF_MAX        112
+#define DIFF_MAX        136
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
 /* Extra text, for this test only (not goldens): words whose rules use the % & @ context symbols; and the M4.6c1
@@ -42,12 +42,14 @@ static const char *const k_extra[] = {
     "command.",
 };
 
-/* The speech-timing routines that do not wait (M4.6b spec 4.1), the timer interrupt's too, and the bank code (M4.6c1
-   spec 4.1): compared at every call. */
+/* The speech-timing routines that do not wait (M4.6b spec 4.1), the timer interrupt's too, the bank code (M4.6c1
+   spec 4.1) and the boot helpers (M4.6c2 spec 4.2: most run once per boot): compared at every call. */
 static const char *const k_every_call[] = {
     "isr_set_volume", "isr_volume_half", "isr_par_ready", "isr_par_hold", "isr_dsp_reset", "isr_speech_stop",
     "isr_timer_start", "isr_timer_dsp", "bank_load_ramcode", "bank_enter", "bank_scan", "bank_select", "bank_probe",
-    "bank_read_id", "bank_put_id_char", "bank_safe_char", "bank_find_current", "cmd_run_next",
+    "bank_read_id", "bank_put_id_char", "bank_safe_char", "bank_find_current", "cmd_run_next", "boot_read_dip",
+    "boot_init_ports", "boot_init_settings", "boot_clear_input_state", "boot_set_defaults",
+    "boot_load_prosody_defaults", "boot_init_baud", "boot_init_host_lines",
 };
 
 typedef struct { const fw_replacement *r; unsigned calls; bool every; } observer;
