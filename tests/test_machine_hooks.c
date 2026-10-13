@@ -4,11 +4,14 @@
 #include "test.h"
 #include "rom_fixture.h"
 #include "machine/machine.h"
+#include "engine/rom_engine.h"
 #include "engine/thunks.h"
 #include "firmware/bank_addr.h"
+#include "firmware/boot.h"
 #include "firmware/boot_addr.h"
 #include "firmware/isr_addr.h"
 #include "firmware/par_addr.h"
+#include "firmware/ser.h"
 #include "firmware/tn_convert.h"
 
 static uint8_t g_rom[MACHINE_ROM_SIZE];
@@ -948,6 +951,64 @@ static void test_isr_idle_thunk(void)
     CHECK_EQ(g_m.fault, MFAULT_NONE);
 }
 
+static bool g_phase_seen;
+
+/* An idle handler that records whether the bridge (user) ran under the phase deadline, then stops the run. */
+static machine_idle_action idle_phase_stop(machine *m, void *user)
+{
+    (void)m;
+    g_phase_seen = ((const fw_bridge *)user)->phase;
+    g_idles++;
+    return MACHINE_STOP;
+}
+
+/* An entry row's thunk (M4.6c2 spec 2.3, 3.2, 3.4) on the real ROM, hooked alone at bank_entry_warm $FFD4 and entered
+   there as bank_enter leaves it (SP $FF, I set, A = 2, X = $FF), with the power-up settings and the bank version 2.01
+   in RAM, and "@=1 x." in the input ring. Its C runs boot_reentry_warm's set-up and the main loop, under the engine's
+   phase deadline (b->phase, seen by the idle handler), not a bridge deadline. The C dispatches @=1: the main bank,
+   its version the running one: bank_enter enters $FFD4 again, so the thunk runs its C afresh (one unwind, two runs);
+   the ring then empty, the input wait's idle handler stops the run: the machine at the idle point, b->phase and the
+   trap clear, one stop. */
+static void test_entry_thunk(void)
+{
+    static fw_bridge b;
+    size_t len;
+    const uint8_t *rom = test_rom(&len);
+    if (!rom)
+        SKIP("ROM not found (set APOLLO2_ROM)");
+    CHECK(machine_init(&g_m, rom, len, NULL));
+    CHECK(fw_bridge_init(&b, &g_m));
+    CHECK(fw_install(&g_m, &b, "bank_entry_warm"));
+    fw_regs r = { 0, 0, 0, 0 };
+    boot_init_settings(&b.f, &r);
+    for (const char *s = "@=1 x."; *s; s++) {
+        fw_regs t = { (uint8_t)*s, 0, 0, 0 };
+        ser_rx_put(&b.f, &t);
+    }
+    machine_set_idle_handler(&g_m, idle_phase_stop, &b);
+    g_m.phase_deadline = g_m.cpu.cycles + ROM_ENGINE_SPEAK_CYCLES;
+    g_idles = 0;
+    g_phase_seen = false;
+    g_m.cpu.pc = BANK_ENTRY_WARM;
+    g_m.cpu.s = 0xFF;
+    g_m.cpu.p = CPU740_I;
+    g_m.cpu.a = 0x02;
+    g_m.cpu.x = 0xFF;
+    CHECK(machine_step(&g_m));
+    CHECK_EQ(g_m.fault, MFAULT_NONE);
+    CHECK_EQ(g_idles, 1);
+    CHECK(g_phase_seen);
+    CHECK_EQ(b.unwinds, 1);
+    CHECK_EQ(b.thunk_calls, 2);
+    CHECK_EQ(b.stops, 1);
+    CHECK(!b.phase);
+    CHECK_EQ(b.deadline, 0);
+    CHECK(b.f.trap == NULL);
+    CHECK_EQ(g_m.cpu.pc, 0xC603);
+    CHECK(g_m.cpu.waiting);
+    CHECK_EQ(g_m.ram[BANK_CURRENT], 1);
+}
+
 /* The bridge's DSP port and frame event (M4.6b spec 3.1): fw_dsp_write is a bus write of $8000 (counted, grouped
    into the raw frame), fw_frame_done the machine's frame capture. */
 static void test_host_dsp(void)
@@ -1269,4 +1330,5 @@ void suite_machine_hooks(void)
     test_delivery_guard();
     test_host_input();
     test_isr_idle_thunk();
+    test_entry_thunk();
 }

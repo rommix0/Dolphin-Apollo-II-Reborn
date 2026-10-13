@@ -6,6 +6,7 @@
 #include <string.h>
 #include "test.h"
 #include "engine/thunks.h"
+#include "firmware/bank_addr.h"
 #include "firmware/boot.h"
 #include "firmware/boot_addr.h"
 #include "firmware/boot_input.h"
@@ -85,6 +86,14 @@ static fw_wait_result stub_wait(void *ctx, fw_wait_kind kind, uint16_t at)
     return g_wait_result;
 }
 
+/* Every other bank an empty socket (bank_scan reads their headers): $FF. Not logged. */
+static uint8_t stub_read_bank(void *ctx, uint16_t addr)
+{
+    (void)ctx;
+    (void)addr;
+    return 0xFF;
+}
+
 static void stub_reset_cpu(void *ctx)
 {
     (void)ctx;
@@ -122,6 +131,7 @@ static void setup(void)
     g_host.wait = stub_wait;
     g_host.reset_cpu = stub_reset_cpu;
     g_host.set_interrupts = stub_set_interrupts;
+    g_host.read_bank = stub_read_bank;
     g_nlog = 0;
     g_ncalls = 0;
     g_wait_result = FW_WAIT_RETURNED;
@@ -840,6 +850,152 @@ static void test_helper_rows(void)
     check_row("cmd_say_phonetic", ROM_CMD_SAY_PHONETIC, REGS, true, false, false);
 }
 
+/* The count of logged events of kind with value (value 0xFF: any). */
+static unsigned count_log(ev_kind kind, uint8_t value)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; i < g_nlog && i < MAX_LOG; i++)
+        n += g_log[i].kind == kind && (value == 0xFF || g_log[i].value == value);
+    return n;
+}
+
+/* boot_reset $A61C (M4.6c2 spec 2.1), serial mode: P3_DIR, P23_FUNC, P3; the CPU set-up; ICR1, ICR2, ICR3 = 0; then
+   isr_set_volume's P3 (a read and a write: volume 0) and boot_read_dip's AD_CTRL write first. $C9 down to $01 cleared
+   ($C9 is left 0; $CA, above, untouched). The whole boot runs: the settings, the self-test sound (spoken: the DSP
+   started once), the baud rate and host lines (UART_BAUD $02, UART_CTRL $D1), boot_reentry_warm's CLI, the banks
+   (bank_current 1), then the main loop: boot_get_clause takes the space the self-test string left in the ring and
+   waits for input, where the script stops the run. Parallel mode (P4 bit 0): no UART_BAUD or UART_CTRL write. */
+static void test_reset(void)
+{
+    static const char *const none[] = { "" };
+    static const event want[] = {
+        { EV_WRITE, SFR_P3_DIR, 0xF9 }, { EV_WRITE, SFR_P23_FUNC, 0x00 }, { EV_WRITE, SFR_P3, 0x78 },
+        { EV_RESET, FW_RESET_CPU, 0 }, { EV_WRITE, SFR_ICR1, 0x00 }, { EV_WRITE, SFR_ICR2, 0x00 },
+        { EV_WRITE, SFR_ICR3, 0x00 }, { EV_READ, SFR_P3, 0x78 }, { EV_WRITE, SFR_P3, 0x78 | 0x78 },
+        { EV_WRITE, SFR_AD_CTRL, 0x00 },
+    };
+    for (int par = 0; par <= 1; par++) {
+        setup();
+        script(none, 1);
+        memset(g_ram, 0xA5, 0x100);
+        g_sfr[SFR_P4] = (uint8_t)par;
+        boot_reset(&g_f);
+        CHECK(g_f.stopped);
+        CHECK(!g_f.fault);
+        CHECK_EQ(g_ncalls, 0);
+        CHECK(g_nlog >= 10);
+        for (unsigned i = 0; i < 10 && i < g_nlog; i++) {
+            CHECK_EQ(g_log[i].kind, want[i].kind);
+            CHECK_EQ(g_log[i].addr, want[i].addr);
+            CHECK_EQ(g_log[i].value, want[i].value);
+        }
+        CHECK_EQ(g_ram[0xC9], 0);
+        CHECK_EQ(g_ram[0xCA], 0xA5);
+        CHECK_EQ(g_ram[BOOT_DIP], par);
+        CHECK_EQ(g_ram[BANK_VER_MAJOR], 2);
+        CHECK_EQ(g_ram[BANK_CURRENT], 1);
+        CHECK_EQ(g_ram[CMD_CHAR], '@');
+        CHECK_EQ(count_log(EV_RESET, 0xFF), 1);
+        CHECK_EQ(count_log(EV_WAIT, FW_WAIT_TIMER2), 1);              /* the self-test sound */
+        CHECK_EQ(g_sfr[SFR_UART_BAUD], par ? 0x00 : 0x02);
+        CHECK_EQ(g_sfr[SFR_UART_CTRL], par ? 0x00 : 0xD1);
+        CHECK_EQ(g_ram[BOOT_CLAUSE + 1], ' ');                       /* the self-test string's last byte */
+        CHECK_EQ(g_feed_pos, 1);
+    }
+}
+
+/* The re-entries and the bank entries (M4.6c2 spec 2.1, 3.4). boot_reentry_warm: ser_abort = 0, CLI first, the banks
+   (bank_load_ramcode's P2 read), then the main loop, which speaks each clause (the DSP started per clause: two) and
+   stops at the input wait once the script is used up. bank_entry_warm is the same. boot_reentry_cold: boot_read_dip
+   and boot_init_settings first (AD_CTRL, P4), the settings reset (the ring pointers, cmd_char), then the same.
+   bank_entry_cold: SEI first, then boot_reentry_cold. */
+static void test_reentries(void)
+{
+    static const char *const two[] = { "One. ", "Two." };
+    for (int which = 0; which < 4; which++) {
+        setup();
+        fw_regs r = { 0, 0, 0, 0 };
+        boot_set_defaults(&g_f, &r);
+        g_ram[SER_ABORT] = 1;
+        g_ram[CMD_CHAR] = 0x5E;                  /* the cold re-entry sets '@' again; the warm one keeps it */
+        script(two, 2);
+        g_nlog = 0;
+        r = (fw_regs){ 0x02, 0xFF, 0x00, 0 };    /* as bank_enter leaves them at the warm entry */
+        switch (which) {
+        case 0: boot_reentry_warm(&g_f, &r); break;
+        case 1: bank_entry_warm(&g_f, &r); break;
+        case 2: boot_reentry_cold(&g_f, &r); break;
+        default: bank_entry_cold(&g_f, &r); break;
+        }
+        CHECK(g_f.stopped);
+        CHECK(!g_f.fault);
+        CHECK_EQ(g_ncalls, 0);
+        CHECK(g_nlog > 3);
+        if (g_nlog <= 3)
+            continue;
+        bool cold = which >= 2;
+        unsigned i = 0;
+        if (which == 3) {
+            CHECK_EQ(g_log[0].kind, EV_INT);                         /* $FFD0 SEI */
+            CHECK_EQ(g_log[0].value, 0);
+            i = 1;
+        }
+        if (cold) {
+            CHECK_EQ(g_log[i].kind, EV_WRITE);                       /* boot_read_dip */
+            CHECK_EQ(g_log[i].addr, SFR_AD_CTRL);
+            i += 2;
+        }
+        CHECK_EQ(g_log[i].kind, EV_INT);                             /* $A66E CLI */
+        CHECK_EQ(g_log[i].value, 1);
+        CHECK_EQ(g_log[i + 1].kind, EV_READ);                        /* bank_load_ramcode's P2 */
+        CHECK_EQ(g_log[i + 1].addr, SFR_P2);
+        CHECK_EQ(g_ram[SER_ABORT], 0);
+        CHECK_EQ(g_ram[CMD_CHAR], cold ? '@' : 0x5E);
+        CHECK_EQ(g_ram[BANK_CURRENT], 1);
+        CHECK_EQ(count_log(EV_WAIT, FW_WAIT_TIMER2), 2);             /* "One." and "Two." spoken */
+        CHECK_EQ(g_feed_pos, 2);
+    }
+}
+
+/* boot_get_clause with the read and write pointers' low bytes equal and their pages apart (256 bytes in the ring): not
+   empty, at its entry ($A6BE BNE taken: ser_rx_idle left clear) and in its loop ($A6CC BNE taken: no wait). The
+   corpus never buffers exactly 256 bytes: the branch probe found both branches one-sided, pinned here. */
+static void test_get_clause_page_apart(void)
+{
+    setup();
+    g_ram[SER_RX_WRITE + 1] = 0x22;               /* $2100 to $2200 */
+    memset(g_ram + 0x2100, 'a', 256);
+    g_ram[0x2100 + 3] = '.';
+    fw_regs r = { 0, 0, 0, 0 };
+    boot_get_clause(&g_f, &r);
+    check_clause("aaa.");
+    CHECK_EQ(g_ram[SER_RX_IDLE], 0);
+    CHECK_EQ(count_log(EV_WAIT, 0xFF), 0);
+    CHECK(!g_f.fault);
+}
+
+/* isr_unused $C3DF: RTI, nothing done: no host call, A, X and Y kept. */
+static void test_isr_unused(void)
+{
+    setup();
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_unused(&g_f, &r);
+    check_log(NULL, 0);
+    check_regs(&r, 0x11, 0x22, 0x33);
+    CHECK(!g_f.fault);
+}
+
+/* The rows of the entries (no output: they never return) and isr_unused (an interrupt handler, no output). */
+static void test_entry_rows(void)
+{
+    check_row("boot_reset", ROM_BOOT_RESET, 0, false, false, true);
+    check_row("boot_reentry_cold", ROM_BOOT_REENTRY_COLD, 0, false, false, true);
+    check_row("boot_reentry_warm", ROM_BOOT_REENTRY_WARM, 0, false, false, true);
+    check_row("bank_entry_cold", BANK_ENTRY_COLD, 0, false, false, true);
+    check_row("bank_entry_warm", BANK_ENTRY_WARM, 0, false, false, true);
+    check_row("isr_unused", ROM_ISR_UNUSED, 0, false, true, false);
+}
+
 /* The rows of the input side and the self-test (M4.6c2 spec 2.3): the waits rows (boot_loop_text declares no output:
    the C tn_convert_clause sets no register) and two helpers. */
 static void test_input_rows(void)
@@ -876,4 +1032,9 @@ void suite_fw_boot(void)
     test_selftest();
     test_selftest_sound();
     test_input_rows();
+    test_reset();
+    test_reentries();
+    test_isr_unused();
+    test_entry_rows();
+    test_get_clause_page_apart();
 }

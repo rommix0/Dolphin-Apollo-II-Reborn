@@ -64,12 +64,20 @@ static hybrid_stats check(const uint8_t *rom, size_t len, const char *only, cons
     return stats;
 }
 
+/* The modes in which the C runs the main loop's conversion: boot_reset, boot_reentry_warm and boot_loop_text call the
+   C tn_convert_clause (M4.6c2 spec 2.2). */
+static bool runs_c_main_loop(const char *only)
+{
+    return only && (!strcmp(only, "boot_reset") || !strcmp(only, "boot_reentry_warm") ||
+                    !strcmp(only, "boot_loop_text"));
+}
+
 /* The modes in which the C reaches cmd_run_due's dispatch or bank_enter, so @= entering a bank resets the stack
    under C, or the C enters the bank, and the C call chain unwinds (M4.2 spec 5.3, M4.6c1 spec 4.5). */
 static bool runs_c_dispatch(const char *only)
 {
     return !only || !strcmp(only, "tn_convert_clause") || !strcmp(only, "cmd_run_due") ||
-           !strcmp(only, "cmd_run_next") || !strcmp(only, "bank_enter");
+           !strcmp(only, "cmd_run_next") || !strcmp(only, "bank_enter") || runs_c_main_loop(only);
 }
 
 /* The whole corpus in one mode. Matching the goldens proves nothing if no C ever ran, so the mode must have run
@@ -91,7 +99,8 @@ static void check_corpus(const uint8_t *rom, size_t len, const char *only)
             fprintf(stderr, "  hybrid (%s) bank_select: the C never unwound at the bank entry\n", only ? only : "all");
             g_test_failures++;
         }
-        if (!strcmp(k_corpus[c], "long_clause") && (!only || !strcmp(only, "tn_convert_clause")) &&
+        if (!strcmp(k_corpus[c], "long_clause") && (!only || !strcmp(only, "tn_convert_clause") ||
+                                                     runs_c_main_loop(only)) &&
             st.tn_flushes == 0) {
             fprintf(stderr, "  hybrid (%s) long_clause: the C tn_convert_clause never flushed\n",
                     only ? only : "all");
@@ -475,8 +484,6 @@ static void test_engine_loop(const uint8_t *rom, size_t len)
         CHECK_EQ(g_m.frames_produced, fl.count);
         frame_list_free(&fl);
 
-        if (hybrid && fw_replacement_find("boot_get_clause") && !fw_replacement_find("boot_reset"))
-            continue;   /* until boot_reset is C, the C main loop's waits run under no phase deadline */
         machine_config cfg;
         machine_default_config(&cfg);
         cfg.port_in[4] |= 1;   /* DIP bit 0: the parallel interface */

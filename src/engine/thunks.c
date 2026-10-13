@@ -300,7 +300,7 @@ typedef enum { FRAME_CALL, FRAME_ISR, FRAME_ENTRY } frame_kind;
    (no deadline active) also bounds the whole call: b->deadline = its entry cycles + FW_ROM_CALL_SPEECH_BUDGET, or for
    an entry row the engine's phase deadline (b->phase, when the engine set one), cleared however it ends, so that a
    C wait that never ends (par_play's, a whole utterance inside one hook call) faults or, at the phase deadline, ends
-   the run (thunks.h). */
+   the run (thunks.h). An entry whose C enters it again runs its C afresh (M4.6c2 spec 3.4). */
 static bool run_frame(machine *m, fw_bridge *b, thunk_regs regs, frame_kind kind)
 {
     if (m != b->m) {   /* registers come from m, RAM and host calls from b->m: they must be one machine */
@@ -323,6 +323,16 @@ static bool run_frame(machine *m, fw_bridge *b, thunk_regs regs, frame_kind kind
     sync_p2(b);
     if (setjmp(trap) == 0)
         regs(&b->f, &m->cpu);
+    while (kind == FRAME_ENTRY && b->f.unwound && m->cpu.pc == entry) {
+        /* its C entered this entry again (a warm @=1 under bank_entry_warm): a fresh run of its C, as the hook would
+           fire there again; a hook that leaves the PC at its own address is the machine's spin-guard fault */
+        b->f.unwound = false;
+        b->unwinds++;
+        b->thunk_calls++;
+        sync_p2(b);
+        if (setjmp(trap) == 0)
+            regs(&b->f, &m->cpu);
+    }
     b->f.trap = saved;
     if (outermost) {
         b->deadline = 0;
@@ -476,8 +486,8 @@ static void cmd_run_next_regs(fw *f, cpu740 *c)
    or Y; boot_loop_play calls par_play after $B2C4, which writes A, X and Y before reading them (its thunk), and
    isr_speech_stop after $B2D2, which keeps all three to boot_loop_play's exit (its thunk); isr_volume_half ($B46F)
    returns them to its callers (its row); cmd_ev_set_volume ($BCEF) returns them to par_play's $B892 JMP par_play
-   (LDX first). No caller reads a flag. The C boot_loop_play, isr_volume_half and cmd_ev_set_volume call the C, so
-   in "all" mode the hook fires from boot_reset only. Declared: A, X, Y. */
+   (LDX first). No caller reads a flag. The C boot_reset, boot_loop_play, isr_volume_half and cmd_ev_set_volume call
+   the C, so in "all" mode the hook never fires. Declared: A, X, Y. */
 static void isr_set_volume_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
@@ -1404,16 +1414,16 @@ static void ser_tx_records_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_record
    boot_get_clause reads A and X after $A6FC ($A700 CMP #$0D, $A706 / $A70D STA $1B00,X) and hands all three to
    ser_tx_service after $A6D0 (its thunk); boot_reset ($A672) calls cmd_apply_speaker, which takes X and Y (its thunk);
    boot_queue_string ($C62B) pulls Y and A next ($C62E-$C630). No caller reads a flag (CLI, BBC0, JSR or PLA follow).
-   The C callers (tn_convert_clause, cmd_scan_clause, par_play, the prosody passes, boot_get_clause and
-   boot_queue_string) call the C, so in "all" mode the hook fires from boot_reset only. Declared: A, X, Y. */
+   The C callers (tn_convert_clause, cmd_scan_clause, par_play, the prosody passes, boot_reentry_warm,
+   boot_get_clause and boot_queue_string) call the C, so in "all" mode the hook never fires. Declared: A, X, Y. */
 static void isr_par_ready_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_par_ready); }
 
 /* isr_par_hold $C5DE: A, X and Y in and out as they came (PHA at $C5DE, PLA at $C5EA; X and Y untouched). boot_reset
    ($A66F) calls isr_par_ready (which keeps them) and cmd_apply_speaker, which takes X and Y (its thunk);
    boot_get_clause ($A6E4) reads X ($A706 / $A70D STA $1B00,X) after loading Y and A ($A6EB LDY #0, $A6ED LDA);
    boot_loop_play ($B2B3) calls par_play_start, which reads none (its thunk); boot_queue_string ($C617) reads the Y it
-   set before ($C615 LDY #0; $C61C LDA ($46),Y). No caller reads a flag. The C boot_loop_play, boot_get_clause and
-   boot_queue_string call the C, so in "all" mode the hook fires from boot_reset only. Declared: A, X, Y. */
+   set before ($C615 LDY #0; $C61C LDA ($46),Y). No caller reads a flag. The C boot_loop_play, boot_reentry_warm,
+   boot_get_clause and boot_queue_string call the C, so in "all" mode the hook never fires. Declared: A, X, Y. */
 static void isr_par_hold_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_par_hold); }
 
 /* ser_rx_next_page $C5EC: Y in; Y = the next page out, A and X untouched. ser_rx_put ($C3DC) stores Y and returns;
@@ -1708,6 +1718,35 @@ static void boot_loop_text_regs(fw *f, cpu740 *c)
    Declared: A, X, Y. */
 static void boot_selftest_sound_regs(fw *f, cpu740 *c) { boot_regs(f, c, boot_selftest_sound); }
 
+/* boot_reset $A61C, entered through vec_reset $FFFE: no register input (LDA #0 / TAY / TAX). It never returns: no
+   output declared. An entry row: run_frame runs it under the engine's phase deadline (M4.6c2 spec 3.2). */
+static void boot_reset_regs(fw *f, cpu740 *c)
+{
+    (void)c;
+    boot_reset(f);
+}
+
+/* The other entries, which never return either (no output declared; entry rows): boot_reentry_cold $A665 and
+   boot_reentry_warm $A66B, entered by the bank entries' JMPs (and boot_reset's $A662 JMP $A66B), and the main bank's
+   bank_entry_cold $FFD0 and bank_entry_warm $FFD4, entered by bank_enter's JMPs with SP $FF, I set, A and X (A = the
+   bank's $FFE0 and X = $FF, or 0 and 0). A, X and Y in, none read: boot_reentry_cold loads A first ($ADE4 LDA P4),
+   boot_reentry_warm reads none before cmd_apply_speaker (A loaded first; X and Y handed to par_setup_voice, which
+   does not read them); bank_load_ramcode then saves X and Y in $76 and $78 for bank_restore to reload, as its row
+   says. */
+static void entry_regs(fw *f, cpu740 *c, void (*fn)(fw *, fw_regs *))
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    fn(f, &r);
+}
+static void boot_reentry_cold_regs(fw *f, cpu740 *c) { entry_regs(f, c, boot_reentry_cold); }
+static void boot_reentry_warm_regs(fw *f, cpu740 *c) { entry_regs(f, c, boot_reentry_warm); }
+static void bank_entry_cold_regs(fw *f, cpu740 *c) { entry_regs(f, c, bank_entry_cold); }
+static void bank_entry_warm_regs(fw *f, cpu740 *c) { entry_regs(f, c, bank_entry_warm); }
+
+/* isr_unused $C3DF, an interrupt handler (isr): the RTI of vec_int3_step $FFF6 and vec_int0 $FFFC, which the board
+   never raises (unreachable). A, X and Y as they came; no outputs declared (M4.6a spec 3.2). */
+static void isr_unused_regs(fw *f, cpu740 *c) { boot_regs(f, c, isr_unused); }
+
 /* The hook of each routine: its register mapping run in the shared thunk frame, user = the bound fw_bridge. */
 #define THUNK(name) \
     static bool t_##name(machine *m, void *user) { return run_thunk(m, user, name##_regs); }
@@ -1839,8 +1878,18 @@ THUNK(ph_lengthen_count)
     static bool t_##name(machine *m, void *user) { return run_frame(m, user, name##_regs, FRAME_ISR); }
 ISR_THUNK(isr_timer_dsp)
 ISR_THUNK(isr_int1)
+ISR_THUNK(isr_unused)
 ISR_THUNK(isr_int4_host_line)
 #undef ISR_THUNK
+/* The hook of an entry: its frame never returns (M4.6c2 spec 2.3). */
+#define ENTRY_THUNK(name) \
+    static bool t_##name(machine *m, void *user) { return run_frame(m, user, name##_regs, FRAME_ENTRY); }
+ENTRY_THUNK(boot_reset)
+ENTRY_THUNK(boot_reentry_cold)
+ENTRY_THUNK(boot_reentry_warm)
+ENTRY_THUNK(bank_entry_cold)
+ENTRY_THUNK(bank_entry_warm)
+#undef ENTRY_THUNK
 
 const fw_replacement fw_replacements[] = {
     { "bank_enter",         0x0210, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_enter, false, false, true },
@@ -1852,6 +1901,9 @@ const fw_replacement fw_replacements[] = {
     { "bank_safe_char",     0x02E9, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_safe_char, false, false, true },
     { "bank_find_current",  0x02F0, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_find_current, false, false, true },
     { "bank_load_ramcode",  0xA600, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_bank_load_ramcode },
+    { "boot_reset",         0xA61C, 0,                   t_boot_reset, false, false, false, true },
+    { "boot_reentry_cold",  0xA665, 0,                   t_boot_reentry_cold, false, false, false, true },
+    { "boot_reentry_warm",  0xA66B, 0,                   t_boot_reentry_warm, false, false, false, true },
     { "boot_loop_text",     0xA68D, 0,                   t_boot_loop_text, true },
     { "boot_get_clause",    0xA697, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_get_clause, true },
     { "boot_set_defaults",  0xA742, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_set_defaults },
@@ -1933,6 +1985,7 @@ const fw_replacement fw_replacements[] = {
     { "isr_int1",           0xC2B4, 0,                   t_isr_int1, false, true },
     { "ser_rx_byte",        0xC37E, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_byte },
     { "ser_rx_put",         0xC3CC, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_put },
+    { "isr_unused",         0xC3DF, 0,                   t_isr_unused, false, true },
     { "isr_int4_host_line", 0xC3E0, 0,                   t_isr_int4_host_line, false, true },
     { "isr_host_line_high", 0xC3EB, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_host_line_high },
     { "isr_host_line_low",  0xC3F4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_host_line_low },
@@ -1968,6 +2021,8 @@ const fw_replacement fw_replacements[] = {
     { "pros_declination",   0xD3DD, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_declination },
     { "pros_declination_step", 0xD40D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_pros_declination_step },
     { "ph_lengthen_count",  0xD43E, FW_OUT_A | FW_OUT_Y, t_ph_lengthen_count },
+    { "bank_entry_cold",    0xFFD0, 0,                   t_bank_entry_cold, false, false, false, true },
+    { "bank_entry_warm",    0xFFD4, 0,                   t_bank_entry_warm, false, false, false, true },
 };
 const size_t fw_replacement_count = sizeof fw_replacements / sizeof fw_replacements[0];
 

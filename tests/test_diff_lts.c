@@ -13,7 +13,9 @@
    $FFD4 or $FFD0, and is compared there: PC, SP, A, X, the I flag, the SFR and DSP state and RAM (M4.6c1 spec 4.1,
    diff_same_at_entry); it is counted: bank_select must produce some (M4.2 spec 5.5). The replacements
    marked waits (the frame loop, which waits on the timer interrupt) cannot run with interrupts held: they are not
-   observed here but in diff_play (M4.4b spec 4.1, 4.2). */
+   observed here but in diff_play (M4.4b spec 4.1, 4.2), or, the main loop's, in diff_main (M4.6c2 spec 4.2); nor are
+   the entries, which never return. isr_unused, which nothing enters (diff_is_unreached), prints 0 calls: unit tests
+   pin it. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -130,8 +132,8 @@ static void install(machine *m, void *user)
 {
     (void)user;
     for (size_t i = 0; i < fw_replacement_count; i++) {
-        if (fw_replacements[i].waits)
-            continue;   /* diff_play's */
+        if (fw_replacements[i].waits || fw_replacements[i].entry)
+            continue;   /* diff_play's or diff_main's */
         g_obs[i].r = &fw_replacements[i];
         g_obs[i].calls = 0;   /* the full-call budget is per corpus file */
         g_obs[i].every = false;
@@ -192,10 +194,11 @@ void suite_diff_lts(void)
     for (size_t i = 0; i < sizeof k_extra / sizeof k_extra[0]; i++)
         run(rom, len, "extra", k_extra[i], false);
     for (size_t i = 0; i < fw_replacement_count; i++) {
-        if (fw_replacements[i].waits)
+        if (fw_replacements[i].waits || fw_replacements[i].entry)
             continue;
         printf("  %-20s %u calls checked\n", fw_replacements[i].name, g_checked[i]);
-        CHECK(g_checked[i] > 0 || diff_is_probed(fw_replacements[i].name));   /* every ported routine is exercised */
+        CHECK(g_checked[i] > 0 || diff_is_probed(fw_replacements[i].name) ||
+              diff_is_unreached(fw_replacements[i].name));   /* every ported routine is exercised */
     }
     printf("  %u mid-clause flush calls skipped (golden_hybrid covers them)\n", g_flush_skips);
     CHECK(g_flush_skips > 0);   /* long_clause reaches the flush */

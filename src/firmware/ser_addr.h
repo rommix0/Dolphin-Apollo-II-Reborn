@@ -1,7 +1,7 @@
 #ifndef FW_SER_ADDR_H
 #define FW_SER_ADDR_H
 /* ROM code addresses of the serial code (M4.6a spec 2.1), checked against build/ghidra740/dump and the JSR/JMP
-   operands and vectors in the ROM image. A caller in parentheses stays ROM (M4.6c). */
+   operands and vectors in the ROM image. A caller in parentheses was ROM until M4.6c2: it is C now and calls the C. */
 #define ROM_ISR_INT1             0xC2B4   /* INT1: entered through vec_int1_serial $FFFA */
 #define ROM_SER_RX_BYTE          0xC37E   /* called by isr_int1 $C32E, $C356, $C36F */
 #define ROM_SER_RX_PUT           0xC3CC   /* called by ser_rx_byte $C38D, ser_rx_flush_cmd $C3FF, $C409 (and

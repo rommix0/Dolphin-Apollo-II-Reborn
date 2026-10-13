@@ -1,5 +1,7 @@
 #include "boot.h"
+#include "bank.h"
 #include "bank_addr.h"
+#include "boot_addr.h"
 #include "boot_input.h"
 #include "cmd_apply.h"
 #include "cmd_handlers.h"
@@ -18,6 +20,7 @@
 #define BOOT_TMP_07      0x0007 /* zero page, unnamed in the annotations: boot_clear_input_state clears it ($ABFE) */
 #define BOOT_CMD_CHAR    '@'    /* boot_set_defaults: cmd_char and ser_cmd_char */
 #define BOOT_SAY_RATE    1      /* boot_init_baud: X = 1 speaks the rate */
+#define BOOT_ZP_CLEAR    0xC9   /* boot_reset clears $C9 down to $01 */
 
 typedef struct { uint16_t addr; uint8_t value; } setting;
 
@@ -208,4 +211,80 @@ void boot_selftest_sound(fw *f, fw_regs *r)
         return;                                                  /* abandoned (without a trap: a unit test) */
     pros_make_segments(f, r);
     boot_loop_play(f, r);
+}
+
+/* $A681-$A68A: the main loop, for ever (JMP $A681). It returns only when abandoned without a trap (a unit test). */
+static void main_loop(fw *f, fw_regs *r)
+{
+    for (;;) {
+        boot_loop_text(f, r);
+        if (f->fault || f->stopped || f->unwound)
+            return;
+        pros_make_segments(f, r);
+        boot_loop_play(f, r);
+        if (f->fault || f->stopped)
+            return;
+    }
+}
+
+void boot_reentry_warm(fw *f, fw_regs *r)
+{
+    fw_wr8(f, SER_ABORT, 0);                                     /* $A66B LDM #0 */
+    fw_set_interrupts(f, true, BOOT_CLI_WARM);                   /* $A66E CLI */
+    isr_par_hold(f, r);
+    isr_par_ready(f, r);
+    r->a = cmd_apply_speaker(f, &r->x, &r->y);                   /* $A675 */
+    bank_load_ramcode(f, r);
+    bank_scan(f, r);
+    bank_find_current(f, r);
+    main_loop(f, r);
+}
+
+void boot_reentry_cold(fw *f, fw_regs *r)
+{
+    boot_read_dip(f, r);                                         /* $A665 */
+    boot_init_settings(f, r);
+    boot_reentry_warm(f, r);                                     /* falls into $A66B */
+}
+
+void bank_entry_cold(fw *f, fw_regs *r)
+{
+    fw_set_interrupts(f, false, BANK_ENTRY_COLD);                /* $FFD0 SEI */
+    boot_reentry_cold(f, r);                                     /* JMP boot_reentry_cold */
+}
+
+void bank_entry_warm(fw *f, fw_regs *r) { boot_reentry_warm(f, r); }   /* $FFD4 JMP boot_reentry_warm */
+
+void boot_reset(fw *f)
+{
+    init_p3(f);                                                  /* $A61C-$A622 */
+    fw_reset_cpu(f);                                             /* $A625-$A62C */
+    fw_regs r = { 0, 0, 0, 0 };                                  /* LDA #0; TAY; TAX */
+    fw_wr_sfr8(f, SFR_ICR1, r.a);
+    fw_wr_sfr8(f, SFR_ICR2, r.a);
+    fw_wr_sfr8(f, SFR_ICR3, r.a);
+    for (r.x = BOOT_ZP_CLEAR; r.x != 0; r.x--)                   /* $A637 LDX #$C9; STA 0,X; DEX; BNE */
+        fw_wr8(f, r.x, r.a);
+    fw_wr8(f, CMD_VOLUME, r.a);                                  /* $A63E LDA #0; STA cmd_volume */
+    isr_set_volume(f, &r);
+    boot_read_dip(f, &r);
+    boot_init_ports(f, &r);
+    fw_wr_sfr8(f, SFR_ICR1, 1);                                  /* $A64B LDM #1,ICR1 */
+    boot_init_settings(f, &r);
+    r.a = cmd_apply_speaker(f, &r.x, &r.y);                      /* $A651 */
+    boot_selftest_sound(f, &r);
+    if (f->fault || f->stopped)
+        return;
+    if (!(fw_rd8(f, BOOT_DIP) & DIP_PARALLEL)) {                 /* $A657 BBS0 boot_dip */
+        r.x = 0;
+        boot_init_baud(f, &r);
+        boot_init_host_lines(f, &r);
+    }
+    boot_reentry_warm(f, &r);                                    /* $A662 JMP boot_reentry_warm */
+}
+
+void isr_unused(fw *f, fw_regs *r)
+{
+    (void)f;
+    (void)r;                                                     /* $C3DF RTI */
 }

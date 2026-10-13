@@ -3,7 +3,7 @@
 /* Addresses of the bank code (M4.6c1 spec 2.1, 3.5), checked against build/ghidra740/dump and the JSR/JMP operands
    in the ROM image. bank_load_ramcode copies bank_ramcode_image $ADFE-$AFFC to RAM $0200-$03FE: the two bank tables
    and the routines below run from there (RAM address + BANK_RAMCODE_OFFSET = ROM address). A caller in parentheses
-   stays ROM (M4.6c2). */
+   was ROM until M4.6c2: it is C now and calls the C. */
 
 /* The RAM copy */
 #define BANK_RAMCODE              0x0200   /* the copy's first byte, bank_p2_table */

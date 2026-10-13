@@ -29,6 +29,8 @@
 #define P4_DIP_ALT       0x02   /* DIP bit 1: the alternative bank table and the self-test input */
 #define P2_SELFTEST      0x02   /* P2.1: the self-test input (boot_selftest $C60B BBC1 P2) */
 #define P0_HOST_LINE     0x04   /* P0.2: the host's handshake line */
+#define P3_BAUD_300      0x02   /* P3.1: a baud jumper (boot_init_baud $AC81 BBS1 P3) */
+#define P3_BAUD_1200     0x04   /* P3.2: the other ($AC84, $AC9A BBS2 P3) */
 
 /* One event of a run. */
 typedef struct {
@@ -54,6 +56,7 @@ typedef struct {
     uint16_t target;
     bool target_ramcode;
     machine_status want;
+    uint8_t p3;                       /* ORed into the default input pins of P3 (the baud jumpers) */
 } extra_run;
 
 static machine g_m;
@@ -194,17 +197,12 @@ static void run_pair(const uint8_t *rom, size_t len, const char *name, const cha
         cfg.port_in[4] |= x->p4;
         cfg.port_in[2] |= x->p2;
         cfg.port_in[0] |= x->p0;
+        cfg.port_in[3] |= x->p3;
     }
     engine_input in = { (const uint8_t *)text, strlen(text), true };
     engine_watch w = { on_frame, on_idle, NULL };
     frame_list fl = { 0 };
     g_extra = x;
-    if (x && x->want == MACHINE_CYCLE_LIMIT && fw_replacement_find("boot_get_clause") &&
-        !fw_replacement_find("boot_reset")) {
-        printf("  %-14s skipped: until boot_reset is C, the C main loop's waits run under no phase deadline\n",
-               x->name);
-        return;
-    }
 
     g_rom_side = true;
     g_nrom = 0;
@@ -286,6 +284,8 @@ static void inj_ring_two(machine *m)
 static const extra_run k_extra[] = {
     /* @=1: the main bank, its version equal: the warm entry $FFD4, the rest of the clause dropped */
     { "warm", "@=1 One. Two.", 0, 0, 0, NULL, AT_IDLE, 0, BANK_ENTRY_WARM, false, MACHINE_IDLE },
+    /* @=1 twice: the second from under the C bank_entry_warm, which enters $FFD4 again (its C run afresh) */
+    { "warm_again", "@=1 One. @=1 Two. Three.", 0, 0, 0, NULL, AT_IDLE, 0, BANK_ENTRY_WARM, false, MACHINE_IDLE },
     /* @=1 with the version altered at the end of boot: the cold entry $FFD0 (boot_read_dip, boot_init_settings) */
     { "cold", "@=1 One. Two.", 0, 0, 0, inj_cold, AT_IDLE, 0, BANK_ENTRY_COLD, false, MACHINE_IDLE },
     /* DIP bit 1: bank_select reads the alternative table at boot (bank_scan) and at @=5 (bank_enter) */
@@ -313,12 +313,23 @@ static const extra_run k_extra[] = {
       0, 0, 0, NULL, AT_IDLE, 0, 0xA731, false, MACHINE_IDLE },
     { "rf1_carry", WORDS44 WORDS44 WORDS44 WORDS44 "the quick brown fox jumps over the lazy do@W5 now slower.", 0, 0, 0,
       NULL, AT_IDLE, 0, 0xA739, false, MACHINE_IDLE },
+    /* Review Focus 2: several sentences in one input, each punctuation the end of a clause ($A704), spoken in order
+       with no idle between */
+    { "rf2_sentences", "One. Two? Three!", 0, 0, 0, NULL, AT_IDLE, 0, 0xA704, false, MACHINE_IDLE },
     /* Review Focus 3: an empty input, the CR alone: a one-character clause, then idle again */
     { "rf3_empty", "", 0, 0, 0, NULL, AT_IDLE, 0, 0xA704, false, MACHINE_IDLE },
     /* Review Focus 4: commands only (cmd_set_speed $A9C9 run), nothing spoken */
     { "rf4_commands", "@W5 @A3", 0, 0, 0, NULL, AT_IDLE, 0, 0xA9C9, false, MACHINE_IDLE },
     /* Review Focus 5: "Two." arrives in the ring during the speech of "One.": taken after it with no wait */
     { "rf5_during", "One.", 0, 0, 0, inj_ring_two, AT_SPEECH, 5, 0xA6E4, false, MACHINE_IDLE },
+    /* the baud jumpers (the branch probe): P3.1 ($AC9D: UART_BAUD $BF), P3.2 ($ACB0: $2F), both ($ACC3: $05) */
+    { "baud_p31", "Hello.", 0, 0, 0, NULL, AT_IDLE, 0, 0xAC9D, false, MACHINE_IDLE, P3_BAUD_300 },
+    { "baud_p32", "Hello.", 0, 0, 0, NULL, AT_IDLE, 0, 0xACB0, false, MACHINE_IDLE, P3_BAUD_1200 },
+    { "baud_both", "Hello.", 0, 0, 0, NULL, AT_IDLE, 0, 0xACC3, false, MACHINE_IDLE, P3_BAUD_300 | P3_BAUD_1200 },
+    /* the host line high at boot (the branch probe): boot_init_host_lines' CLB5 P0 path ($AC72), isr_host_line_high;
+       the status byte that leaves due is sent before the end of boot. The CR alone after it: the busy line P0.5 that
+       ser_tx_service sets is then the level the machine delivers bytes at, and the byte's interrupt clears it. */
+    { "host_line_high", "", 0, 0, P0_HOST_LINE, NULL, AT_IDLE, 0, 0xAC72, false, MACHINE_IDLE },
 };
 
 static const char *const k_corpus[] = { CORPUS_NAMES };

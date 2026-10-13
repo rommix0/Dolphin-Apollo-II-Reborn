@@ -57,4 +57,25 @@ void boot_selftest(fw *f, fw_regs *r);
    C). A, X and Y as boot_loop_play leaves them. */
 void boot_selftest_sound(fw *f, fw_regs *r);
 
+/* The entries (M4.6c2 spec 2.1, 3.4). None returns: the main loop runs for ever, and only a stopped wait, a bank entry
+   (fw_enter) or a fault leaves it, each a longjmp to f->trap; without a trap (a unit test) the routine returns then. */
+/* $A61C, the reset: P3_DIR $F9, P23_FUNC 0, P3 $78; the CPU set-up (fw_reset_cpu: SEI, SP $FF, CLT, CLD, CLC, CLV);
+   A = X = Y = 0; ICR1, ICR2 and ICR3 = 0; $C9 down to $01 cleared; cmd_volume = 0 and isr_set_volume; boot_read_dip;
+   boot_init_ports; ICR1 = 1; boot_init_settings; cmd_apply_speaker; boot_selftest_sound; in serial mode (boot_dip
+   bit 0 clear) boot_init_baud with X = 0 and boot_init_host_lines; then boot_reentry_warm. */
+void boot_reset(fw *f);
+/* $A665: boot_read_dip, boot_init_settings, then boot_reentry_warm (the ROM falls into it). */
+void boot_reentry_cold(fw *f, fw_regs *r);
+/* $A66B: ser_abort = 0; CLI (fw_set_interrupts); isr_par_hold; isr_par_ready; cmd_apply_speaker; bank_load_ramcode,
+   bank_scan, bank_find_current; then the main loop $A681 for ever: boot_loop_text, pros_make_segments,
+   boot_loop_play (C calls C). */
+void boot_reentry_warm(fw *f, fw_regs *r);
+/* $FFD0, the main bank's cold entry: SEI (the signature byte $78 bank_probe reads), then boot_reentry_cold. */
+void bank_entry_cold(fw *f, fw_regs *r);
+/* $FFD4, its warm entry: boot_reentry_warm. */
+void bank_entry_warm(fw *f, fw_regs *r);
+/* $C3DF, the handler of vec_int3_step $FFF6 and vec_int0 $FFFC: RTI, nothing else. The board never raises those
+   lines (M4.6c2 spec 2.1). */
+void isr_unused(fw *f, fw_regs *r);
+
 #endif
