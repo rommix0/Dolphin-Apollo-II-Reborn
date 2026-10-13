@@ -63,6 +63,35 @@ typedef struct {
    pros_pitch_ptr and pros_flags_ptr at, as references into fw_cmd_sound_effects and fw_cmd_sound_flags. */
 typedef struct { const uint8_t *phoneme, *duration, *pitch, *flags; } fw_cmd_sound;
 
+/* A code listing (M4.6c1 spec 3.5): one row per instruction at its address, its mnemonic (FWI_*) and addressing mode
+   (FWM_*), the operand (an address, a zero-page address or an immediate) and, for a branch, the target address; a bit
+   instruction (BBC, BBS, SEB, CLB) names its bit. The encoder (fw_data.c, step 12) assembles the rows with the
+   opcodes of fw_opcodes. */
+typedef enum {
+    FWI_ADC, FWI_AND, FWI_BBC, FWI_BBS, FWI_BCC, FWI_BCS, FWI_BEQ, FWI_BNE, FWI_BRA, FWI_CLB, FWI_CLC, FWI_CMP,
+    FWI_CPX, FWI_CPY, FWI_DEC, FWI_DEX, FWI_DEY, FWI_EOR, FWI_INC, FWI_INX, FWI_INY, FWI_JMP, FWI_JSR, FWI_LDA,
+    FWI_LDX, FWI_LDY, FWI_NOP, FWI_ORA, FWI_PHA, FWI_PHP, FWI_PLA, FWI_PLP, FWI_RTS, FWI_SEB, FWI_SEI, FWI_STA,
+    FWI_STX, FWI_STY, FWI_TAX, FWI_TAY, FWI_TXA, FWI_TXS, FWI_COUNT
+} fw_mnem;
+typedef enum {
+    FWM_IMP,          /* no operand */
+    FWM_ACC,          /* A (DEC A) */
+    FWM_IMM,          /* #imm */
+    FWM_ZP,           /* zp */
+    FWM_ZPX,          /* zp,X */
+    FWM_ABS,          /* abs */
+    FWM_ABX,          /* abs,X */
+    FWM_ABY,          /* abs,Y */
+    FWM_IZY,          /* (zp),Y */
+    FWM_REL,          /* a branch to target */
+    FWM_BIT_ZP,       /* SEB/CLB bit,zp */
+    FWM_BIT_A_REL,    /* BBC/BBS bit,A,target */
+    FWM_BIT_ZP_REL,   /* BBC/BBS bit,zp,target */
+} fw_mode;
+typedef struct { uint16_t addr; uint8_t mnem, mode; uint16_t operand, target; uint8_t bit; } fw_insn;
+/* The opcode of a mnemonic in an addressing mode; for a bit instruction, that of bit 0 (bit n adds $20 x n). */
+typedef struct { uint8_t mnem, mode, opcode; } fw_opcode;
+
 /* Pinned addresses (ghidra740/annotations: text_norm.txt, lts.txt) */
 #define TN_CHAR_RULES_LO   0x4000   /* low byte of each character's list address */
 #define TN_CHAR_RULES_HI   0x4100
@@ -225,6 +254,18 @@ extern const char fw_ser_hex_chars[17];   /* the 16 digits, then C's terminating
 extern const uint8_t fw_cmd_sound_flags[CMD_SOUND_MAX];
 extern const fw_cmd_sound_effect fw_cmd_sound_effects[CMD_SOUND_EFFECTS];
 extern const fw_cmd_sound fw_cmd_sound_table[CMD_SOUND_EFFECTS];
+extern const uint8_t fw_bank_p2_table[8], fw_bank_p2_table_alt[8];
+extern const fw_insn fw_bank_ramcode[];      /* the bank routines $0210-$0312, at their RAM addresses */
+extern const size_t fw_bank_ramcode_count;
+extern const fw_insn fw_bank_lts_code[];     /* the letter-to-sound code the copy takes along, $AF11-$AFFD */
+extern const size_t fw_bank_lts_code_count;
+extern const fw_insn fw_bank_entry_code[];   /* bank_entry_cold $FFD0-$FFD3 */
+extern const size_t fw_bank_entry_code_count;
+extern const uint8_t fw_bank_hdr_version[2];
+extern const char fw_bank_hdr_lang_code[7], fw_bank_hdr_lang_ver_text[5], fw_bank_hdr_engine_ver_text[5];
+extern const fw_opcode fw_opcodes[];         /* every mnemonic and mode the listings use */
+extern const size_t fw_opcode_count;
+extern const char *const fw_mnem_names[FWI_COUNT];
 
 /* Encodes every table into img at its ROM address. False with a reason in err on any inconsistency. */
 bool fw_image_build(fw_image *img, char *err, size_t errlen);

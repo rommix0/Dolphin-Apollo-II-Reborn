@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "fw_data.h"
+#include "../bank_addr.h"
 
 #define MAX_LISTS 640
 
@@ -161,6 +162,130 @@ static void put_sound_array(enc *e, uint32_t *at, const uint8_t *v, unsigned n, 
     addr[(*na)++] = (uint16_t)*at;
     for (unsigned i = 0; i < n; i++)
         put(e, false, (*at)++, v[i]);
+}
+
+/* The opcodes of the code listings (M4.6c1 spec 3.5), from the 740 opcode table the emulator uses
+   (src/cpu740/optable.c, after MAME's dm740.lst); test_firmware_data checks each against it. */
+const fw_opcode fw_opcodes[] = {
+    { FWI_ADC, FWM_IMM, 0x69 }, { FWI_AND, FWM_IMM, 0x29 }, { FWI_AND, FWM_ZP, 0x25 },
+    { FWI_BBC, FWM_BIT_A_REL, 0x13 }, { FWI_BBC, FWM_BIT_ZP_REL, 0x17 }, { FWI_BBS, FWM_BIT_ZP_REL, 0x07 },
+    { FWI_BCC, FWM_REL, 0x90 }, { FWI_BCS, FWM_REL, 0xB0 }, { FWI_BEQ, FWM_REL, 0xF0 }, { FWI_BNE, FWM_REL, 0xD0 },
+    { FWI_BRA, FWM_REL, 0x80 }, { FWI_CLB, FWM_BIT_ZP, 0x1F }, { FWI_CLC, FWM_IMP, 0x18 }, { FWI_CMP, FWM_ABS, 0xCD },
+    { FWI_CMP, FWM_ABX, 0xDD }, { FWI_CMP, FWM_IMM, 0xC9 }, { FWI_CPX, FWM_IMM, 0xE0 }, { FWI_CPX, FWM_ZP, 0xE4 },
+    { FWI_CPY, FWM_IMM, 0xC0 }, { FWI_DEC, FWM_ACC, 0x1A }, { FWI_DEC, FWM_ZP, 0xC6 }, { FWI_DEX, FWM_IMP, 0xCA },
+    { FWI_DEY, FWM_IMP, 0x88 }, { FWI_EOR, FWM_IMM, 0x49 }, { FWI_INC, FWM_ZP, 0xE6 }, { FWI_INX, FWM_IMP, 0xE8 },
+    { FWI_INY, FWM_IMP, 0xC8 }, { FWI_JMP, FWM_ABS, 0x4C }, { FWI_JSR, FWM_ABS, 0x20 }, { FWI_LDA, FWM_ABS, 0xAD },
+    { FWI_LDA, FWM_ABX, 0xBD }, { FWI_LDA, FWM_ABY, 0xB9 }, { FWI_LDA, FWM_IMM, 0xA9 }, { FWI_LDA, FWM_IZY, 0xB1 },
+    { FWI_LDA, FWM_ZP, 0xA5 }, { FWI_LDX, FWM_IMM, 0xA2 }, { FWI_LDX, FWM_ZP, 0xA6 }, { FWI_LDY, FWM_IMM, 0xA0 },
+    { FWI_LDY, FWM_ZP, 0xA4 }, { FWI_NOP, FWM_IMP, 0xEA }, { FWI_ORA, FWM_ZP, 0x05 }, { FWI_PHA, FWM_IMP, 0x48 },
+    { FWI_PHP, FWM_IMP, 0x08 }, { FWI_PLA, FWM_IMP, 0x68 }, { FWI_PLP, FWM_IMP, 0x28 }, { FWI_RTS, FWM_IMP, 0x60 },
+    { FWI_SEB, FWM_BIT_ZP, 0x0F }, { FWI_SEI, FWM_IMP, 0x78 }, { FWI_STA, FWM_ABX, 0x9D }, { FWI_STA, FWM_ZP, 0x85 },
+    { FWI_STA, FWM_ZPX, 0x95 }, { FWI_STX, FWM_ZP, 0x86 }, { FWI_STY, FWM_ZP, 0x84 }, { FWI_TAX, FWM_IMP, 0xAA },
+    { FWI_TAY, FWM_IMP, 0xA8 }, { FWI_TXA, FWM_IMP, 0x8A }, { FWI_TXS, FWM_IMP, 0x9A },
+};
+const size_t fw_opcode_count = sizeof fw_opcodes / sizeof fw_opcodes[0];
+
+const char *const fw_mnem_names[FWI_COUNT] = {
+    "ADC", "AND", "BBC", "BBS", "BCC", "BCS", "BEQ", "BNE", "BRA", "CLB", "CLC", "CMP", "CPX", "CPY", "DEC", "DEX",
+    "DEY", "EOR", "INC", "INX", "INY", "JMP", "JSR", "LDA", "LDX", "LDY", "NOP", "ORA", "PHA", "PHP", "PLA", "PLP",
+    "RTS", "SEB", "SEI", "STA", "STX", "STY", "TAX", "TAY", "TXA", "TXS",
+};
+
+/* The length of an instruction in mode: the opcode and its operand bytes. */
+static unsigned insn_length(uint8_t mode)
+{
+    switch (mode) {
+    case FWM_IMP: case FWM_ACC:
+        return 1;
+    case FWM_ABS: case FWM_ABX: case FWM_ABY: case FWM_BIT_ZP_REL:
+        return 3;
+    default:
+        return 2;
+    }
+}
+
+/* A branch's displacement from next (the address after the instruction) to target, which must fit a signed byte. */
+static uint8_t branch(enc *e, const fw_insn *r, uint32_t next)
+{
+    int32_t d = (int32_t)r->target - (int32_t)next;
+    if (d < -128 || d > 127)
+        fail(e, "listing row $%04X: the branch to $%04X is out of reach", (unsigned)r->addr, (unsigned)r->target);
+    return (uint8_t)d;
+}
+
+/* Assembles the n rows of a listing from at (each row's address + offset must be where the previous one ended) with
+   the opcodes of fw_opcodes; returns the address after the last instruction. */
+static uint32_t put_listing(enc *e, uint32_t at, const fw_insn *rows, size_t n, uint16_t offset)
+{
+    for (size_t i = 0; i < n; i++) {
+        const fw_insn *r = &rows[i];
+        if ((uint16_t)(r->addr + offset) != at)
+            fail(e, "listing row $%04X lands at $%04X", (unsigned)r->addr, (unsigned)at);
+        size_t k = 0;
+        while (k < fw_opcode_count && (fw_opcodes[k].mnem != r->mnem || fw_opcodes[k].mode != r->mode))
+            k++;
+        if (k == fw_opcode_count) {
+            fail(e, "listing row $%04X: no opcode for mnemonic %u in mode %u", (unsigned)r->addr, r->mnem, r->mode);
+            return at;
+        }
+        bool bit_op = r->mode == FWM_BIT_ZP || r->mode == FWM_BIT_A_REL || r->mode == FWM_BIT_ZP_REL;
+        if (r->bit > 7 || (r->bit && !bit_op))
+            fail(e, "listing row $%04X: bit %u", (unsigned)r->addr, r->bit);
+        unsigned len = insn_length(r->mode);
+        uint32_t next = r->addr + len;   /* in the listing's own addresses, as the branch targets are */
+        bool byte_operand = r->mode == FWM_IMM || r->mode == FWM_ZP || r->mode == FWM_ZPX || r->mode == FWM_IZY ||
+                            r->mode == FWM_BIT_ZP || r->mode == FWM_BIT_ZP_REL;
+        if (byte_operand && r->operand > 0xFF)
+            fail(e, "listing row $%04X: operand $%04X is not a byte", (unsigned)r->addr, (unsigned)r->operand);
+        put(e, false, at, (uint8_t)(fw_opcodes[k].opcode + 0x20 * r->bit));
+        switch (r->mode) {
+        case FWM_IMP: case FWM_ACC:
+            break;
+        case FWM_ABS: case FWM_ABX: case FWM_ABY:
+            put_word(e, at + 1, r->operand);
+            break;
+        case FWM_REL: case FWM_BIT_A_REL:
+            put(e, false, at + 1, branch(e, r, next));
+            break;
+        case FWM_BIT_ZP_REL:
+            put(e, false, at + 1, (uint8_t)r->operand);
+            put(e, false, at + 2, branch(e, r, next));
+            break;
+        default:
+            put(e, false, at + 1, (uint8_t)r->operand);
+            break;
+        }
+        at += len;
+    }
+    return at;
+}
+
+/* 12. The bank code (M4.6c1 spec 3.5): bank_ramcode_image from $ADFE, the two bank tables, the bank routines at their
+   RAM addresses + BANK_RAMCODE_OFFSET, then the letter-to-sound code at its ROM addresses (to its last instruction's
+   end, $AFFD); the main bank's header: bank_entry_cold assembled, bank_hdr_version, bank_hdr_lang_code and
+   bank_hdr_lang_ver_text, and bank_hdr_engine_ver_text at $9800. The texts without C's terminating 0. */
+static void put_bank_code(enc *e)
+{
+    uint32_t at = BANK_RAMCODE_IMAGE;
+    for (int i = 0; i < 8; i++)
+        put(e, false, at++, fw_bank_p2_table[i]);
+    for (int i = 0; i < 8; i++)
+        put(e, false, at++, fw_bank_p2_table_alt[i]);
+    check_end(e, "bank_p2_table_alt", at, BANK_ENTER + BANK_RAMCODE_OFFSET);
+    at = put_listing(e, at, fw_bank_ramcode, fw_bank_ramcode_count, BANK_RAMCODE_OFFSET);
+    check_end(e, "the bank routines", at, BANK_RAMCODE_LTS + BANK_RAMCODE_OFFSET);
+    at = put_listing(e, at, fw_bank_lts_code, fw_bank_lts_code_count, 0);
+    check_end(e, "the letter-to-sound code", at, BANK_RAMCODE_IMAGE_END + 2);
+    at = put_listing(e, BANK_ENTRY_COLD, fw_bank_entry_code, fw_bank_entry_code_count, 0);
+    check_end(e, "bank_entry_cold", at, BANK_ENTRY_WARM);
+    put(e, false, BANK_HDR_VERSION, fw_bank_hdr_version[0]);
+    put(e, false, BANK_HDR_VERSION + 1, fw_bank_hdr_version[1]);
+    check_end(e, "bank_hdr_lang_code", put_text(e, false, BANK_HDR_LANG_CODE, fw_bank_hdr_lang_code, false),
+              BANK_HDR_LANG_CODE + BANK_LANG_CODE_CHARS);
+    check_end(e, "bank_hdr_lang_ver_text", put_text(e, false, BANK_HDR_LANG_VER_TEXT, fw_bank_hdr_lang_ver_text, false),
+              BANK_HDR_LANG_VER_TEXT + 4);
+    check_end(e, "bank_hdr_engine_ver_text",
+              put_text(e, false, BANK_HDR_ENGINE_VER_TEXT, fw_bank_hdr_engine_ver_text, false), CMD_VERSION_ENGINE_TEXT);
 }
 
 bool fw_image_build(fw_image *img, char *err, size_t errlen)
@@ -424,6 +549,7 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
             put(&e, false, at++, (uint8_t)*s);
         check_end(&e, "ser_hex_chars", at, SER_HEX_CHARS_END);
     }
+    put_bank_code(&e);
     return e.ok;
 }
 

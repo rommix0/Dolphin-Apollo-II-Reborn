@@ -3,12 +3,14 @@
 #include <stdio.h>
 #include "test.h"
 #include "rom_fixture.h"
+#include "cpu740/optable.h"
 #include "firmware/data/fw_data.h"
 
 typedef struct { uint32_t from, to; } range;   /* [from, to) in CPU addresses */
-static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9804, 0xA397 }, { 0xACC7, 0xACE8 }, { 0xB473, 0xB77D },
-                               { 0xB783, 0xB7A1 }, { 0xB7A7, 0xB7B1 }, { 0xBAEC, 0xBAF2 }, { 0xC561, 0xC571 },
-                               { 0xC67B, 0xC9B8 }, { 0xD44A, 0xF77B } };
+static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9800, 0xA397 }, { 0xACC7, 0xACE8 }, { 0xADFE, 0xAFFE },
+                               { 0xB473, 0xB77D }, { 0xB783, 0xB7A1 }, { 0xB7A7, 0xB7B1 }, { 0xBAEC, 0xBAF2 },
+                               { 0xC561, 0xC571 }, { 0xC67B, 0xC9B8 }, { 0xD44A, 0xF77B }, { 0xFFD0, 0xFFD4 },
+                               { 0xFFE0, 0xFFE8 }, { 0xFFEA, 0xFFEE } };
 static const range k_low[] = { { 0x4010, 0x7832 } };
 
 static bool bit(const uint8_t *ok, uint32_t i) { return (ok[i >> 3] >> (i & 7)) & 1; }
@@ -111,6 +113,35 @@ static void test_counts(void)
     CHECK_EQ(sound_segments, 120);             /* 18 flags + 120 * 3 + 17 ends = 395 bytes */
     CHECK_EQ(sound_longest, CMD_SOUND_MAX);    /* the shared flag array covers the longest effect */
     CHECK_EQ(sound_refs, CMD_SOUND_EFFECTS);   /* entry x: effect x's arrays and the shared flags */
+
+    /* The bank code (M4.6c1 spec 3.5) */
+    CHECK_EQ(fw_bank_ramcode_count, 130);      /* $0210-$0312 */
+    CHECK_EQ(fw_bank_lts_code_count, 117);     /* $AF11-$AFFD */
+    CHECK_EQ(fw_bank_entry_code_count, 2);     /* SEI / JMP boot_reentry_cold */
+    CHECK_EQ(fw_opcode_count, 57);
+}
+
+/* fw_opcodes against the emulator's 740 opcode table (src/cpu740/optable.c; M4.6c1 spec 3.5): each opcode decodes
+   to its mnemonic and addressing mode, and a bit instruction's does for each of the 8 bits (opcode + $20 x bit). */
+static void test_listing_opcodes(void)
+{
+    static const uint8_t k_mode[] = {
+        [FWM_IMP] = AM_IMP, [FWM_ACC] = AM_ACC, [FWM_IMM] = AM_IMM, [FWM_ZP] = AM_ZP, [FWM_ZPX] = AM_ZPX,
+        [FWM_ABS] = AM_ABS, [FWM_ABX] = AM_ABX, [FWM_ABY] = AM_ABY, [FWM_IZY] = AM_IZY, [FWM_REL] = AM_REL,
+        [FWM_BIT_ZP] = AM_BIT_ZP, [FWM_BIT_A_REL] = AM_BIT_A_REL, [FWM_BIT_ZP_REL] = AM_BIT_ZP_REL,
+    };
+    const cpu740_opinfo *t = cpu740_optable();
+    for (size_t k = 0; k < fw_opcode_count; k++) {
+        const fw_opcode *o = &fw_opcodes[k];
+        bool bit_op = o->mode == FWM_BIT_ZP || o->mode == FWM_BIT_A_REL || o->mode == FWM_BIT_ZP_REL;
+        for (unsigned b = 0; b < (bit_op ? 8u : 1u); b++) {
+            uint8_t op = (uint8_t)(o->opcode + 0x20 * b);
+            CHECK_STR(cpu740_mnem_name(t[op].mnem), fw_mnem_names[o->mnem]);
+            CHECK_EQ(t[op].mode, k_mode[o->mode]);
+        }
+        for (size_t j = 0; j < k; j++)
+            CHECK(fw_opcodes[j].mnem != o->mnem || fw_opcodes[j].mode != o->mode);   /* each pair once */
+    }
 }
 
 static void test_against_rom(const fw_image *img, const uint8_t *rom)
@@ -131,10 +162,10 @@ static void test_against_rom(const fw_image *img, const uint8_t *rom)
             fprintf(stderr, "  LOW $%04X: converted %02X, ROM %02X\n", a, img->low[a - 0x4000], rom[a - 0x4000]);
     }
     printf("  %u converted bytes compared with the ROM, %u differ\n", compared, bad);
-    CHECK_EQ(compared, 48512);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567),
+    CHECK_EQ(compared, 49044);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567),
                                     M4.3a's prosody data (2,319), M4.4a's playback data (9,495), M4.4b's
-                                    par_slot_map (10), M4.5's frame builder data (794) and M4.6a's ser_hex_chars
-                                    (16) */
+                                    par_slot_map (10), M4.5's frame builder data (794), M4.6a's ser_hex_chars
+                                    (16) and M4.6c1's bank code (532: $ADFE-$AFFD and 20 header bytes) */
     CHECK_EQ(bad, 0);
 }
 
@@ -146,6 +177,7 @@ void suite_firmware_data(void)
         return;
     test_coverage(img);
     test_counts();
+    test_listing_opcodes();
     size_t len;
     const uint8_t *rom = test_rom(&len);
     if (!rom)

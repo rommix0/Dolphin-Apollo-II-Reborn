@@ -18,6 +18,7 @@
 #define BANK_PUT_ID_CHAR          0x02E1   /* called by bank_read_id $029A, $02A5 ... $02CF (nine calls) */
 #define BANK_SAFE_CHAR            0x02E9   /* called by bank_put_id_char $02E1 */
 #define BANK_FIND_CURRENT         0x02F0   /* called by bank_cmd_select $ABB8 (and boot_reset $A67E) */
+#define BANK_RAMCODE_LTS          0x0313   /* the copy of the letter-to-sound code $AF11-$AFFC (never run in RAM) */
 #define BANK_RAMCODE_LAST         0x03FE   /* the copy's last byte */
 
 /* The ROM image of the copy */
@@ -39,6 +40,10 @@
 #define BANK_HDR_LANG_VER_TEXT    0xFFEA   /* char[4]: ID part 3 */
 #define BANK_HDR_ENGINE_VER_TEXT  0x9800   /* char[4]: ID part 2 */
 #define BANK_ID_CHARS             14       /* bank_read_id: 6 + 4 + 4 characters per bank in bank_id_table */
+#define BANK_LANG_CODE_CHARS      6        /* bank_read_id: the characters of bank_hdr_lang_code */
+#define BANK_COUNT                7        /* bank_scan: banks 7 down to 1; bank_find_current: 1 to 7 */
+#define BANK_STACK_TOP            0xFF     /* bank_enter's stack reset (LDX #$FF / TXS) */
+#define BANK_ZP_CLEAR_LAST        0x64     /* bank_enter's cold path clears $01-$64 */
 
 /* P2 bank selections (bits 2-6), the values of bank_p2_table per bank number: P2_MAIN_BANK (fw.h) is banks 0 and 1 */
 #define P2_BANK_2                 0x50
