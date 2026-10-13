@@ -4,10 +4,10 @@
 /* Small steps the ported routines share (M4.4a spec 2.6), and the two shift routines (M4.4b spec 2.2). */
 
 #include "fw.h"
-#include "isr_addr.h"
+#include "isr_serial.h"
 
-/* JSR isr_par_ready with the registers the ROM has at the JSR (it preserves A, X and Y). */
-static inline void fw_par_ready(fw *f, fw_regs r) { fw_rom_call(f, ROM_ISR_PAR_READY, &r, FW_ROM_CALL_BUDGET); }
+/* JSR isr_par_ready with the registers the ROM has at the JSR (it preserves A, X and Y): the C (M4.6b). */
+static inline void fw_par_ready(fw *f, fw_regs r) { isr_par_ready(f, &r); }
 
 /* ADC: a + m + the carry in *c; the carry out back in *c. */
 static inline uint8_t fw_adc(uint8_t a, uint8_t m, uint8_t *c)

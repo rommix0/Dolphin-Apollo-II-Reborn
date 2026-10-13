@@ -26,4 +26,11 @@ void isr_host_line_high(fw *f, fw_regs *r);
 /* $C3F4: ICR3 = $48, the busy line P0.5 cleared. */
 void isr_host_line_low(fw *f, fw_regs *r);
 
+/* The parallel host handshake (ROM $C5D6-$C5EB, M4.6b spec 2.1): subroutines that keep A (PHA ... PLA at $C5EA), X
+   and Y, in serial mode (boot_dip bit 0 clear) doing nothing else. */
+/* $C5D6: parallel mode: P0.3 set, ready for the next host byte. */
+void isr_par_ready(fw *f, fw_regs *r);
+/* $C5DE: parallel mode: P0.3 cleared and a pending _INT1 request (ICR1 bit 1) cleared, inside PHP/SEI ... PLP. */
+void isr_par_hold(fw *f, fw_regs *r);
+
 #endif

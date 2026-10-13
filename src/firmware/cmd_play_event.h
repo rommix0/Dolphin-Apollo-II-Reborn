@@ -41,7 +41,7 @@ void cmd_ev_sound_start(fw *f, fw_regs *r);
 void cmd_ev_sound_end(fw *f, fw_regs *r);
 /* $BCEA, the @B event: cmd_voicing = A. A, X and Y untouched. */
 void cmd_ev_set_voicing(fw *f, fw_regs *r);
-/* $BCED, the @A event: cmd_volume = A, then the ROM isr_set_volume (M4.6) with the entry registers. r out: what
+/* $BCED, the @A event: cmd_volume = A, then isr_set_volume (C since M4.6b) with the entry registers. r out: what
    isr_set_volume leaves (A = the new P3 value, X and Y untouched). */
 void cmd_ev_set_volume(fw *f, fw_regs *r);
 

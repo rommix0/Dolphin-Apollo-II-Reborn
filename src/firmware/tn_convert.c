@@ -1,6 +1,6 @@
 #include "tn_convert.h"
 #include "cmd_run.h"
-#include "isr_addr.h"
+#include "isr_serial.h"
 #include "lts.h"
 #include "par_play.h"
 #include "pros_make.h"
@@ -9,14 +9,6 @@
 
 static uint8_t char_class(fw *f, uint8_t c) { return fw_rom8(f, (uint16_t)(LTS_CHAR_CLASS + c)); }
 static uint8_t text_at(const fw *f, uint8_t x) { return fw_rd8(f, (uint16_t)(CMD_TEXT + x)); }
-
-/* A ROM helper that reads only X (isr_par_ready); returns the X it leaves. */
-static uint8_t rom_call_x(fw *f, uint16_t addr, uint8_t x)
-{
-    fw_regs r = { 0, x, 0, 0 };
-    fw_rom_call(f, addr, &r, FW_ROM_CALL_BUDGET);
-    return r.x;
-}
 
 /* tn_phonetic[tn_phon_len++] = c */
 static void put_phonetic(fw *f, uint8_t c)
@@ -37,7 +29,8 @@ void tn_convert_clause(fw *f)
         fw_wr8(f, TN_POS, x);
         fw_wr8(f, TN_KEY_POS, x);
         for (;;) {                                              /* per character: $B1F6 */
-            x = rom_call_x(f, ROM_ISR_PAR_READY, x);
+            fw_regs pr = { 0, x, 0, 0 };
+            isr_par_ready(f, &pr);                              /* X kept */
             if (fw_rd8(f, TN_PHON_LEN) >= TN_PHONETIC_FLUSH)
                 break;                                          /* nearly full: speak it now */
             for (;;) {                                          /* $B20A: the deferred commands up to tn_pos */

@@ -9,7 +9,7 @@
    command n = cmd_count++ (cmd_positions[n] = its cmd_text position, cmd_handlers[n] = the two bytes after the
    zero that follows the matched part (Y+1, Y+2; on a partial match they are pattern bytes Y+1, Y+2),
    cmd_arg_index[n] = the boot_clause index of its last character); an unmatched cmd_char stays as text, raw. Then boot_clause_len = the cmd_text length and cmd_next_pos = cmd_positions[0]
-   ($FF set at the start). isr_par_ready (ROM) runs before each character is read. Scratch: $76, $78. */
+   ($FF set at the start). isr_par_ready (C, M4.6b) runs before each character is read. Scratch: $76, $78. */
 void cmd_scan_clause(fw *f);
 
 #endif

@@ -130,3 +130,19 @@ void isr_host_line_low(fw *f, fw_regs *r)
     fw_wr_sfr8(f, SFR_ICR3, ICR3_HOST_LOW);
     fw_sfr_clb(f, SFR_P0, P0_BUSY);
 }
+
+void isr_par_ready(fw *f, fw_regs *r)
+{
+    (void)r;                                                     /* PHA ... PLA ($C5EA): A kept */
+    if (fw_rd8(f, BOOT_DIP) & 1)                                 /* BBC0 boot_dip,$C5EA */
+        fw_sfr_seb(f, SFR_P0, P0_READY);                         /* SEB3 P0; BRA $C5EA */
+}
+
+void isr_par_hold(fw *f, fw_regs *r)
+{
+    (void)r;                                                     /* PHA ... PLA ($C5EA): A kept */
+    if (!(fw_rd8(f, BOOT_DIP) & 1))                              /* BBC0 boot_dip,$C5EA */
+        return;
+    fw_sfr_clb(f, SFR_P0, P0_READY);                             /* PHP; SEI; CLB3 P0 */
+    fw_sfr_clb(f, SFR_ICR1, ICR1_INT1_REQ);                      /* CLB1 ICR1; PLP; NOP */
+}

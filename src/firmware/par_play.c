@@ -3,12 +3,16 @@
 #include "frm_build.h"
 #include "fw_ops.h"
 #include "isr_addr.h"
+#include "isr_dsp.h"
+#include "isr_serial.h"
 #include "par_addr.h"
 #include "par_start.h"
 #include "par_track.h"
 #include "ser.h"
 
 #define UART_TX_READY    0x02   /* $B895 BBC1 UART_STATUS: the transmitter is ready */
+#define PAR_WAIT_LAST    0xB8C9   /* $B8C9-$B8CC: the frame-flag wait of the last frames */
+#define PAR_WAIT_REST    0xB8E6   /* $B8E6-$B8E9: the frame-flag wait of the rest frames */
 
 /* ---- par_play $B877 ---- */
 
@@ -20,14 +24,18 @@ static uint8_t count_frame(fw *f)
     return n;
 }
 
-/* $B8C9-$B8CC, $B8E6-$B8E9: isr_par_ready until the timer interrupt has swapped the buffers and set isr_frame_flag
-   bit 0. A failed ROM call ends the wait: under a thunk the fault has longjmped out already, and without a trap (a
-   unit test) the flag would never come. */
-static void wait_frame_flag(fw *f, fw_regs r)
+/* $B8C9-$B8CC, $B8E6-$B8E9 (at): isr_par_ready, then until the timer interrupt has swapped the buffers and set
+   isr_frame_flag bit 0, a wait for the next interrupt (M4.6b spec 2.3) and isr_par_ready again. A failed wait ends
+   it: under a thunk the fault has longjmped out already, and without a trap (a unit test) the flag would never
+   come. */
+static void wait_frame_flag(fw *f, fw_regs r, uint16_t at)
 {
-    do
+    for (;;) {
         fw_par_ready(f, r);
-    while (!(fw_rd8(f, ISR_FRAME_FLAG) & 1) && !f->fault);
+        if ((fw_rd8(f, ISR_FRAME_FLAG) & 1) || f->fault)       /* BBC0 isr_frame_flag */
+            return;
+        fw_wait(f, FW_WAIT_INTERRUPT, at);
+    }
 }
 
 /* $B877-$B892: an event is due when cmd_ev_next < cmd_ev_count (CPX / BCS, unsigned) and par_seg_index =
@@ -97,7 +105,7 @@ static void last_frames(fw *f, fw_regs *r)
         par_step_tracks(f, r);
         frm_finish_frame(f, r);
         fw_wr8(f, ISR_FRAME_FLAG, 0);
-        wait_frame_flag(f, *r);
+        wait_frame_flag(f, *r, PAR_WAIT_LAST);
     }
 }
 
@@ -115,7 +123,7 @@ static void rest_frames(fw *f, fw_regs *r)
         frm_snapshot(f, r);
         frm_clamp_mark_space(f, r);
         frm_transition_flags(f, r);
-        wait_frame_flag(f, *r);
+        wait_frame_flag(f, *r, PAR_WAIT_REST);
         fw_wr8(f, ISR_FRAME_FLAG, 0);
     } while (count_frame(f) != 0);
     cmd_ev_sound_end(f, r);
@@ -126,7 +134,7 @@ void par_play(fw *f, fw_regs *r)
 {
     for (;;) {                                 /* par_play $B877: one pass */
         if (f->fault)
-            return;                            /* a failed ROM call without a trap: the ROM would not get past it */
+            return;                            /* a failed call or wait without a trap: the ROM would not get past it */
         if (run_due_event(f, r))
             continue;                          /* $B892 JMP par_play */
         serve_reply(f, r);
@@ -135,6 +143,7 @@ void par_play(fw *f, fw_regs *r)
             break;                             /* $B8A5 JMP $B8D2: a mute */
         if (!(fw_rd8(f, ISR_FRAME_FLAG) & 1)) {   /* $B8A8 BBS0 isr_frame_flag */
             fw_par_ready(f, *r);               /* $B8AB, then $B8AE JMP par_play */
+            fw_wait(f, FW_WAIT_INTERRUPT, ROM_PAR_PLAY);   /* the next pass after an interrupt (M4.6b spec 2.3) */
             continue;
         }
         if (!segment_frame(f, r)) {
@@ -153,18 +162,18 @@ void par_play(fw *f, fw_regs *r)
    The registers flow from call to call as the ROM's do; A is loaded only for the two isr_set_volume calls. */
 static void play_body(fw *f, fw_regs *r)
 {
-    fw_rom_call(f, ROM_ISR_PAR_HOLD, r, FW_ROM_CALL_BUDGET);
+    isr_par_hold(f, r);
     par_play_start(f, r);
     fw_rom_call(f, ROM_ISR_SPEECH_START, r, FW_ROM_CALL_BUDGET);
-    fw_rom_call(f, ROM_ISR_VOLUME_HALF, r, FW_ROM_CALL_BUDGET);
+    isr_volume_half(f, r);
     fw_rom_call(f, ROM_ISR_WAIT_FRAME, r, FW_ROM_CALL_BUDGET);
     r->a = fw_rd8(f, CMD_VOLUME);
-    fw_rom_call(f, ROM_ISR_SET_VOLUME, r, FW_ROM_CALL_BUDGET);
+    isr_set_volume(f, r);
     par_play(f, r);
-    fw_rom_call(f, ROM_ISR_VOLUME_HALF, r, FW_ROM_CALL_BUDGET);
+    isr_volume_half(f, r);
     fw_rom_call(f, ROM_ISR_WAIT_FRAME, r, FW_ROM_CALL_BUDGET);
     r->a = 0;
-    fw_rom_call(f, ROM_ISR_SET_VOLUME, r, FW_ROM_CALL_BUDGET);
+    isr_set_volume(f, r);
     fw_rom_call(f, ROM_ISR_SPEECH_STOP, r, FW_ROM_CALL_BUDGET);
 }
 

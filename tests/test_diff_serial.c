@@ -344,9 +344,9 @@ static void run_file(const uint8_t *rom, size_t len, const char *name)
     free(text);
 }
 
-/* The probes' routines that are not C yet (M4.6b): their copy B runs the ROM until Tasks 3 and 5 of the M4.6b plan
-   make them C. */
-static const char *const k_not_c_yet[] = { "isr_par_ready", "isr_par_hold", "isr_timer_dsp" };
+/* The probes' routines that are not C yet (M4.6b): their copy B runs the ROM until Task 5 of the M4.6b plan makes it
+   C. */
+static const char *const k_not_c_yet[] = { "isr_timer_dsp" };
 
 static bool not_c_yet(const char *routine)
 {

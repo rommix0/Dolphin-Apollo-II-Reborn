@@ -1,10 +1,12 @@
 #ifndef FW_PAR_PLAY_H
 #define FW_PAR_PLAY_H
 /* The frame loop of one utterance (ROM $B877-$B916) and the player around it ($A7D4-$A7DE and its body $B2B3-$B2D8),
-   decompiled (M4.4b spec 2.1, 2.3, 2.6). Both wait on the timer interrupt: each wait is a ROM call to isr_par_ready
-   (or isr_wait_frame), then a test of isr_frame_flag in RAM; the C itself takes no emulated time, so the interrupt
-   is serviced inside the ROM calls. Each routine takes the registers at entry in r and leaves in r the A, X and Y
-   that the ROM leaves at its RTS. r->p is not used: no caller reads a flag. */
+   decompiled (M4.4b spec 2.1, 2.3, 2.6). Both wait on the timer interrupt: each polling loop tests isr_frame_flag in
+   RAM (and par_play's main loop ser_abort first) and, while it is not yet set, waits for the next interrupt through
+   the host (fw_wait FW_WAIT_INTERRUPT, M4.6b spec 2.3) before testing again; the C itself takes no emulated time, so
+   the interrupt is serviced inside the wait. isr_par_ready is called on every pass where the ROM calls it. Each
+   routine takes the registers at entry in r and leaves in r the A, X and Y that the ROM leaves at its RTS. r->p is
+   not used: no caller reads a flag. */
 #include "fw.h"
 
 #define PAR_REST_FRAMES  3   /* par_play $B8D5 LDA #3: the rest frames sent at the end */

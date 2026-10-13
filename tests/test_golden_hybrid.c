@@ -13,8 +13,7 @@
 #include "diff_state.h"
 #include "engine/hybrid_engine.h"
 #include "engine/thunks.h"
-#include "firmware/isr_addr.h"
-#include "firmware/tn_convert.h"
+#include "firmware/cmd_addr.h"
 #include "render/render.h"
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
@@ -138,6 +137,18 @@ static void check_stopped(const machine *m, const fw_bridge *b, uint16_t entry, 
 
 #define BOOT_RESET_ADDR 0xA61C   /* any ROM address: where reset_stack_hook "jumps" */
 
+/* One command queued, due at position 0, whose handler stays in ROM (bank_cmd_select): the C cmd_run_due with X = 0
+   hands it to the ROM cmd_run_next, its one ROM call. */
+static void queue_rom_command(machine *m)
+{
+    m->ram[CMD_COUNT] = 1;
+    m->ram[CMD_NEXT] = 0;
+    m->ram[CMD_NEXT_POS] = 0;
+    m->ram[CMD_HANDLERS] = ROM_BANK_CMD_SELECT & 0xFF;
+    m->ram[CMD_HANDLERS + 1] = ROM_BANK_CMD_SELECT >> 8;
+    m->cpu.x = 0;
+}
+
 /* Stands for bank_enter's stack reset: SP = $FF and a jump elsewhere. */
 static bool reset_stack_hook(machine *m, void *user)
 {
@@ -166,18 +177,19 @@ static void test_thunk_faults(const uint8_t *rom, size_t len)
     CHECK(r->thunk(&g_m, &b));
     check_stopped(&g_m, &b, r->addr, 0x00E1, sp);
 
-    /* (2) a ROM call from the C that does not return: isr_par_ready, tn_convert_clause's first call */
+    /* (2) a ROM call from the C that does not return: cmd_run_next, cmd_run_due's call for a ROM handler */
     CHECK(machine_init(&g_m, rom, len, NULL));
     CHECK(fw_bridge_init(&b, &g_m));
-    CHECK(machine_hook(&g_m, ROM_ISR_PAR_READY, stuck_hook, NULL));
-    r = fw_replacement_find("tn_convert_clause");
+    CHECK(machine_hook(&g_m, ROM_CMD_RUN_NEXT, stuck_hook, NULL));
+    r = fw_replacement_find("cmd_run_due");
     CHECK(r != NULL);
     if (!r)
         return;
+    queue_rom_command(&g_m);
     g_m.cpu.pc = r->addr;
     sp = g_m.cpu.s;
     CHECK(r->thunk(&g_m, &b));
-    check_stopped(&g_m, &b, r->addr, ROM_ISR_PAR_READY, sp);
+    check_stopped(&g_m, &b, r->addr, ROM_CMD_RUN_NEXT, sp);
 
     /* (3) a thunk run on another machine than its bridge's: refused */
     CHECK(machine_init(&g_m, rom, len, NULL));
@@ -197,11 +209,12 @@ static void test_thunk_faults(const uint8_t *rom, size_t len)
        fault; the machine goes on where the ROM went (M4.2 spec 3) */
     CHECK(machine_init(&g_m, rom, len, NULL));
     CHECK(fw_bridge_init(&b, &g_m));
-    CHECK(machine_hook(&g_m, ROM_ISR_PAR_READY, reset_stack_hook, NULL));
-    r = fw_replacement_find("tn_convert_clause");
+    CHECK(machine_hook(&g_m, ROM_CMD_RUN_NEXT, reset_stack_hook, NULL));
+    r = fw_replacement_find("cmd_run_due");
     CHECK(r != NULL);
     if (!r)
         return;
+    queue_rom_command(&g_m);
     g_m.cpu.pc = r->addr;
     g_m.cpu.s = 0xF0;                            /* a caller's frame below the stack reset */
     CHECK(r->thunk(&g_m, &b));

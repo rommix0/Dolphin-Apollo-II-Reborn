@@ -1,7 +1,7 @@
 #include "cmd_play_event.h"
 #include "cmd_addr.h"
 #include "fw_ops.h"
-#include "isr_addr.h"
+#include "isr_dsp.h"
 #include "par_addr.h"
 #include "data/fw_data.h"
 
@@ -240,5 +240,5 @@ void cmd_ev_set_voicing(fw *f, fw_regs *r) { fw_wr8(f, CMD_VOICING, r->a); }
 void cmd_ev_set_volume(fw *f, fw_regs *r)
 {
     fw_wr8(f, CMD_VOLUME, r->a);
-    fw_rom_call(f, ROM_ISR_SET_VOLUME, r, FW_ROM_CALL_BUDGET);  /* $BCEF; its RTS is ours ($BCF2) */
+    isr_set_volume(f, r);                                        /* $BCEF; its RTS is ours ($BCF2) */
 }

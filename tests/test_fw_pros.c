@@ -27,33 +27,63 @@ static fw g_f;
 static fw_host g_host;
 static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
+static uint8_t g_p0;   /* the port P0 the C isr_par_ready reads and writes in parallel mode */
 
-/* Records every ROM call; isr_par_ready returns the registers unchanged (it preserves A, X and Y), any other call
-   fails. */
-static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
+static void record(uint16_t addr, const fw_regs *r, uint64_t budget)
 {
-    (void)ctx;
     if (g_ncalls < MAX_CALLS) {
         rom_call_record *c = &g_calls[g_ncalls];
         c->addr = addr;
-        c->a = r->a;
-        c->x = r->x;
-        c->y = r->y;
+        c->a = r ? r->a : 0;
+        c->x = r ? r->x : 0;
+        c->y = r ? r->y : 0;
         c->budget = budget;
     }
     g_ncalls++;
-    return addr == ROM_ISR_PAR_READY ? FW_CALL_RETURNED : FW_CALL_FAILED;
 }
 
-/* Zeroed RAM, the mock host, the converted image, no calls recorded. */
+/* Records every ROM call and fails it: the segment generator and the passes before it make none (isr_par_ready is C
+   since M4.6b). */
+static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
+{
+    (void)ctx;
+    record(addr, r, budget);
+    return FW_CALL_FAILED;
+}
+
+/* The C isr_par_ready in parallel mode (setup sets boot_dip bit 0): SEB3 P0, one read and one write of P0 ($F6),
+   recorded as a call of ROM_ISR_PAR_READY without registers (the C passes them to nothing). Any other SFR access
+   fails the test. */
+static uint8_t mock_read_sfr(void *ctx, uint8_t addr)
+{
+    (void)ctx;
+    CHECK_EQ(addr, 0xF6);
+    return g_p0;
+}
+
+static void mock_write_sfr(void *ctx, uint8_t addr, uint8_t value)
+{
+    (void)ctx;
+    CHECK_EQ(addr, 0xF6);
+    CHECK(value & 0x08);
+    g_p0 = value;
+    record(ROM_ISR_PAR_READY, NULL, 0);
+}
+
+/* Zeroed RAM but boot_dip = 1 (parallel mode, so that each isr_par_ready is recorded), the mock host, the converted
+   image, no calls recorded. */
 static void setup(void)
 {
     memset(g_ram, 0, sizeof g_ram);
     g_host.ctx = &g_f;
     g_host.rom_call = mock_rom_call;
     g_host.set_low_window = NULL;   /* nothing in the segment generator drives P2 */
+    g_host.read_sfr = mock_read_sfr;
+    g_host.write_sfr = mock_write_sfr;
     g_ncalls = 0;
+    g_p0 = 0;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
+    g_ram[BOOT_DIP] = 1;
 }
 
 static unsigned count(uint16_t addr)
@@ -64,17 +94,13 @@ static unsigned count(uint16_t addr)
     return n;
 }
 
-/* Record i is a call of addr with A, X, Y and the strict budget. */
-static void check_call(unsigned i, uint16_t addr, uint8_t a, uint8_t x, uint8_t y)
+/* Record i is an isr_par_ready (the C's: its registers reach nothing, so none is recorded). */
+static void check_ready(unsigned i)
 {
     CHECK(i < g_ncalls && i < MAX_CALLS);
     if (i >= g_ncalls || i >= MAX_CALLS)
         return;
-    CHECK_EQ(g_calls[i].addr, addr);
-    CHECK_EQ(g_calls[i].a, a);
-    CHECK_EQ(g_calls[i].x, x);
-    CHECK_EQ(g_calls[i].y, y);
-    CHECK_EQ(g_calls[i].budget, FW_ROM_CALL_BUDGET);
+    CHECK_EQ(g_calls[i].addr, ROM_ISR_PAR_READY);
 }
 
 /* The hook of name sits at addr and declares outputs (pinned here; diff_lts compares them against the ROM). */
@@ -146,7 +172,7 @@ static void test_append_segment(void)
     g_ram[CMD_PITCH_STEP] = 0x08;
     pros_append_segment(&g_f, 0xA1, 0xB2, 0xC3);
     CHECK_EQ(g_ncalls, 1);
-    check_call(0, ROM_ISR_PAR_READY, 0xA1, 0xB2, 0xC3);   /* first, with the entry registers */
+    check_ready(0);                                     /* first */
     check_segment(0x105, 0x12, 0x09, 0x78);
     CHECK_EQ(g_ram[PROS_LAST_TARGET], 0x78);
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 0x0106);
@@ -182,7 +208,7 @@ static void test_append_segment_wrap(void)
     g_ram[PH_DURATION] = 0x05;
     g_ram[PROS_TARGET] = 0x60;
     pros_append_segment(&g_f, 0x11, 0x22, 0x33);
-    check_call(0, ROM_ISR_PAR_READY, 0x11, 0x22, 0x33);
+    check_ready(0);
     check_segment(0x1FF, 0x21, 0x05, 0x60);
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 0x0200);
     check_pages(2);
@@ -296,7 +322,7 @@ static void test_append_across_wrap(void)
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 0x0101);
     check_pages(1);
     CHECK_EQ(count(ROM_ISR_PAR_READY), 1);
-    check_call(0, ROM_ISR_PAR_READY, 0x80, 1, 2);
+    check_ready(0);
     CHECK(!g_f.fault);
 }
 
@@ -522,13 +548,13 @@ static void test_gen_clause(void)   /* " ME." end to end */
     g_ram[CMD_PHRASE_PAUSE] = 8;              /* @D8: two pauses of 8 after '.' */
     gen_run(&a, &x, &y);
     CHECK_EQ(g_ncalls, 7);
-    check_call(0, ROM_ISR_PAR_READY, 0xFF, 0, 4);       /* position 0; X and Y as pros_declination leaves them */
-    check_call(1, ROM_ISR_PAR_READY, 0, 0, 0);          /* position 1: the space's list ended at its item (@Q0) */
-    check_call(2, ROM_ISR_PAR_READY, 9, 1, 9);          /* M's segment: (60 + 18) / 8 */
-    check_call(3, ROM_ISR_PAR_READY, 0xFF, 1, 3);       /* position 2: M's list end */
-    check_call(4, ROM_ISR_PAR_READY, 20, 100, 20);      /* E's segment: X = the last lengthening index */
-    check_call(5, ROM_ISR_PAR_READY, 0xFF, 100, 3);
-    check_call(6, ROM_ISR_PAR_READY, 0, 3, '.');        /* position 4 (the end), after the punctuation */
+    check_ready(0);                                     /* position 0 */
+    check_ready(1);                                     /* position 1: the space's list ended at its item (@Q0) */
+    check_ready(2);                                     /* M's segment */
+    check_ready(3);                                     /* position 2: M's list end */
+    check_ready(4);                                     /* E's segment */
+    check_ready(5);
+    check_ready(6);                                     /* position 4 (the end), after the punctuation */
     /* M: $80 / 8 + U 3 + 105 = $7C. E: ($7C >> 3 = 15, carry 1) + W 10 + Z 1 + final 6 + 105 = $8A */
     check_segment(0, 0x2A, 9, 0x7C);
     check_segment(1, 0x10, 20, 0x8A);
@@ -604,14 +630,14 @@ static void test_gen_duration_loops(void)   /* "S": max 125, min 80, range 45 */
     g_ram[PROS_SYM_SHORTEN + 0] = 0xFF;                 /* (255 + 1) / 2 = 0 in 8 bits: DEY/BNE runs 256 steps */
     gen_run(&a, &x, &y);
     CHECK_EQ(g_ram[PH_DUR_RANGE], 5);                   /* x0.9 down to its fixed point (0 steps would leave 45) */
-    check_call(1, ROM_ISR_PAR_READY, 10, 0, 10);        /* (80 + 5) / 8; X = pros_pos (no lengthening) */
+    check_ready(1);                                     /* the segment's */
     CHECK_EQ(g_ram[PROS_SEG_DURATION + 0], 10);
 
     gen_setup("S");
     g_ram[PROS_SYM_LENGTHEN + 0] = 0xFF;                /* half-count 0: ph_lengthen_count(0) = $60, 96 steps */
     gen_run(&a, &x, &y);
     CHECK_EQ(g_ram[PH_DUR_RANGE], 255);                 /* x1.1 up to 255 */
-    check_call(1, ROM_ISR_PAR_READY, 31, 255, 31);      /* 80 + 255 capped at 255, / 8; X = the last index */
+    check_ready(1);                                     /* the segment's */
     CHECK_EQ(g_ram[PROS_SEG_DURATION + 0], 31);
     CHECK(!g_f.fault);
 }
@@ -656,7 +682,7 @@ static void test_gen_punctuation(void)   /* @D0: '.' adds no phrase pause */
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 2);         /* M and the two end pauses */
     check_segment(1, 0x3B, 4, g_ram[PROS_SEG_PITCH + 0]);
     check_segment(2, 0x3B, 0x80, g_ram[PROS_SEG_PITCH + 0]);
-    check_call(3, ROM_ISR_PAR_READY, 0, 1, '.');
+    check_ready(3);
     CHECK(!g_f.fault);
 }
 
@@ -692,7 +718,7 @@ static void test_gen_content_flag(void)   /* $6B: $FF at a word pause and at a t
     CHECK_EQ(g_ram[FW_UTT_CONTENT], 0xFF);
     check_segment(0, 0x3B, 5, 0x80);                    /* pitch: pros_last_target as initialised */
     CHECK_EQ(g_ram[FW_TMP_78], 0);
-    check_call(1, ROM_ISR_PAR_READY, 0x80, 0, 0);       /* A as ph_append_pause leaves it, X = pros_pos, Y = $78 */
+    check_ready(1);                                     /* after the word pause */
     gen_setup("X");
     gen_run(&a, &x, &y);
     CHECK_EQ(g_ram[FW_UTT_CONTENT], 0xFF);
@@ -729,8 +755,8 @@ static void test_gen_closure_and_hyper(void)
     gen_run(&a, &x, &y);
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 2);
     CHECK_EQ(g_ram[PROS_SEG_PHONEME + 0], 0x40);
-    check_call(1, ROM_ISR_PAR_READY, 10, 0, 10);        /* (40 + 40) / 8 */
-    check_call(2, ROM_ISR_PAR_READY, 0x10, 0, 10);      /* A = pros_sym_flag at the JMP */
+    check_ready(1);                                     /* the closure's segment */
+    check_ready(2);                                     /* the JMP $D152 */
 
     gen_setup("~M");                                    /* @H1: a function word makes no segment */
     g_ram[CMD_HYPER] = 1;
@@ -738,8 +764,8 @@ static void test_gen_closure_and_hyper(void)
     CHECK_EQ(fw_rd16(&g_f, PROS_SEG_COUNT), 1);         /* the two end pauses only */
     CHECK_EQ(g_ram[PROS_FUNC_WORD], 1);
     CHECK_EQ(g_ncalls, 3);
-    check_call(1, ROM_ISR_PAR_READY, 0, 0, 0);          /* after '~' (class 0): A = Y = pros_class */
-    check_call(2, ROM_ISR_PAR_READY, 1, 1, 0x80);       /* after M: A = pros_func_word, Y = pros_class */
+    check_ready(1);                                     /* after '~' (class 0) */
+    check_ready(2);                                     /* after M, no segment */
     CHECK(!g_f.fault);
 }
 
@@ -806,8 +832,8 @@ static void test_store_phrase_len(void)
     CHECK(!g_f.fault);
 }
 
-/* " ME, ~TO{." walked from position 9 down to 1, then the exit block at 0: the registers at isr_par_ready ($CF28) on
-   each path, the counts, the accent, the nucleus marks and the state left */
+/* " ME, ~TO{." walked from position 9 down to 1, then the exit block at 0: isr_par_ready ($CF28) on each path, the
+   counts, the accent, the nucleus marks and the state left */
 static void test_phrases_clause(void)
 {
     fw_regs r;
@@ -830,15 +856,15 @@ static void test_phrases_clause(void)
     g_ram[PROS_FEATURES] = 0x5A;
     phrase_run(0x33, &r);
     CHECK_EQ(g_ncalls, 9);
-    check_call(0, ROM_ISR_PAR_READY, 0, 9, 0x33);       /* the first: A = pros_features (0 at entry), the entry Y */
-    check_call(1, ROM_ISR_PAR_READY, 0, 8, 16);         /* after '.': Y = pros_declination's (falling: the step) */
-    check_call(2, ROM_ISR_PAR_READY, 0, 7, '{');        /* after '{': Y = the symbol */
-    check_call(3, ROM_ISR_PAR_READY, 0x83, 6, 0x83);    /* after O: Y = its features (LDY at $D068) */
-    check_call(4, ROM_ISR_PAR_READY, 0x60, 5, 0x60);    /* after T */
-    check_call(5, ROM_ISR_PAR_READY, 0, 4, '~');        /* after '~', a marker: Y = the symbol */
-    check_call(6, ROM_ISR_PAR_READY, 0, 3, ' ');        /* after the space */
-    check_call(7, ROM_ISR_PAR_READY, 0, 2, 4);          /* after ',': rising, Y = the step before its negation */
-    check_call(8, ROM_ISR_PAR_READY, 0x83, 1, 0x83);    /* after E */
+    check_ready(0);                                     /* the first */
+    check_ready(1);                                     /* after '.' */
+    check_ready(2);                                     /* after '{' */
+    check_ready(3);                                     /* after O */
+    check_ready(4);                                     /* after T */
+    check_ready(5);                                     /* after '~', a marker */
+    check_ready(6);                                     /* after the space */
+    check_ready(7);                                     /* after ',' */
+    check_ready(8);                                     /* after E */
     CHECK_EQ(r.a, 2);                                   /* the exit block: A = pros_word_pos, X = pros_pos */
     CHECK_EQ(r.x, 0);
     CHECK_EQ(r.y, 0x49);                                /* M's features */
@@ -902,7 +928,7 @@ static void test_phrases_params(void)
         CHECK_EQ(g_ram[PROS_FINAL_PARAM], 0xC0 - s - 4);
         CHECK_EQ(g_ram[PROS_DECL_STEP], 1);             /* 1 over the count 1 */
         CHECK_EQ(g_ncalls, 1);
-        check_call(0, ROM_ISR_PAR_READY, 0, 1, 0);
+        check_ready(0);
         CHECK(!g_f.fault);
     }
     phrase_setup(" -");                                 /* '-' (class 1) keeps the current set */
@@ -961,8 +987,8 @@ static void test_phrases_accent(void)
     CHECK_EQ(g_ram[FW_PROS_ACCENT_PENDING], 0);
     CHECK_EQ(g_ram[FW_PROS_FINAL], 0);
     CHECK_EQ(g_ncalls, 3);
-    check_call(1, ROM_ISR_PAR_READY, 0x83, 2, 0x83);
-    check_call(2, ROM_ISR_PAR_READY, 0x49, 1, 0x49);
+    check_ready(1);
+    check_ready(2);
 
     phrase_setup(" 7");                                 /* a syllabic consonant (features $4B: bit 1, not bit 7) */
     g_ram[PROS_SYM_FLAGS + 1] = PSF_STRESS;
@@ -1020,10 +1046,10 @@ static void test_phrases_empty(void)
     g_ram[PROS_SYM_FLAGS + 254] = PSF_STRESS;
     phrase_run(0x5A, &r);
     CHECK_EQ(g_ncalls, 255);
-    check_call(0, ROM_ISR_PAR_READY, 0, 255, 0x5A);
-    check_call(1, ROM_ISR_PAR_READY, 0, 254, 0);        /* after '.': a level baseline (0 to 0), step 0 */
-    check_call(2, ROM_ISR_PAR_READY, 0x83, 253, 0x83);
-    check_call(3, ROM_ISR_PAR_READY, 0, 252, 0);        /* after symbol 0 */
+    check_ready(0);
+    check_ready(1);                                     /* after '.' */
+    check_ready(2);
+    check_ready(3);                                     /* after symbol 0 */
     CHECK_EQ(g_ram[PROS_SYM_FLAGS + 254], 0x67);
     CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 254], 16);       /* the accent, and the lengthening before '.' */
     CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 8);          /* still before '.': symbol 0 has no features */
@@ -1083,7 +1109,7 @@ static void test_stress_start(void)
     fw_wr16(&g_f, CMD_EV_POSITIONS, 0x0304);            /* read only when cmd_ev_count is not 0 */
     fw_regs r = stress_run(0x11, 0x22, 0x33);
     CHECK_EQ(g_ncalls, 1);
-    check_call(0, ROM_ISR_PAR_READY, 0, 0, 0x33);       /* A = cmd_ev_count (BEQ), X = 0 (TAX), Y = the caller's */
+    check_ready(0);                                     /* the only one */
     CHECK_EQ(r.a, 0);
     CHECK_EQ(r.x, 0);                                   /* pros_pos: $FF + 1 */
     CHECK_EQ(r.y, 0x33);
@@ -1101,7 +1127,7 @@ static void test_stress_start(void)
     fw_wr16(&g_f, CMD_EV_POS, 0x7766);
     fw_wr16(&g_f, CMD_EV_POSITIONS, 0x0304);
     r = stress_run(0x11, 0x22, 0x33);
-    check_call(0, ROM_ISR_PAR_READY, 0x03, 0, 0x33);    /* A = the high byte, the last one read */
+    check_ready(0);                                     /* the only one */
     CHECK_EQ(r.a, 0x03);
     CHECK_EQ(fw_rd16(&g_f, CMD_EV_POS), 0x0304);        /* both bytes of the first position */
     CHECK_EQ(g_ram[FW_UTT_CONTENT], 0xFF);              /* LDM #$FF */
@@ -1110,7 +1136,7 @@ static void test_stress_start(void)
     CHECK(!g_f.fault);
 }
 
-/* Every way back to isr_par_ready at $CB1F, with its registers, and the three tn_phonetic rewrites */
+/* Every way back to isr_par_ready at $CB1F, and the three tn_phonetic rewrites */
 static void test_stress_paths(void)
 {
     static const uint8_t flags[12] = { 0, PSF_FUNC_WORD, 0, 0, 0, 0, 0, 0, 0, 0, PSF_STRESS, 0 };
@@ -1119,19 +1145,19 @@ static void test_stress_paths(void)
     stress_setup(" ~}{`|MMA|E?");
     fw_regs r = stress_run(0x11, 0x22, 0x33);
     CHECK_EQ(g_ncalls, 13);
-    check_call(0, ROM_ISR_PAR_READY, 0x00, 0, 0x33);    /* the start */
-    check_call(1, ROM_ISR_PAR_READY, 0xFF, 0, 0x00);    /* ' ': the word end, A = $FF, Y = features 0 */
-    check_call(2, ROM_ISR_PAR_READY, PSF_FUNC_WORD, 1, 0x00);   /* '~' */
-    check_call(3, ROM_ISR_PAR_READY, 0xFF, 2, 0x00);    /* '}' */
-    check_call(4, ROM_ISR_PAR_READY, 0x00, 3, 0x00);    /* '{' */
-    check_call(5, ROM_ISR_PAR_READY, 0x01, 4, 0x00);    /* '`' */
-    check_call(6, ROM_ISR_PAR_READY, 0x49, 5, 0x00);    /* '|' before M: A = M's features ($1C09) */
-    check_call(7, ROM_ISR_PAR_READY, '|', 6, 0x49);     /* M before M: becomes | */
-    check_call(8, ROM_ISR_PAR_READY, 0x49, 7, 0x49);    /* the consonant tail: A = Y = its features */
-    check_call(9, ROM_ISR_PAR_READY, 0x83, 8, 0x83);    /* the vowel tail: Y = the next symbol's features */
-    check_call(10, ROM_ISR_PAR_READY, 0x45, 9, 0x45);   /* '|' before E: R, a consonant */
-    check_call(11, ROM_ISR_PAR_READY, 0x83, 10, 0x00);  /* E before the end: Y = 0 */
-    check_call(12, ROM_ISR_PAR_READY, 0xFF, 11, 0x00);  /* '?': the word end */
+    check_ready(0);                                     /* the start */
+    check_ready(1);                                     /* ' ': the word end */
+    check_ready(2);                                     /* '~' */
+    check_ready(3);                                     /* '}' */
+    check_ready(4);                                     /* '{' */
+    check_ready(5);                                     /* '`' */
+    check_ready(6);                                     /* '|' before M */
+    check_ready(7);                                     /* M before M: becomes | */
+    check_ready(8);                                     /* the consonant tail */
+    check_ready(9);                                     /* the vowel tail */
+    check_ready(10);                                    /* '|' before E: R, a consonant */
+    check_ready(11);                                    /* E before the end */
+    check_ready(12);                                    /* '?': the word end */
     CHECK_EQ(r.a, 0xFF);
     CHECK_EQ(r.x, 12);
     CHECK_EQ(r.y, 0x00);
@@ -1160,9 +1186,9 @@ static void test_stress_no_syllable(void)
     stress_setup("A|A");
     fw_regs r = stress_run(0, 0, 0);
     CHECK_EQ(g_ncalls, 4);
-    check_call(1, ROM_ISR_PAR_READY, 0x83, 0, 0x83);
-    check_call(2, ROM_ISR_PAR_READY, 0x45, 1, 0x45);
-    check_call(3, ROM_ISR_PAR_READY, 0x83, 2, 0x00);
+    check_ready(1);
+    check_ready(2);
+    check_ready(3);
     CHECK_EQ(r.x, 3);
     CHECK(memcmp(g_ram + TN_PHONETIC, "ARA", 3) == 0);
     CHECK_EQ(g_ram[PROS_SYM_FLAGS + 0], PSF_STRESS);
@@ -1234,7 +1260,7 @@ static void test_stress_past_end(void)
     CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 0], 4);
     CHECK_EQ(g_ram[PROS_SYM_LENGTHEN + 1], 4);
     CHECK_EQ(g_ram[FW_PROS_NEXT_PHON], 0x0D);           /* the look-ahead at L overwrote $CDBF's 'E' */
-    check_call(1, ROM_ISR_PAR_READY, 0x83, 0, 0x45);    /* Y = L's features ($1C07) */
+    check_ready(1);                                     /* after the vowel */
     CHECK_EQ(r.y, 0x45);
     CHECK(!g_f.fault);
 
@@ -1306,26 +1332,25 @@ static void make_setup(void)
 }
 
 /* The parameter copies, then pros_reset_seg_ptrs, pros_mark_stress, pros_mark_phrases and pros_phrase_gen in that
-   order, each pass's first isr_par_ready with the Y the step before left; the registers out are pros_phrase_gen's */
+   order, each pass with its isr_par_ready calls; the registers out are pros_phrase_gen's */
 static void test_make_segments(void)
 {
     make_setup();
     fw_regs r = { 0x11, 0x22, 0x33, 0 };
     pros_make_segments(&g_f, &r);
     CHECK_EQ(g_ncalls, 12);
-    check_call(0, ROM_ISR_PAR_READY, 0, 0, 0x33);       /* pros_mark_stress, the start: Y = the entry Y */
-    check_call(1, ROM_ISR_PAR_READY, 0xFF, 0, 0);       /* after the space */
-    check_call(2, ROM_ISR_PAR_READY, 0x83, 1, 0x49);    /* after E: Y = the next symbol's features */
-    check_call(3, ROM_ISR_PAR_READY, 0x49, 2, 0x49);    /* after M; it leaves A = Y = $49, X = 3 */
-    check_call(4, ROM_ISR_PAR_READY, 0, 2, 0x49);       /* pros_mark_phrases, the first: Y = pros_mark_stress's */
-    check_call(5, ROM_ISR_PAR_READY, 0x49, 1, 0x49);    /* after M; it leaves A = 2, X = 0, Y = E's features */
-    check_call(6, ROM_ISR_PAR_READY, 0xFF, 0, 5);       /* pros_phrase_gen, the first: X and Y as its
-                                                           pros_declination leaves them ($10 over the count 3) */
-    check_call(7, ROM_ISR_PAR_READY, 0, 0, 0);
-    check_call(8, ROM_ISR_PAR_READY, 0x13, 0x61, 0x13); /* E's segment */
-    check_call(9, ROM_ISR_PAR_READY, 0xFF, 0x61, 3);
-    check_call(10, ROM_ISR_PAR_READY, 0x0A, 0x12, 0x0A);   /* M's segment */
-    check_call(11, ROM_ISR_PAR_READY, 0xFF, 0x12, 3);   /* the end */
+    check_ready(0);                                     /* pros_mark_stress, the start */
+    check_ready(1);                                     /* after the space */
+    check_ready(2);                                     /* after E */
+    check_ready(3);                                     /* after M */
+    check_ready(4);                                     /* pros_mark_phrases, the first */
+    check_ready(5);                                     /* after M */
+    check_ready(6);                                     /* pros_phrase_gen, the first */
+    check_ready(7);
+    check_ready(8);                                     /* E's segment */
+    check_ready(9);
+    check_ready(10);                                    /* M's segment */
+    check_ready(11);                                    /* the end */
     CHECK_EQ(r.a, 4);                                   /* pros_phrase_gen's A, X and Y */
     CHECK_EQ(r.x, 3);
     CHECK_EQ(r.y, 3);

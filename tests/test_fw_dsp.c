@@ -4,12 +4,14 @@
    expected value is worked out from the dump of the routine (build/ghidra740/dump), as the comment beside it says. */
 #include <string.h>
 #include "test.h"
-#include "firmware/fw.h"
+#include "engine/thunks.h"
+#include "firmware/isr_dsp.h"
+#include "firmware/isr_serial.h"
 #include "firmware/data/fw_data.h"
 
 #define MAX_LOG 64
-#define SFR_P2  0xF0
-#define SFR_P3  0xEE
+#define SFR_P0  0xF6
+#define SFR_ICR1 0xFF
 
 typedef enum { EV_READ, EV_WRITE, EV_WAIT, EV_DSP, EV_FRAME } ev_kind;
 /* One host call: EV_READ/EV_WRITE an SFR (addr) and its value; EV_WAIT the ROM loop (addr) and the kind (value);
@@ -215,6 +217,130 @@ static void test_p2_window(void)
     CHECK(g_f.low_window);
 }
 
+/* The hook of name sits at addr, declares outputs, and is neither a waits nor an isr row (pinned here; diff_lts
+   compares the outputs against the ROM). */
+static void check_row(const char *name, uint16_t addr, uint8_t outputs)
+{
+    const fw_replacement *r = fw_replacement_find(name);
+    CHECK(r != NULL);
+    if (!r)
+        return;
+    CHECK_EQ(r->addr, addr);
+    CHECK_EQ(r->outputs, outputs);
+    CHECK(!r->waits);
+    CHECK(!r->isr);
+}
+
+static void test_rows(void)
+{
+    check_row("isr_set_volume", 0xACE8, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("isr_volume_half", 0xB46C, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("isr_par_ready", 0xC5D6, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+    check_row("isr_par_hold", 0xC5DE, FW_OUT_A | FW_OUT_X | FW_OUT_Y);
+}
+
+/* isr_set_volume $ACE8 at all 16 levels: $75 = ((A ^ $F) & $F) << 3 ($ACE8-$ACEF); P3 read once (AND P3) and written
+   once with (P3 & $87) | $75 ($ACF1-$ACF7), which is A out; X and Y untouched. P3 = $A5: bits 7, 2 and 0 kept
+   ($85), bits 3-6 replaced. A's high nibble does not count (AND #$F): $F3 is level 3. */
+static void test_set_volume(void)
+{
+    for (unsigned v = 0; v < 17; v++) {
+        uint8_t a = v < 16 ? (uint8_t)v : 0xF3;
+        uint8_t level = (uint8_t)(((a ^ 0x0F) & 0x0F) << 3);
+        uint8_t want = (uint8_t)(0x85 | level);
+        const event log[] = { { EV_READ, SFR_P3, 0xA5 }, { EV_WRITE, SFR_P3, want } };
+        setup();
+        g_sfr[SFR_P3] = 0xA5;
+        fw_regs r = { a, 0x11, 0x22, 0 };
+        isr_set_volume(&g_f, &r);
+        check_log(log, 2);
+        CHECK_EQ(g_ram[0x75], level);
+        CHECK_EQ(r.a, want);
+        CHECK_EQ(r.x, 0x11);
+        CHECK_EQ(r.y, 0x22);
+        CHECK(!g_f.fault);
+    }
+    setup();
+    g_sfr[SFR_P3] = 0xA5;
+    fw_regs r = { 0, 0, 0, 0 };
+    isr_set_volume(&g_f, &r);
+    CHECK_EQ(r.a, 0xFD);                          /* silent: $85 | $78 */
+    CHECK_EQ(g_sfr[SFR_P3], 0xFD);
+}
+
+/* isr_volume_half $B46C: isr_set_volume with A = cmd_volume >> 1 (LSR A): 11 gives 5, $FF gives $7F (level 0). */
+static void test_volume_half(void)
+{
+    static const event log11[] = { { EV_READ, SFR_P3, 0x00 }, { EV_WRITE, SFR_P3, 0x50 } };   /* (5 ^ $F) << 3 */
+    setup();
+    g_ram[CMD_VOLUME] = 11;
+    fw_regs r = { 0x99, 0x11, 0x22, 0 };
+    isr_volume_half(&g_f, &r);
+    check_log(log11, 2);
+    CHECK_EQ(g_ram[0x75], 0x50);
+    CHECK_EQ(r.a, 0x50);
+    CHECK_EQ(r.x, 0x11);
+    CHECK_EQ(r.y, 0x22);
+    CHECK_EQ(g_ram[CMD_VOLUME], 11);
+
+    static const event log_ff[] = { { EV_READ, SFR_P3, 0xFF }, { EV_WRITE, SFR_P3, 0x87 } };
+    setup();
+    g_ram[CMD_VOLUME] = 0xFF;
+    g_sfr[SFR_P3] = 0xFF;
+    r = (fw_regs){ 0, 0, 0, 0 };
+    isr_volume_half(&g_f, &r);
+    check_log(log_ff, 2);
+    CHECK_EQ(r.a, 0x87);
+    CHECK(!g_f.fault);
+}
+
+/* isr_par_ready $C5D6 and isr_par_hold $C5DE: in serial mode (boot_dip bit 0 clear; $FE has it clear) nothing but
+   A, X and Y kept; in parallel mode isr_par_ready sets P0.3 (SEB3: P0 read, then written with bit 3) and
+   isr_par_hold clears P0.3 and the _INT1 request ICR1 bit 1 (CLB3 P0, CLB1 ICR1: each a read then a write). */
+static void test_par_handshake(void)
+{
+    static const uint8_t dips[2] = { 0x00, 0xFE };
+    for (unsigned i = 0; i < 2; i++) {
+        setup();
+        g_ram[BOOT_DIP] = dips[i];
+        g_sfr[SFR_P0] = 0x20;
+        g_sfr[SFR_ICR1] = 0x03;
+        fw_regs r = { 0x11, 0x22, 0x33, 0 };
+        isr_par_ready(&g_f, &r);
+        isr_par_hold(&g_f, &r);
+        CHECK_EQ(g_nlog, 0);
+        CHECK_EQ(r.a, 0x11);
+        CHECK_EQ(r.x, 0x22);
+        CHECK_EQ(r.y, 0x33);
+    }
+
+    static const event ready[] = { { EV_READ, SFR_P0, 0x20 }, { EV_WRITE, SFR_P0, 0x28 } };
+    setup();
+    g_ram[BOOT_DIP] = 1;
+    g_sfr[SFR_P0] = 0x20;
+    fw_regs r = { 0x11, 0x22, 0x33, 0 };
+    isr_par_ready(&g_f, &r);
+    check_log(ready, 2);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0x22);
+    CHECK_EQ(r.y, 0x33);
+
+    static const event hold[] = {
+        { EV_READ, SFR_P0, 0x28 }, { EV_WRITE, SFR_P0, 0x20 }, { EV_READ, SFR_ICR1, 0x03 },
+        { EV_WRITE, SFR_ICR1, 0x01 },
+    };
+    setup();
+    g_ram[BOOT_DIP] = 1;
+    g_sfr[SFR_P0] = 0x28;
+    g_sfr[SFR_ICR1] = 0x03;
+    isr_par_hold(&g_f, &r);
+    check_log(hold, 4);
+    CHECK_EQ(r.a, 0x11);
+    CHECK_EQ(r.x, 0x22);
+    CHECK_EQ(r.y, 0x33);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_dsp(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -222,4 +348,8 @@ void suite_fw_dsp(void)
     test_frame_done();
     test_wait_kinds();
     test_p2_window();
+    test_rows();
+    test_set_volume();
+    test_volume_half();
+    test_par_handshake();
 }

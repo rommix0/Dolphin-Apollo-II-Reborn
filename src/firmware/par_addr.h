@@ -51,7 +51,8 @@
 #define ROM_UTIL_SHL4              0xC656   /* called by cmd_apply_pitch $A835, $A83F; cmd_set_formant $A952;
                                                cmd_set_mark_space $A9AD; cmd_hex_byte $B455 (all C: util_shl4 in
                                                fw_ops.h) */
-#define ROM_UTIL_SHL3              0xC657   /* called by cmd_ev_sound_start $BBA7 (and isr_set_volume $ACEC); also
-                                               entered from util_shl4 $C656 by falling through */
+#define ROM_UTIL_SHL3              0xC657   /* called by cmd_ev_sound_start $BBA7, isr_set_volume $ACEC (both C:
+                                               util_shl3 in fw_ops.h); also entered from util_shl4 $C656 by falling
+                                               through */
 
 #endif

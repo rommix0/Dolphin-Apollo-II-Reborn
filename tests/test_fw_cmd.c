@@ -46,6 +46,7 @@ static rom_call_record g_calls[MAX_CALLS];
 static unsigned g_ncalls;
 static uint8_t g_before[FW_RAM_SIZE];   /* RAM as a test left it: the C must not touch it before a ROM cmd_run_next */
 static unsigned g_touched;              /* ROM cmd_run_next calls that found RAM changed since g_before */
+static uint8_t g_p0;                    /* the port P0 the C isr_par_ready reads and writes in parallel mode */
 
 /* Records every ROM call and answers the routines the C calls as the ROM would; any other call fails. The reply
    handlers call the C ser_tx_* routines (M4.6a), which make no ROM call. */
@@ -74,8 +75,28 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         memcpy(g_before, g_ram, sizeof g_ram);
         return FW_CALL_RETURNED;   /* X back as it was (cmd_run_done) */
     }
-    /* isr_par_ready leaves A, X and Y as they were: the registers come back unchanged */
-    return addr == ROM_ISR_PAR_READY ? FW_CALL_RETURNED : FW_CALL_FAILED;
+    return FW_CALL_FAILED;   /* isr_par_ready is C since M4.6b */
+}
+
+/* The C isr_par_ready (M4.6b) in parallel mode (scan_setup sets boot_dip bit 0): SEB3 P0, one read and one write of
+   P0 ($F6), recorded as a call of ROM_ISR_PAR_READY without registers (the C passes them to nothing). Any other SFR
+   access fails the test. */
+static uint8_t mock_read_sfr(void *ctx, uint8_t addr)
+{
+    (void)ctx;
+    CHECK_EQ(addr, 0xF6);
+    return g_p0;
+}
+
+static void mock_write_sfr(void *ctx, uint8_t addr, uint8_t value)
+{
+    (void)ctx;
+    CHECK_EQ(addr, 0xF6);
+    CHECK(value & 0x08);
+    g_p0 = value;
+    if (g_ncalls < MAX_CALLS)
+        g_calls[g_ncalls] = (rom_call_record){ ROM_ISR_PAR_READY, 0, 0, 0, 0, 0, 0, 0 };
+    g_ncalls++;
 }
 
 /* Zeroed RAM with the output ring empty at $3900 (as boot_clear_input_state leaves it, $AC09-$AC18), the mock
@@ -86,8 +107,11 @@ static void setup(void)
     g_host.ctx = &g_f;
     g_host.rom_call = mock_rom_call;
     g_host.set_low_window = NULL;   /* no command routine in C drives P2 (bank_cmd_select stays in ROM) */
+    g_host.read_sfr = mock_read_sfr;
+    g_host.write_sfr = mock_write_sfr;
     g_ncalls = 0;
     g_touched = 0;
+    g_p0 = 0;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
     fw_wr16(&g_f, SER_TX_READ, SER_TX_RING);
     fw_wr16(&g_f, SER_TX_WRITE, SER_TX_RING);
@@ -124,22 +148,22 @@ static unsigned count(uint16_t addr)
     return n;
 }
 
-/* Every ROM call is isr_par_ready with the strict budget. */
+/* Every call recorded is isr_par_ready (its P0 write): no ROM call. */
 static void check_par_ready_calls(void)
 {
-    for (unsigned i = 0; i < g_ncalls && i < MAX_CALLS; i++) {
+    for (unsigned i = 0; i < g_ncalls && i < MAX_CALLS; i++)
         CHECK_EQ(g_calls[i].addr, ROM_ISR_PAR_READY);
-        CHECK_EQ(g_calls[i].budget, FW_ROM_CALL_BUDGET);
-    }
 }
 
 /* boot_clause = s (the bytes after it unchanged). */
 static void put_clause(const char *s) { memcpy(g_ram + BOOT_CLAUSE, s, strlen(s)); }
 
-/* setup(), then boot_clause = clause (then zeros), boot_clause_len = its length, cmd_char = '@'. */
+/* setup(), then boot_clause = clause (then zeros), boot_clause_len = its length, cmd_char = '@', parallel mode
+   (boot_dip bit 0: each isr_par_ready is recorded). */
 static void scan_setup(const char *clause)
 {
     setup();
+    g_ram[BOOT_DIP] = 1;
     put_clause(clause);
     g_ram[BOOT_CLAUSE_LEN] = (uint8_t)strlen(clause);
     g_ram[CMD_CHAR] = '@';
@@ -324,17 +348,7 @@ static void test_scan_command(void)
     CHECK_EQ(fw_rd16(&g_f, CMD_TABLE_PTR), CMD_TABLE);
     CHECK_EQ(g_ram[CMD_TABLE_OFS], 2 * P_SPEED);
     CHECK_EQ(fw_rd16(&g_f, CMD_PAT_PTR), entry(CMD_TABLE, P_SPEED));
-    /* isr_par_ready once per character read (X = 0, 1, 4, 5), with the registers the ROM has at $AD09: A = $FF,
-       then the last byte stored (' ', the handler's high byte, 'H') */
-    static const uint8_t want_a[] = { 0xFF, ' ', ROM_CMD_SET_SPEED >> 8, 'H' };
-    static const uint8_t want_x[] = { 0, 1, 4, 5 };
-    static const uint8_t want_y[] = { 0, 1, 1, 2 };
-    CHECK_EQ(g_ncalls, 4);
-    for (unsigned i = 0; i < 4 && i < g_ncalls; i++) {
-        CHECK_EQ(g_calls[i].a, want_a[i]);
-        CHECK_EQ(g_calls[i].x, want_x[i]);
-        CHECK_EQ(g_calls[i].y, want_y[i]);
-    }
+    CHECK_EQ(g_ncalls, 4);                      /* isr_par_ready once per character read (X = 0, 1, 4, 5) */
     check_par_ready_calls();
     CHECK(!g_f.fault);
 }

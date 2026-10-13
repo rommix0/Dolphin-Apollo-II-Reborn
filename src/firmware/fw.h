@@ -12,6 +12,7 @@
 #define FW_TMP_78    0x0078   /* zero-page scratch, unnamed in the annotations: a saved Y, byte counters;
                                  par_scale_duration's saved Y ($C2A0; not written for a duration of 0) */
 #define FW_TMP_75    0x0075   /* zero-page scratch, unnamed in the annotations: tn_convert_clause's saved X;
+                                 isr_set_volume's inverted level << 3 ($ACEF);
                                  frm_clamp_mark_space's 2 x b10 ($B936), frm_raise_formants' (b10 - 32) / 4 ($B969)
                                  and frm_transition_flags' count of the rising amplitudes ($BAA7-$BAB7) */
 #define FW_TMP_76    0x0076   /* zero-page scratch, unnamed in the annotations: cmd_scan_clause's resume index,

@@ -12,7 +12,7 @@
 /* $CA71: pros_phoneme_ptr = pros_seg_phoneme ($0200), pros_duration_ptr = pros_seg_duration ($0600),
    pros_pitch_ptr = pros_seg_pitch ($0A00), pros_flags_ptr = pros_seg_flags ($0E00). The ROM leaves A = $0E. */
 void pros_reset_seg_ptrs(fw *f);
-/* $CA3B: the ROM isr_par_ready with A = a, X = x, Y = y first, then one segment: ph_phoneme, ph_duration, and
+/* $CA3B: isr_par_ready (C since M4.6b) with A = a, X = x, Y = y first, then one segment: ph_phoneme, ph_duration, and
    pros_last_target = pros_target + cmd_pitch_step (8 bits) as its pitch; flags $80. A, X and Y are preserved
    (isr_par_ready preserves them; the ROM pushes A and Y after it and pulls them at $CA6D). */
 void pros_append_segment(fw *f, uint8_t a, uint8_t x, uint8_t y);

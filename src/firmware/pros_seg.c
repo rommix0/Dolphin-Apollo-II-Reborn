@@ -1,6 +1,5 @@
 #include "pros_seg.h"
 #include "fw_ops.h"
-#include "isr_addr.h"
 
 /* STA (ptr),Y: the 16-bit pointer plus y. The pointers start at the arrays ($0200, $0600, $0A00, $0E00) and only
    move up one page per 256 segments; a clause makes far fewer than 1,280 segments (at most 3 per phonetic symbol
@@ -45,8 +44,7 @@ void pros_reset_seg_ptrs(fw *f)
 
 void pros_append_segment(fw *f, uint8_t a, uint8_t x, uint8_t y)
 {
-    fw_regs r = { a, x, y, 0 };
-    fw_rom_call(f, ROM_ISR_PAR_READY, &r, FW_ROM_CALL_BUDGET);
+    fw_par_ready(f, (fw_regs){ a, x, y, 0 });
     uint8_t i = fw_rd8(f, PROS_SEG_COUNT);
     seg_store(f, PROS_PHONEME_PTR, i, fw_rd8(f, PH_PHONEME));
     seg_store(f, PROS_DURATION_PTR, i, fw_rd8(f, PH_DURATION));

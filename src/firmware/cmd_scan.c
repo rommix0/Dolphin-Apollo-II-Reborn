@@ -1,6 +1,6 @@
 #include "cmd_scan.h"
 #include "cmd_match.h"
-#include "isr_addr.h"
+#include "isr_serial.h"
 #include "data/fw_data.h"
 
 void cmd_scan_clause(fw *f)
@@ -11,7 +11,7 @@ void cmd_scan_clause(fw *f)
     fw_wr8(f, (uint16_t)(CMD_POSITIONS + x), a);    /* cmd_positions[0] = $FF: no command yet */
     do {                                            /* $AD09: one boot_clause character */
         fw_regs r = { a, x, y, 0 };
-        fw_rom_call(f, ROM_ISR_PAR_READY, &r, FW_ROM_CALL_BUDGET);   /* parallel mode: ready for the next byte */
+        isr_par_ready(f, &r);                                    /* parallel mode: ready for the next byte */
         x = r.x;
         y = r.y;
         a = fw_rd8(f, (uint16_t)(BOOT_CLAUSE + x++));

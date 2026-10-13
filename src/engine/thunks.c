@@ -26,6 +26,7 @@
 #include "firmware/ser.h"
 #include "firmware/cmd_imm.h"
 #include "firmware/isr_serial.h"
+#include "firmware/isr_dsp.h"
 #include "firmware/data/fw_data.h"
 
 #ifdef _MSC_VER
@@ -254,6 +255,22 @@ static void cmd_run_due_regs(fw *f, cpu740 *c)
     c->y = fw_rd8(f, CMD_NEXT);
 }
 
+/* isr_set_volume $ACE8: A in (the volume). A = the value written to P3 ($ACF7 STA P3, after AND P3 / ORA $75), X and
+   Y untouched, out. boot_reset ($A642) calls boot_read_dip next, which loads A first ($ADE4 LDA P4) and reads no X
+   or Y; boot_loop_play calls par_play after $B2C4, which writes A, X and Y before reading them (its thunk), and
+   isr_speech_stop after $B2D2, which keeps all three to boot_loop_play's exit (its thunk); isr_volume_half ($B46F)
+   returns them to its callers (its row); cmd_ev_set_volume ($BCEF) returns them to par_play's $B892 JMP par_play
+   (LDX first). No caller reads a flag. The C boot_loop_play, isr_volume_half and cmd_ev_set_volume call the C, so
+   in "all" mode the hook fires from boot_reset only. Declared: A, X, Y. */
+static void isr_set_volume_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_set_volume(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
 /* cmd_scan_clause $ACFA: no register input or output (boot_loop_text calls tn_convert_clause next, which starts
    with LDM/LDX #0 and reads no register) */
 static void cmd_scan_clause_regs(fw *f, cpu740 *c)
@@ -396,6 +413,20 @@ static void frm_copy_rest_frame_regs(fw *f, cpu740 *c)
 {
     fw_regs r = { c->a, c->x, c->y, 0 };
     frm_copy_rest_frame(f, &r);
+    c->a = r.a;
+    c->x = r.x;
+    c->y = r.y;
+}
+
+/* isr_volume_half $B46C: no register input (LDA cmd_volume first). A = the value written to P3, X and Y untouched, out
+   (isr_set_volume). Its callers, boot_play_body $B2BC and $B2CA, call isr_wait_frame next (BBC0 / LDM: none read),
+   then load A ($B2C2 LDA cmd_volume, $B2D0 LDA #0) and hand X and Y to isr_set_volume, par_play and isr_speech_stop
+   (their rows). No caller reads a flag. The C boot_loop_play calls the C, so it fires only while the ROM
+   boot_loop_play runs. Declared: A, X, Y. */
+static void isr_volume_half_regs(fw *f, cpu740 *c)
+{
+    fw_regs r = { c->a, c->x, c->y, 0 };
+    isr_volume_half(f, &r);
     c->a = r.a;
     c->x = r.x;
     c->y = r.y;
@@ -1049,6 +1080,22 @@ static void ser_tx_service_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_servic
    cmd_run_due, which reloads Y at $A880): none read. Declared: A, X, Y. */
 static void ser_tx_records_regs(fw *f, cpu740 *c) { ser_regs(f, c, ser_tx_records); }
 
+/* isr_par_ready $C5D6: A, X and Y in and out as they came (PHA at $C5D6, PLA at $C5EA; X and Y untouched).
+   boot_get_clause reads A and X after $A6FC ($A700 CMP #$0D, $A706 / $A70D STA $1B00,X) and hands all three to
+   ser_tx_service after $A6D0 (its thunk); boot_reset ($A672) calls cmd_apply_speaker, which takes X and Y (its thunk);
+   boot_queue_string ($C62B) pulls Y and A next ($C62E-$C630). No caller reads a flag (CLI, BBC0, JSR or PLA follow).
+   The C callers (tn_convert_clause, cmd_scan_clause, par_play, the prosody passes) call the C, so in "all" mode the
+   hook fires from boot_reset, boot_get_clause and boot_queue_string. Declared: A, X, Y. */
+static void isr_par_ready_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_par_ready); }
+
+/* isr_par_hold $C5DE: A, X and Y in and out as they came (PHA at $C5DE, PLA at $C5EA; X and Y untouched). boot_reset
+   ($A66F) calls isr_par_ready (which keeps them) and cmd_apply_speaker, which takes X and Y (its thunk);
+   boot_get_clause ($A6E4) reads X ($A706 / $A70D STA $1B00,X) after loading Y and A ($A6EB LDY #0, $A6ED LDA);
+   boot_loop_play ($B2B3) calls par_play_start, which reads none (its thunk); boot_queue_string ($C617) reads the Y it
+   set before ($C615 LDY #0; $C61C LDA ($46),Y). No caller reads a flag. The C boot_loop_play calls the C, so in
+   "all" mode the hook fires from boot_reset, boot_get_clause and boot_queue_string. Declared: A, X, Y. */
+static void isr_par_hold_regs(fw *f, cpu740 *c) { ser_regs(f, c, isr_par_hold); }
+
 /* ser_rx_next_page $C5EC: Y in; Y = the next page out, A and X untouched. ser_rx_put ($C3DC) stores Y and returns;
    boot_get_clause ($A6F8) stores Y, then reads A (the byte it loaded, $A700 CMP #$0D) and X ($A706 / $A70D STA
    $1B00,X). No caller reads a flag. Declared: A, X, Y. */
@@ -1072,9 +1119,8 @@ static void util_shl4_regs(fw *f, cpu740 *c)
 
 /* util_shl3 $C657: A in; A << 3 out (8 bits); X and Y untouched. Callers read A: isr_set_volume ($ACEF STA $75),
    cmd_ev_sound_start ($BBAA TAX); the ROM util_shl4 falls into it ($C656 ASL), so its callers' reads apply too (A,
-   above). No caller reads a flag (STA, TAX follow). Fires in "all" mode from the ROM isr_set_volume, which stays
-   ROM (M4.6; called by boot_reset $A642, boot_loop_play $B2C4/$B2D2, isr_volume_half $B46F and cmd_ev_set_volume
-   $BCEF, the C ones through rom_call). Declared: A, X, Y. */
+   above). No caller reads a flag (STA, TAX follow). Both callers are C (cmd_ev_sound_start since M4.4b,
+   isr_set_volume since M4.6b) and inline it: in "all" mode it never fires. Declared: A, X, Y. */
 static void util_shl3_regs(fw *f, cpu740 *c)
 {
     (void)f;
@@ -1242,6 +1288,7 @@ static void ph_lengthen_count_regs(fw *f, cpu740 *c)
 THUNK(cmd_apply_speaker)
 THUNK(boot_loop_play)
 THUNK(cmd_run_due)
+THUNK(isr_set_volume)
 THUNK(cmd_scan_clause)
 THUNK(cmd_match_table)
 THUNK(lts_affix_next)
@@ -1258,6 +1305,7 @@ THUNK(tn_convert_clause)
 THUNK(par_setup_voice)
 THUNK(frm_build_rest_frame)
 THUNK(frm_copy_rest_frame)
+THUNK(isr_volume_half)
 THUNK(par_play)
 THUNK(frm_snapshot)
 THUNK(frm_clamp_mark_space)
@@ -1310,6 +1358,8 @@ THUNK(ser_hex_digit)
 THUNK(ser_tx_hex)
 THUNK(ser_tx_service)
 THUNK(ser_tx_records)
+THUNK(isr_par_ready)
+THUNK(isr_par_hold)
 THUNK(ser_rx_next_page)
 THUNK(ser_tx_next_page)
 THUNK(util_shl4)
@@ -1338,6 +1388,7 @@ const fw_replacement fw_replacements[] = {
     { "cmd_apply_speaker",  0xA78C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_apply_speaker },
     { "boot_loop_play",     0xA7D4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_loop_play, true },
     { "cmd_run_due",        0xA880, FW_OUT_X | FW_OUT_Y, t_cmd_run_due },
+    { "isr_set_volume",     0xACE8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_set_volume },
     { "cmd_scan_clause",    0xACFA, 0,                   t_cmd_scan_clause },
     { "cmd_match_table",    0xADBF, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_match_table },
     { "lts_affix_next",     0xAF11, FW_OUT_A | FW_OUT_Y, t_lts_affix_next },
@@ -1354,6 +1405,7 @@ const fw_replacement fw_replacements[] = {
     { "par_setup_voice",    0xB3A4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_setup_voice },
     { "frm_build_rest_frame", 0xB41D, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_build_rest_frame },
     { "frm_copy_rest_frame", 0xB445, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_copy_rest_frame },
+    { "isr_volume_half",    0xB46C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_volume_half },
     { "par_play",           0xB877, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_par_play, true },
     { "frm_snapshot",       0xB917, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_snapshot },
     { "frm_clamp_mark_space", 0xB930, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_frm_clamp_mark_space },
@@ -1408,6 +1460,8 @@ const fw_replacement fw_replacements[] = {
     { "ser_tx_hex",         0xC571, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_hex },
     { "ser_tx_service",     0xC581, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_service },
     { "ser_tx_records",     0xC5A4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_records },
+    { "isr_par_ready",      0xC5D6, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_par_ready },
+    { "isr_par_hold",       0xC5DE, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_par_hold },
     { "ser_rx_next_page",   0xC5EC, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_rx_next_page },
     { "ser_tx_next_page",   0xC5F5, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_ser_tx_next_page },
     { "util_shl4",          0xC656, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_util_shl4 },

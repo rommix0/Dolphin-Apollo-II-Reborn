@@ -720,18 +720,18 @@ static void test_bridge_deadline(void)
 
 static uint64_t g_seen_deadline;
 
-/* An observer at isr_par_ready $C5D6: records the bridge's deadline at its first call and sets ser_abort bit 0. */
-static bool hook_par_ready_abort(machine *m, void *user)
+/* An observer at util_shl3 $C657, here an event handler in ROM: records the bridge's deadline at its first call. */
+static bool hook_record_deadline(machine *m, void *user)
 {
     const fw_bridge *b = user;
+    (void)m;
     if (!g_seen_deadline)
         g_seen_deadline = b->deadline;
-    m->ram[SER_ABORT] |= 1;
     return false;
 }
 
-/* A fresh real-ROM machine (the timer off: isr_frame_flag is never set) with the par_play thunk hooked, entered at
-   $B877 as a JSR from $9000 would enter it. */
+/* A fresh real-ROM machine (the timer off: no interrupt comes and isr_frame_flag is never set) with the par_play thunk
+   hooked, entered at $B877 as a JSR from $9000 would enter it. */
 static void enter_par_play(const uint8_t *rom, size_t len, fw_bridge *b)
 {
     CHECK(machine_init(&g_m, rom, len, NULL));
@@ -743,9 +743,10 @@ static void enter_par_play(const uint8_t *rom, size_t len, fw_bridge *b)
 }
 
 /* A waits thunk whose flag never comes faults instead of hanging. The outermost thunk sets the deadline (entry
-   cycles + FW_ROM_CALL_SPEECH_BUDGET) and clears it when it ends: here par_play aborts at its first isr_par_ready and
-   isr_wait_frame $B465 waits out its own budget. A deadline already set (as by an outer thunk) is left alone, and
-   par_play's isr_par_ready loop, every call of which returns, ends at it with a fault at isr_par_ready. */
+   cycles + FW_ROM_CALL_SPEECH_BUDGET), seen by an event handler run in ROM ($C657, an event due at segment 0), and
+   clears it when it ends: here par_play, with a mute pending, then goes straight to its end, and isr_wait_frame
+   $B465 waits out its budget (FW_ROM_CALL_BUDGET, before the deadline). A deadline already set (as by an outer thunk)
+   is left alone, and par_play's wait for an interrupt at its back edge (M4.6b) ends at it with a fault at $B877. */
 static void test_waits_thunk_deadline(void)
 {
     static fw_bridge b;
@@ -755,11 +756,17 @@ static void test_waits_thunk_deadline(void)
         SKIP("ROM not found (set APOLLO2_ROM)");
 
     enter_par_play(rom, len, &b);
-    CHECK(machine_hook(&g_m, ROM_ISR_PAR_READY, hook_par_ready_abort, &b));
+    CHECK(machine_hook(&g_m, 0xC657, hook_record_deadline, &b));
+    g_m.ram[CMD_EV_COUNT] = 1;                    /* an event due at par_seg_index 0, its handler $C657 */
+    g_m.ram[CMD_EV_HANDLERS] = 0x57;
+    g_m.ram[CMD_EV_HANDLERS + 1] = 0xC6;
+    g_m.ram[SER_ABORT] |= 1;
     g_seen_deadline = 0;
     uint64_t c0 = g_m.cpu.cycles;
     CHECK(!machine_step(&g_m));
     CHECK_EQ(g_seen_deadline, c0 + FW_ROM_CALL_SPEECH_BUDGET);
+    CHECK(g_m.cpu.cycles >= c0 + FW_ROM_CALL_BUDGET);
+    CHECK(g_m.cpu.cycles < c0 + FW_ROM_CALL_BUDGET + 100);
     CHECK_EQ(b.deadline, 0);   /* cleared by the outermost thunk */
     CHECK_EQ(g_m.fault, MFAULT_FIRMWARE);
     CHECK_EQ(g_m.fault_addr, ROM_ISR_WAIT_FRAME);
@@ -771,7 +778,7 @@ static void test_waits_thunk_deadline(void)
     CHECK(!machine_step(&g_m));
     CHECK_EQ(b.deadline, deadline);   /* not the outermost: left alone */
     CHECK_EQ(g_m.fault, MFAULT_FIRMWARE);
-    CHECK_EQ(g_m.fault_addr, ROM_ISR_PAR_READY);
+    CHECK_EQ(g_m.fault_addr, ROM_PAR_PLAY);
     CHECK(g_m.cpu.cycles >= deadline);
     CHECK(g_m.cpu.cycles < deadline + 100);
     CHECK_EQ(g_m.cpu.pc, ROM_PAR_PLAY);
