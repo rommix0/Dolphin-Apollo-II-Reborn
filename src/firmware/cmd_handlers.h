@@ -39,6 +39,10 @@ void cmd_echo(fw *f, uint8_t x, uint8_t a);               /* $AB99 @E */
 void cmd_query(fw *f, uint8_t x, uint8_t a);              /* $ABD3 @c? */
 void cmd_list_languages(fw *f, uint8_t x, uint8_t a);     /* $ABBE @L */
 
+/* Bank switching (bank.c, M4.6c1) */
+void bank_cmd_select(fw *f, uint8_t x, uint8_t a);        /* $ABAF @=: the bank cmd_hex_value(a); enters it, or returns
+                                                             when it is absent */
+
 /* The Y a ROM handler is entered with: cmd_next - 1 (cmd_run_due's LDY, before cmd_run_next's INC). */
 static inline uint8_t cmd_handler_y(const fw *f) { return (uint8_t)(fw_rd8(f, CMD_NEXT) - 1); }
 

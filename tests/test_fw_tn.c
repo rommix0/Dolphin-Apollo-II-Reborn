@@ -1,8 +1,9 @@
 /* Unit checks of tn_convert_clause and tn_append_phonetic on the converted data, with a mock host that records
    every ROM call, every wait and, in parallel mode (boot_dip bit 0, set by setup_n), every isr_par_ready and
    isr_par_hold (C since M4.6b) by its write of P0. tn_convert_clause runs the deferred commands through the C
-   cmd_run_due; the tests queue commands whose handler stays in ROM (bank_cmd_select), so the mock sees each one as
-   a cmd_run_next call. The full proof is the live differential test (diff_lts) and the hybrid goldens
+   cmd_run_due; the tests queue commands whose handler is the ROM's (an address of the scan's NUL bug, which the C
+   cmd_run_next hands to the ROM cmd_run_next through an unhooked call since M4.6c1), so the mock sees each one as a
+   cmd_run_next call. The full proof is the live differential test (diff_lts) and the hybrid goldens
    (golden_hybrid). */
 #include <string.h>
 #include "test.h"
@@ -40,9 +41,9 @@ static void record(fw *f, uint16_t addr, const fw_regs *r, uint64_t budget)
     g_ncalls++;
 }
 
-/* Records every call with tn_phon_len at that moment. cmd_run_next ($A893) plays the ROM's bookkeeping
-   (cmd_next += 1, cmd_next_pos = cmd_positions[cmd_next]); any other call fails (speech timing is C since
-   M4.6b). */
+/* Records every call with tn_phon_len at that moment, hooked or not (the C makes only the unhooked call of the NUL
+   bug's fallback). cmd_run_next ($A893) plays the ROM's bookkeeping (cmd_next += 1, cmd_next_pos =
+   cmd_positions[cmd_next]); any other call fails (speech timing is C since M4.6b). */
 static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     fw *f = ctx;
@@ -100,6 +101,7 @@ static void setup_n(const char *text, size_t n)
     memset(g_ram, 0, sizeof g_ram);
     g_host.ctx = &g_f;
     g_host.rom_call = mock_rom_call;
+    g_host.rom_call_unhooked = mock_rom_call;
     g_host.set_low_window = mock_window;
     g_host.read_sfr = mock_read_sfr;
     g_host.write_sfr = mock_write_sfr;
@@ -118,11 +120,12 @@ static void setup_n(const char *text, size_t n)
 
 static void setup(const char *text) { setup_n(text, strlen(text)); }
 
-/* Queues command n as cmd_scan_clause does, due at cmd_text position pos, with a handler that stays in ROM. */
+/* Queues command n as cmd_scan_clause does, due at cmd_text position pos, with a handler the ROM's cmd_run_next runs:
+   $D300, the address the NUL bug queues after "@A" and a zero (M4.6c1 spec 2.5). */
 static void queue(uint8_t n, uint8_t pos)
 {
     g_ram[CMD_POSITIONS + n] = pos;
-    fw_wr16(&g_f, (uint16_t)(CMD_HANDLERS + 2 * n), ROM_BANK_CMD_SELECT);
+    fw_wr16(&g_f, (uint16_t)(CMD_HANDLERS + 2 * n), 0xD300);
     g_ram[CMD_ARG_INDEX + n] = n;
     g_ram[CMD_COUNT] = (uint8_t)(n + 1);
     g_ram[CMD_NEXT_POS] = g_ram[CMD_POSITIONS];

@@ -1,5 +1,7 @@
 #include "bank.h"
 #include "bank_addr.h"
+#include "cmd_handlers.h"
+#include "cmd_match.h"
 
 #define SFR_P2  0xF0
 
@@ -121,6 +123,16 @@ void bank_safe_char(fw *f, fw_regs *r)
     (void)f;
     if (r->a < 0x20)                                               /* CMP #$20 / BCS */
         r->a = '*';
+}
+
+void bank_cmd_select(fw *f, uint8_t x, uint8_t a)
+{
+    fw_regs r = { cmd_hex_value(f, a), x, cmd_handler_y(f), 0 };  /* JSR cmd_hex_value: A the bank, X and Y kept */
+    bank_load_ramcode(f, &r);                                      /* JSR bank_load_ramcode */
+    bank_enter(f, &r);                                             /* JSR bank_enter: back only for an absent bank */
+    if (f->unwound)
+        return;
+    bank_find_current(f, &r);                                      /* JSR bank_find_current; JMP cmd_run_done */
 }
 
 void bank_find_current(fw *f, fw_regs *r)

@@ -15,6 +15,8 @@
 #include "firmware/data/fw_data.h"
 
 #define MAX_CALLS 1024
+#define NUL_BUG_ADDR 0xD300   /* a handler address of the scan's NUL bug: "@A" then a zero (M4.6c1 spec 2.5) */
+#define NUL_BUG_ZP   0x002A   /* another: "@M5" then a zero */
 
 /* cmd_table entries (match order, spec 4) */
 enum {
@@ -47,10 +49,13 @@ static unsigned g_ncalls;
 static uint8_t g_before[FW_RAM_SIZE];   /* RAM as a test left it: the C must not touch it before a ROM cmd_run_next */
 static unsigned g_touched;              /* ROM cmd_run_next calls that found RAM changed since g_before */
 static uint8_t g_p0;                    /* the port P0 the C isr_par_ready reads and writes in parallel mode */
+static uint8_t g_p2;                    /* the port P2 the C bank_cmd_select reads and writes */
+static unsigned g_hooked;               /* ROM calls through rom_call (hooked): the C makes none since M4.6c1 */
 
-/* Records every ROM call and answers the routines the C calls as the ROM would; any other call fails. The reply
-   handlers call the C ser_tx_* routines (M4.6a), which make no ROM call. */
-static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
+/* Records every unhooked ROM call and answers the one the C makes, the ROM cmd_run_next of the NUL-bug fallback, as
+   the ROM would; any other call fails. The reply handlers call the C ser_tx_* routines (M4.6a), which make no ROM
+   call. */
+static fw_call_result mock_rom_call_unhooked(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
 {
     (void)ctx;
     if (g_ncalls < MAX_CALLS) {
@@ -75,15 +80,36 @@ static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64
         memcpy(g_before, g_ram, sizeof g_ram);
         return FW_CALL_RETURNED;   /* X back as it was (cmd_run_done) */
     }
-    return FW_CALL_FAILED;   /* isr_par_ready is C since M4.6b */
+    return FW_CALL_FAILED;
+}
+
+/* A hooked ROM call: none is made (isr_par_ready is C since M4.6b, cmd_run_next since M4.6c1); counted, failed. */
+static fw_call_result mock_rom_call(void *ctx, uint16_t addr, fw_regs *r, uint64_t budget)
+{
+    (void)ctx;
+    (void)addr;
+    (void)r;
+    (void)budget;
+    g_hooked++;
+    return FW_CALL_FAILED;
+}
+
+/* Another bank's ROM, for bank_cmd_select: every socket is empty. */
+static uint8_t mock_read_bank(void *ctx, uint16_t addr)
+{
+    (void)ctx;
+    (void)addr;
+    return 0xFF;
 }
 
 /* The C isr_par_ready (M4.6b) in parallel mode (scan_setup sets boot_dip bit 0): SEB3 P0, one read and one write of
-   P0 ($F6), recorded as a call of ROM_ISR_PAR_READY without registers (the C passes them to nothing). Any other SFR
-   access fails the test. */
+   P0 ($F6), recorded as a call of ROM_ISR_PAR_READY without registers (the C passes them to nothing). P2 ($F0) is the
+   bank_cmd_select's (g_p2). Any other SFR access fails the test. */
 static uint8_t mock_read_sfr(void *ctx, uint8_t addr)
 {
     (void)ctx;
+    if (addr == 0xF0)
+        return g_p2;
     CHECK_EQ(addr, 0xF6);
     return g_p0;
 }
@@ -91,6 +117,10 @@ static uint8_t mock_read_sfr(void *ctx, uint8_t addr)
 static void mock_write_sfr(void *ctx, uint8_t addr, uint8_t value)
 {
     (void)ctx;
+    if (addr == 0xF0) {
+        g_p2 = value;
+        return;
+    }
     CHECK_EQ(addr, 0xF6);
     CHECK(value & 0x08);
     g_p0 = value;
@@ -106,12 +136,16 @@ static void setup(void)
     memset(g_ram, 0, sizeof g_ram);
     g_host.ctx = &g_f;
     g_host.rom_call = mock_rom_call;
-    g_host.set_low_window = NULL;   /* no command routine in C drives P2 (bank_cmd_select stays in ROM) */
+    g_host.set_low_window = NULL;   /* no command routine in C switches the window */
     g_host.read_sfr = mock_read_sfr;
     g_host.write_sfr = mock_write_sfr;
+    g_host.read_bank = mock_read_bank;
+    g_host.rom_call_unhooked = mock_rom_call_unhooked;
     g_ncalls = 0;
     g_touched = 0;
+    g_hooked = 0;
     g_p0 = 0;
+    g_p2 = P2_MAIN_BANK;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
     fw_wr16(&g_f, SER_TX_READ, SER_TX_RING);
     fw_wr16(&g_f, SER_TX_WRITE, SER_TX_RING);
@@ -481,7 +515,7 @@ static void test_run_due_nothing_queued(void)
 static void test_run_due_position(void)
 {
     setup();
-    queue(0, 3, ROM_BANK_CMD_SELECT, 5);
+    queue(0, 3, NUL_BUG_ADDR, 5);
     g_ram[CMD_POSITIONS + 1] = 0xFF;            /* the scan leaves it stale */
     memcpy(g_before, g_ram, sizeof g_ram);
     cmd_run_due(&g_f, 2);                       /* not due at 2 */
@@ -489,25 +523,27 @@ static void test_run_due_position(void)
     cmd_run_due(&g_f, 3);
     CHECK_EQ(g_ncalls, 1);
     CHECK_EQ(g_calls[0].addr, ROM_CMD_RUN_NEXT);
+    CHECK_EQ(g_calls[0].a, 3);                  /* A = X (cmd_run_next's TXA) */
     CHECK_EQ(g_calls[0].x, 3);                  /* X = the position, as at $A88D */
-    CHECK_EQ(g_calls[0].y, 0);                  /* Y = cmd_next ($A880 LDY): bank_load_ramcode saves it */
+    CHECK_EQ(g_calls[0].y, 0);                  /* Y = cmd_next ($A880 LDY) */
     CHECK_EQ(g_calls[0].budget, FW_ROM_CALL_BUDGET);
     CHECK_EQ(g_touched, 0);                     /* the C left the bookkeeping to the ROM */
     CHECK_EQ(g_calls[0].vector, 0);
     CHECK_EQ(g_ram[CMD_NEXT], 1);               /* the mock's (the ROM's) bookkeeping */
     cmd_run_due(&g_f, 3);                       /* cmd_next = cmd_count: nothing more */
     CHECK_EQ(g_ncalls, 1);
+    CHECK_EQ(g_hooked, 0);                      /* the fallback is unhooked (M4.6c1 spec 2.5) */
     CHECK(!g_f.fault);
 }
 
 /* Commands due at one position run in queue order; an unknown handler address (the latent NUL bug of the scan,
-   spec 2.6) goes to the ROM like bank_cmd_select. */
+   spec 2.6) goes to the ROM cmd_run_next, through an unhooked call. */
 static void test_run_due_queue_order(void)
 {
     setup();
-    queue(0, 2, ROM_BANK_CMD_SELECT, 4);
+    queue(0, 2, NUL_BUG_ADDR, 4);
     queue(1, 2, 0x1234, 6);
-    queue(2, 5, ROM_BANK_CMD_SELECT, 8);
+    queue(2, 5, NUL_BUG_ZP, 8);
     g_ram[CMD_POSITIONS + 3] = 0xFF;
     memcpy(g_before, g_ram, sizeof g_ram);
     cmd_run_due(&g_f, 2);
@@ -521,12 +557,13 @@ static void test_run_due_queue_order(void)
         CHECK_EQ(g_calls[i].next, i);
     }
     CHECK_EQ(g_touched, 0);
+    CHECK_EQ(g_hooked, 0);
     CHECK_EQ(g_ram[CMD_NEXT], 3);
     CHECK(!g_f.fault);
 }
 
 /* A C handler gets cmd_run_next's writes from the C (cmd_vector, cmd_next, cmd_next_pos) and runs with
-   A = boot_clause[cmd_arg_index]; a ROM handler after it in the queue still goes to the ROM. */
+   A = boot_clause[cmd_arg_index]; an unknown address after it in the queue still goes to the ROM. */
 static void test_run_due_c_handler(void)
 {
     setup();
@@ -543,11 +580,11 @@ static void test_run_due_c_handler(void)
     setup();
     g_ram[BOOT_CLAUSE + 6] = '1';
     queue(0, 4, ROM_CMD_SET_SPELL, 6);
-    queue(1, 4, ROM_BANK_CMD_SELECT, 9);
+    queue(1, 4, NUL_BUG_ADDR, 9);
     g_ram[CMD_POSITIONS + 2] = 0x77;
     cmd_run_due(&g_f, 4);
     CHECK_EQ(g_ram[CMD_SPELL], 1);
-    CHECK_EQ(g_ncalls, 1);                      /* only bank_cmd_select goes to the ROM */
+    CHECK_EQ(g_ncalls, 1);                      /* only the unknown address goes to the ROM */
     CHECK_EQ(g_calls[0].addr, ROM_CMD_RUN_NEXT);
     CHECK_EQ(g_calls[0].x, 4);
     CHECK_EQ(g_calls[0].y, 1);
@@ -1163,7 +1200,8 @@ static void test_list_languages(void)
 }
 
 /* Every pattern's handler runs as C through the dispatcher (a dropped k_handlers row would fall back to the ROM
-   cmd_run_next, which behaves the same and would go unnoticed); only bank_cmd_select still falls back to ROM. */
+   cmd_run_next, which behaves the same and would go unnoticed), bank_cmd_select too since M4.6c1: "@A5" makes it
+   select bank 5, an empty socket, and return. */
 static void test_run_due_all_rows(void)
 {
     for (size_t i = 0; i < fw_cmd_pattern_count; i++) {
@@ -1179,7 +1217,8 @@ static void test_run_due_all_rows(void)
         cmd_run_due(&g_f, 0);
         CHECK_EQ(g_ram[CMD_NEXT], 1);
         CHECK_EQ(g_ram[CMD_NEXT_POS], 0xFF);
-        CHECK_EQ(count(ROM_CMD_RUN_NEXT), handler == ROM_BANK_CMD_SELECT ? 1u : 0u);
+        CHECK_EQ(count(ROM_CMD_RUN_NEXT), 0);
+        CHECK_EQ(g_hooked, 0);
         CHECK(!g_f.fault);
     }
 }

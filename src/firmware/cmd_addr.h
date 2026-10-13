@@ -27,7 +27,7 @@
 #define ROM_CMD_SET_VOICING       0xAB70   /* "B#" */
 #define ROM_CMD_MARK_INDEX        0xAB2E   /* "I+" */
 #define ROM_CMD_SOUND             0xA8C0   /* "T*" */
-#define ROM_BANK_CMD_SELECT       0xABAF   /* "=#": bank switching (P2), stays in ROM */
+#define ROM_BANK_CMD_SELECT       0xABAF   /* "=#": bank switching (P2; bank.c since M4.6c1) */
 #define ROM_CMD_LIST_LANGUAGES    0xABBE   /* "L" */
 #define ROM_CMD_SET_SPEAKER       0xAA61   /* "K#" */
 #define ROM_CMD_IGNORE            0xABDC   /* "G#" (listed twice in cmd_table), "I^", "+*" */
@@ -40,8 +40,8 @@
 #define ROM_CMD_EV_SET_VOICING    0xBCEA   /* cmd_set_voicing */
 #define ROM_CMD_EV_SET_VOLUME     0xBCED   /* cmd_set_volume */
 
-/* ROM routines the C calls through fw_rom_call. The serial routines and the immediate handlers are C since M4.6a
-   (their ROM addresses are in ser_addr.h), isr_par_ready since M4.6b (isr_addr.h). */
-#define ROM_CMD_RUN_NEXT          0xA893   /* dispatch cmd_handlers[cmd_next] (the dispatcher's fallback); X kept */
+/* The ROM dispatcher (C since M4.6c1, cmd_run.c). The C calls it through fw_rom_call_unhooked for a handler address of
+   the NUL bug only (M4.6c1 spec 2.5). */
+#define ROM_CMD_RUN_NEXT          0xA893   /* dispatch cmd_handlers[cmd_next]; X kept (cmd_run_done $A8BD) */
 
 #endif

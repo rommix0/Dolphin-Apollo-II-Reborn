@@ -7,6 +7,8 @@
 #include "engine/thunks.h"
 #include "firmware/bank.h"
 #include "firmware/bank_addr.h"
+#include "firmware/cmd_addr.h"
+#include "firmware/cmd_run.h"
 #include "firmware/data/fw_data.h"
 
 #define MAX_LOG 512
@@ -585,6 +587,111 @@ static void test_enter_present(void)
     CHECK(!g_f.fault);
 }
 
+/* ---- the dispatcher (M4.6c1 Task 5) ---- */
+
+/* Queues command n at position pos with handler h and its argument at boot_clause[arg] = c; cmd_count = n + 1,
+   cmd_next_pos = cmd_positions[0]. */
+static void queue(uint8_t n, uint8_t pos, uint16_t h, uint8_t arg, char c)
+{
+    g_ram[CMD_POSITIONS + n] = pos;
+    g_ram[CMD_HANDLERS + 2 * n] = (uint8_t)h;
+    g_ram[CMD_HANDLERS + 2 * n + 1] = (uint8_t)(h >> 8);
+    g_ram[CMD_ARG_INDEX + n] = arg;
+    g_ram[BOOT_CLAUSE + arg] = (uint8_t)c;
+    g_ram[CMD_COUNT] = (uint8_t)(n + 1);
+    g_ram[CMD_NEXT_POS] = g_ram[CMD_POSITIONS];
+}
+
+/* The cmd_run_next row: A and X declared (cmd_run_done), a main-ROM hook. */
+static void test_run_next_row(void)
+{
+    const fw_replacement *r = fw_replacement_find("cmd_run_next");
+    CHECK(r != NULL);
+    if (!r)
+        return;
+    CHECK_EQ(r->addr, ROM_CMD_RUN_NEXT);
+    CHECK_EQ(r->outputs, FW_OUT_A | FW_OUT_X);
+    CHECK(!r->waits && !r->isr && !r->ramcode);
+}
+
+/* cmd_run_next with an address no C handler has (the scan's NUL bug, $D300 after "@A" and a zero; M4.6c1 spec 2.5 and
+   4.3): RAM untouched (cmd_vector, cmd_next and cmd_next_pos are the ROM's to write), one unhooked ROM call of $A893
+   with X = the position, Y = cmd_next and A = X; a failed call is a fault; an unwound one stops cmd_run_due. */
+static void test_run_next_unknown(void)
+{
+    static const event want[] = { { EV_CALL, ROM_CMD_RUN_NEXT, 4, 4, 1 } };
+    setup();
+    queue(1, 4, 0xD300, 3, 'x');
+    g_ram[CMD_NEXT] = 1;
+    static uint8_t before[0x10000];
+    memcpy(before, g_ram, sizeof before);
+    CHECK(cmd_run_next(&g_f, 4));
+    check_log(want, 1);
+    CHECK(memcmp(before, g_ram, sizeof before) == 0);
+    CHECK(!g_f.fault);
+
+    setup();
+    queue(0, 0, 0x002A, 3, 'x');
+    g_call_result = FW_CALL_FAILED;
+    CHECK(!cmd_run_next(&g_f, 0));
+    CHECK(g_f.fault);
+    CHECK_EQ(g_f.fault_addr, ROM_CMD_RUN_NEXT);
+
+    setup();
+    queue(0, 0, 0xD300, 3, 'x');
+    queue(1, 0, 0xD300, 3, 'x');
+    g_call_result = FW_CALL_UNWOUND;
+    cmd_run_due(&g_f, 0);
+    CHECK_EQ(g_nlog, 1);                          /* the second is not run */
+    CHECK(g_f.unwound);
+    CHECK(!g_f.fault);
+}
+
+/* bank_cmd_select through cmd_run_next (the C dispatch of $ABAF): "@=5" (an empty socket) loads the RAM copy, selects
+   and probes bank 5, restores P2 and finds the current bank (P2 read once more), and the next queued command runs;
+   "@=1" with the versions equal enters the main bank warm ($FFD4, A = 2, X = $FF) and the next command does not
+   run. bank_load_ramcode saved Y = cmd_next before the INC (cmd_handler_y) and X = the argument index. */
+static void test_cmd_select(void)
+{
+    static const event absent[] = {
+        { EV_READ, SFR_P2, P2_MAIN_BANK, 0, 0 },                                    /* bank_load_ramcode */
+        { EV_READ, SFR_P2, P2_MAIN_BANK, 0, 0 }, { EV_WRITE, SFR_P2, P2_BANK_5, 0, 0 },   /* bank_select */
+        { EV_BANK, BANK_ENTRY_COLD, 0xFF, 0, 0 },                                   /* bank_probe */
+        { EV_WRITE, SFR_P2, P2_MAIN_BANK, 0, 0 },                                   /* bank_restore */
+        { EV_READ, SFR_P2, P2_MAIN_BANK, 0, 0 },                                    /* bank_find_current */
+    };
+    static const event warm[] = {
+        { EV_READ, SFR_P2, P2_MAIN_BANK, 0, 0 },
+        { EV_READ, SFR_P2, P2_MAIN_BANK, 0, 0 }, { EV_WRITE, SFR_P2, P2_MAIN_BANK, 0, 0 },
+        { EV_ENTER, BANK_ENTRY_WARM, 2, 0xFF, 0 },
+    };
+    setup_banks();
+    memset(g_ram + BANK_RAMCODE, 0, BANK_RAMCODE_LAST - BANK_RAMCODE + 1);   /* speech overwrote the copy */
+    g_ram[BANK_CURRENT] = 7;
+    queue(0, 2, ROM_BANK_CMD_SELECT, 6, '5');
+    queue(1, 2, ROM_CMD_SET_SPELL, 9, '1');
+    cmd_run_due(&g_f, 2);
+    check_log(absent, 6);
+    CHECK_EQ(g_ram[FW_TMP_78], 0);                /* Y = cmd_next before the INC */
+    CHECK_EQ(g_ram[FW_TMP_76], 6);                /* X = the argument index */
+    CHECK_EQ(g_ram[BANK_P2_TABLE + 5], P2_BANK_5);   /* reloaded before bank_select read it (Review Focus 4) */
+    CHECK_EQ(g_ram[BANK_CURRENT], 1);
+    CHECK_EQ(g_ram[CMD_SPELL], 1);                /* the next command ran */
+    CHECK_EQ(g_ram[CMD_NEXT], 2);
+    CHECK(!g_f.unwound);
+    CHECK(!g_f.fault);
+
+    setup_banks();
+    queue(0, 2, ROM_BANK_CMD_SELECT, 6, '1');
+    queue(1, 2, ROM_CMD_SET_SPELL, 9, '1');
+    cmd_run_due(&g_f, 2);
+    check_log(warm, 4);
+    CHECK(g_f.unwound);
+    CHECK_EQ(g_ram[CMD_SPELL], 0);                /* abandoned with the C */
+    CHECK_EQ(g_ram[CMD_NEXT], 1);
+    CHECK(!g_f.fault);
+}
+
 void suite_fw_bank(void)
 {
     CHECK(fw_image_get() != NULL);
@@ -602,4 +709,7 @@ void suite_fw_bank(void)
     test_scan();
     test_enter_absent();
     test_enter_present();
+    test_run_next_row();
+    test_run_next_unknown();
+    test_cmd_select();
 }

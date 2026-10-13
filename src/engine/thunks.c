@@ -358,6 +358,19 @@ static void cmd_run_due_regs(fw *f, cpu740 *c)
     c->y = fw_rd8(f, CMD_NEXT);
 }
 
+/* cmd_run_next $A893: X in (the position). A = X = the X it pushed (cmd_run_done $A8BD: PLA / TAX) out; Y is the
+   handler's (no C handler sets it; the NUL-bug fallback leaves the ROM's). Its one ROM caller, cmd_run_due ($A88D,
+   ROM where it is not replaced), branches back to $A880 (LDY cmd_next, then CPX cmd_next_pos: X read, Y written) and
+   returns to tn_convert_clause, which loads A before reading it ($B20F CPX tn_pos, LDA $1A00,X). No caller reads a
+   flag. A bank entry (bank_cmd_select) leaves the C through fw_enter. Declared: A, X. */
+static void cmd_run_next_regs(fw *f, cpu740 *c)
+{
+    uint8_t x = c->x;
+    cmd_run_next(f, x);
+    c->a = x;
+    c->x = x;
+}
+
 /* isr_set_volume $ACE8: A in (the volume). A = the value written to P3 ($ACF7 STA P3, after AND P3 / ORA $75), X and
    Y untouched, out. boot_reset ($A642) calls boot_read_dip next, which loads A first ($ADE4 LDA P4) and reads no X
    or Y; boot_loop_play calls par_play after $B2C4, which writes A, X and Y before reading them (its thunk), and
@@ -1497,6 +1510,7 @@ THUNK(bank_load_ramcode)
 THUNK(cmd_apply_speaker)
 THUNK(boot_loop_play)
 THUNK(cmd_run_due)
+THUNK(cmd_run_next)
 THUNK(isr_set_volume)
 THUNK(cmd_scan_clause)
 THUNK(cmd_match_table)
@@ -1613,6 +1627,7 @@ const fw_replacement fw_replacements[] = {
     { "cmd_apply_speaker",  0xA78C, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_apply_speaker },
     { "boot_loop_play",     0xA7D4, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_boot_loop_play, true },
     { "cmd_run_due",        0xA880, FW_OUT_X | FW_OUT_Y, t_cmd_run_due },
+    { "cmd_run_next",       0xA893, FW_OUT_A | FW_OUT_X, t_cmd_run_next },
     { "isr_set_volume",     0xACE8, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_isr_set_volume },
     { "cmd_scan_clause",    0xACFA, 0,                   t_cmd_scan_clause },
     { "cmd_match_table",    0xADBF, FW_OUT_A | FW_OUT_X | FW_OUT_Y, t_cmd_match_table },
