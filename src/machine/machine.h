@@ -140,7 +140,7 @@ void machine_capture_frame(machine *m);
    interrupt (its handler ROM or a hooked replacement) and returns from it. True once the PC and SP are back where
    they were. The PC is a hook's, never the idle WIT's ($C602): no serial byte is delivered. False when max_cycles
    pass first, on a fault, or when a line wakes the CPU with I set (the interrupt could never be taken); the CPU is
-   then no longer waiting. */
+   then no longer waiting, and the PC and SP may be inside the handler (the caller faults: run_frame puts them back). */
 bool machine_wait_interrupt(machine *m, uint64_t max_cycles);
 /* Runs the ROM loop at loop with I set (inside the caller's PHP/SEI ... PLP; M4.6b spec 3.3) until the PC reaches
    exit, then puts the PC and P back as they were. No stack frame. False when max_cycles pass first or on a fault

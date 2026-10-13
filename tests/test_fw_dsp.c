@@ -605,6 +605,18 @@ static void test_timer_word(void)
     CHECK_EQ(g_log[2].value, 0x5A);
     CHECK_EQ(g_log[3].value, 0xA5);
     CHECK_EQ(g_ram[ISR_WORD_OFS], 0);
+
+    static const event wrap[] = {
+        { EV_READ, SFR_ICR2, 0x30 }, { EV_WRITE, SFR_ICR2, 0x10 }, { EV_DSP, FW_DSP_DATA, 0x5A },
+        { EV_DSP, FW_DSP_DATA, 0xA5 },
+    };
+    timer_setup(1, 0xFF, 5, 0, 2);              /* isr_word_ofs $FF: the INY between the two reads wraps */
+    fw_wr16(&g_f, ISR_PLAY_PTR, 0x1600);
+    g_ram[0x16FF] = 0x5A;
+    g_ram[0x1600] = 0xA5;                       /* the second byte from the pointer + 0, not + $100 */
+    run_timer();
+    check_log(wrap, 4);
+    CHECK_EQ(g_ram[ISR_WORD_OFS], 1);
 }
 
 /* isr_timer_dsp at a frame boundary (the last word: isr_tick_div 1, isr_words_left 1, isr_word_ofs 18), the flag
@@ -617,8 +629,8 @@ static void test_timer_swap(void)
         { EV_READ, SFR_ICR2, 0x30 }, { EV_WRITE, SFR_ICR2, 0x10 }, { EV_DSP, FW_DSP_DATA, 0x52 },
         { EV_DSP, FW_DSP_DATA, 0x53 }, { EV_FRAME, FW_FRAME_EVENT, 0 },
     };
-    static const uint8_t at_event[4] = { 10, 0, 10, 0 };
-    timer_setup(1, 18, 1, 0, 2);
+    static const uint8_t at_event[4] = { 10, 0, 10, 2 };
+    timer_setup(1, 18, 1, 0x02, 2);             /* bit 0 clear, bit 1 set: LDM #1 writes the whole byte ($02 -> $01) */
     run_timer();
     check_log(log, 5);
     CHECK(memcmp(g_at_event, at_event, 4) == 0);

@@ -150,6 +150,8 @@ void suite_diff_lts(void)
     CHECK(fw_replacement_count <= DIFF_MAX);
     if (fw_replacement_count > DIFF_MAX)
         return;   /* install would overflow g_obs */
+    for (size_t k = 0; k < sizeof k_every_call / sizeof k_every_call[0]; k++)
+        CHECK(fw_replacement_find(k_every_call[k]) != NULL);   /* a misspelled name would be sampled, silently */
     memset(g_checked, 0, sizeof g_checked);
     g_mismatches = 0;
     g_flush_skips = 0;

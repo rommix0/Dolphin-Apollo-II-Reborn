@@ -90,7 +90,7 @@ static void host_write_sfr(void *ctx, uint8_t addr, uint8_t value)
    - FW_WAIT_TIMER2, FW_WAIT_TIMER3: isr_timer_start's loops $B372 and $B37F run with I set, as inside its PHP/SEI
      (machine_run_loop).
    at is the C's report of the loop; the hybrid host runs the kind's own. The window is read back after the wait,
-   as after a ROM call: an interrupt handler ran. */
+   as after a ROM call: an interrupt handler may have run. */
 static bool host_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     fw_bridge *b = ctx;

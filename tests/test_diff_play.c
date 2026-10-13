@@ -18,11 +18,11 @@
    The receive interrupt's two effects that no corpus text reaches are injected into both copies at the frame event
    (M4.6b spec 4.2), on the first call of each routine in each run whose ROM copy swapped the buffers at least
    twice. The frame event is the machine's frame callback in both copies: the ROM timer interrupt reaches $B306, the
-   C one (isr_timer_dsp, hooked in copy B once it is a replacement) calls frame_done, which the bridge turns into
+   C one (isr_timer_dsp, run by copy B's $B2D9 hook since M4.6b) calls frame_done, which the bridge turns into
    machine_capture_frame. A reply due: ser_status_due = 1 at the second frame event (ser_tx_service from $B89C at
    every pass after it). A mute: due at the second frame event, ser_abort bit 0 is set on entering the timer
    interrupt ABORT_TICKS times after it ($B2D9, as the CPU enters it: a hook in both copies, which in copy B runs the
-   C handler after the injection once it is a replacement). By then the ROM has seen the frame flag and is building
+   C handler after the injection). By then the ROM has seen the frame flag and is building
    the frame (thousands of cycles) and the C, which builds it in no time, is waiting at its back edge, so both end
    at par_play's next abort test ($B8A2) with that one frame built (the end path from $B8A5). Not at the frame event
    itself: there the ROM sees the mute before or after the frame flag depending on the instruction the interrupt
@@ -96,7 +96,7 @@ typedef struct watch {
 
 static machine g_m, g_a, g_b;
 static fw_bridge g_bridge;     /* copy B's */
-static swap_state *g_ref;     /* copy A's swaps: g_ref_n of them, room for g_ref_cap */
+static swap_state *g_ref;      /* copy A's swaps: g_ref_n of them, room for g_ref_cap */
 static size_t g_ref_n, g_ref_cap;
 static swap_state g_cur;
 static watch g_watch[WATCH_MAX];
@@ -278,7 +278,7 @@ static size_t check_call(machine *m, watch *w, unsigned call, inject_kind inject
     machine_clone(&g_b, m);
     CHECK(fw_bridge_init(&g_bridge, &g_b));
     if (w->r)
-        rb.isr = fw_replacement_find("isr_timer_dsp");   /* the C handler, once it is a replacement (M4.6b) */
+        rb.isr = fw_replacement_find("isr_timer_dsp");   /* the C handler (M4.6b; g_isr_c counts its runs) */
     CHECK(machine_hook(&g_b, ROM_ISR_TIMER_DSP, on_timer, &rb));
     machine_set_outputs(&g_b, on_swap, &rb);
     bool b_ok = w->run_b(&g_b, w);

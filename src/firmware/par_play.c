@@ -34,6 +34,8 @@ static void wait_frame_flag(fw *f, fw_regs r, uint16_t at)
         if ((fw_rd8(f, ISR_FRAME_FLAG) & 1) || f->fault)       /* BBC0 isr_frame_flag */
             return;
         fw_wait(f, FW_WAIT_INTERRUPT, at);
+        if (f->fault)
+            return;
     }
 }
 
