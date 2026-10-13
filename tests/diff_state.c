@@ -56,6 +56,18 @@ bool diff_same_sfr(const m50734 *a, const m50734 *b, char *why, size_t n)
             return false;
         }
     }
+    if (a->p0_func != b->p0_func || a->uart_baud != b->uart_baud || a->ad_ctrl != b->ad_ctrl) {
+        snprintf(why, n, "P0_FUNC/UART_BAUD/AD_CTRL: ROM %02X/%02X/%02X, C %02X/%02X/%02X", a->p0_func, a->uart_baud,
+                 a->ad_ctrl, b->p0_func, b->uart_baud, b->ad_ctrl);
+        return false;
+    }
+    for (size_t i = 0; i < sizeof a->other; i++) {
+        if (a->other[i] != b->other[i]) {
+            snprintf(why, n, "unmodelled SFR $%02X: ROM %02X, C %02X", (unsigned)(M50734_SFR_FIRST + i), a->other[i],
+                     b->other[i]);
+            return false;
+        }
+    }
     return true;
 }
 
