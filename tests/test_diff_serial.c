@@ -1,13 +1,18 @@
-/* Probe-based differential test of the serial code (M4.6a spec 4.2) and of speech timing (M4.6b spec 4.3): the paths no
-   corpus text reaches (the reply transmission, parallel mode, the _INT1 latch, the host-line interrupt, the ring page
-   ends; the parallel handshake of isr_par_ready and isr_par_hold, a frame boundary of the timer interrupt with the
-   frame flag still set) are compared with the ROM through synthetic calls from real states. Every corpus file and the
-   boot run go through the ROM engine; at every entry of isr_int1 $C2B4 (a received byte: the CPU has just entered the
-   interrupt, PC and P pushed, I set) and of ser_tx_put $C4DD (a reply being queued: the output ring holds the reply's
-   bytes before it), the machine is cloned twice for each probe of that point, both copies with interrupts held. The
+/* Probe-based differential test of the serial code (M4.6a spec 4.2), of speech timing (M4.6b spec 4.3) and of the bank
+   code (M4.6c1 spec 4.2): the paths no corpus text reaches (the reply transmission, parallel mode, the _INT1 latch, the
+   host-line interrupt, the ring page ends; the parallel handshake of isr_par_ready and isr_par_hold, a frame boundary
+   of the timer interrupt with the frame flag still set; a bank's cold entry, DIP bit 1, an ID byte below $20 and P2
+   bank bits in neither bank table) are compared with the ROM through synthetic calls from real states. Every corpus
+   file and the boot run go through the ROM engine, and bank_select once more with the P4 input's DIP bit 1 set (P2.1
+   low, so boot_selftest passes); at every entry of isr_int1 $C2B4 (a received byte: the CPU has just entered the
+   interrupt, PC and P pushed, I set), of ser_tx_put $C4DD (a reply being queued: the output ring holds the reply's
+   bytes before it), and of the RAM-code routines bank_enter $0210, bank_find_current $02F0 and bank_safe_char $02E9
+   (hooked with machine_hook_ramcode), the machine is cloned twice for each probe of that point, both copies with
+   interrupts held; a probe marked dip is checked in the DIP bit 1 run only, the others in the other runs only. The
    probe's injection is made to both copies; then copy A runs the ROM routine and copy B the C (its replacement hooked
    in copy B alone; the ROM routine while there is none), and the two must agree on the exit state with A, X and Y
-   (diff_same, diff_state.h).
+   (diff_same, diff_state.h). A probe of bank_enter that enters a bank (marked enters) runs each copy on from the stack
+   reset to the bank entry and compares them there (diff_same_at_entry, M4.6c1 spec 4.1).
    An interrupt probe starts at the handler's first instruction with the frame the CPU pushed on entering it: isr_int1's
    own entry; for isr_int4_host_line the same point with the PC set to vec_int4_timerx ($FFF4) and INT4 requested and
    enabled (ICR3 bits 7 and 6), as if the CPU had taken INT4 there instead (take_irq, cpu740.c, pushes the same PC and P
@@ -18,8 +23,8 @@
    with the branch as the last instruction executed, the machine's history), or for a routine without a branch
    whether it was entered; every probe must reach its target at every call. Every routine diff_lts never sees
    (diff_probed, diff_state.c) is some probe's routine.
-   A self-check first runs the ROM routine in copy B too, on queries: it proves the probes and the comparison
-   whatever the replacement table holds. */
+   A self-check first runs the ROM routine in copy B too, on queries, bank_select and bank_select with DIP bit 1: it
+   proves the probes and the comparison whatever the replacement table holds. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +34,7 @@
 #include "diff_state.h"
 #include "engine/rom_engine.h"
 #include "engine/thunks.h"
+#include "firmware/bank_addr.h"
 #include "firmware/isr_addr.h"
 #include "firmware/ser_addr.h"
 
@@ -41,19 +47,25 @@
 #define ICR3_INT4     0xC0     /* bit 7 request, bit 6 enable */
 #define ICR2_T3       0x30     /* timer 3: bit 5 request, bit 4 enable */
 #define REGS          (FW_OUT_A | FW_OUT_X | FW_OUT_Y)
+#define P4_DIP_ALT    0x02     /* the P4 input's DIP bit 1 (boot_read_dip $ADE4: boot_dip = P4 & $0F) */
+#define P2_NO_BANK    0x0C     /* P2 bank bits in neither bank table */
 
 static const char *const k_corpus[] = { CORPUS_NAMES };
+/* The probes whose routine is not C yet (M4.6c1 Task 3): copy B runs the ROM routine for them on the corpus too. */
+static const char *const k_not_c_yet[] = { "bank_enter", "bank_find_current", "bank_safe_char" };
 
-typedef enum { AT_INT1, AT_TX_PUT } probe_point;
+typedef enum { AT_INT1, AT_TX_PUT, AT_BANK_ENTER, AT_FIND_CURRENT, AT_SAFE_CHAR } probe_point;
 
 typedef struct {
     const char *name;
     probe_point at;
     const char *routine;      /* the replacement copy B runs */
-    uint16_t addr;            /* its ROM entry */
+    uint16_t addr;            /* its entry (ROM, or RAM code) */
     bool isr;
     void (*inject)(machine *m);
     uint16_t branch, dest;    /* the target: the branch at branch goes to dest (branch 0: dest is reached) */
+    bool enters;              /* bank_enter entering a bank: compared at the bank entry */
+    bool dip;                 /* checked in the run with DIP bit 1 only (else in the other runs only) */
     unsigned calls, reached;
 } probe;
 
@@ -61,6 +73,7 @@ static machine g_m, g_a, g_b;
 static fw_bridge g_bridge;
 static const char *g_source;
 static bool g_self_check;
+static bool g_dip;            /* the run with DIP bit 1 */
 static unsigned g_mismatches;
 static const probe *g_cur;
 static bool g_hit;
@@ -203,6 +216,26 @@ static void inj_tx_get_wrap(machine *m)
     m->ram[SER_TX_PENDING] |= 1;
 }
 
+/* bank_enter with bank 1 (the main ROM, present) and a version byte of the running engine altered, so that the
+   bank's header ($FFE1, then $FFE0) differs: the cold entry. bank_ver_minor; or bank_ver_major with the minor equal. */
+static void inj_cold_minor(machine *m)
+{
+    m->cpu.a = 1;
+    m->ram[BANK_VER_MINOR]++;
+}
+static void inj_cold_major(machine *m)
+{
+    m->cpu.a = 1;
+    m->ram[BANK_VER_MAJOR]++;
+}
+/* bank_find_current with P2's bank bits in neither table: no match, bank_current unchanged */
+static void inj_no_bank(machine *m)
+{
+    m->sfr.port_latch[2] = (uint8_t)((m->sfr.port_latch[2] & ~P2_BANK_BITS) | P2_NO_BANK);
+}
+/* bank_safe_char with a control code */
+static void inj_safe_char(machine *m) { m->cpu.a = 0x1F; }
+
 static probe g_probes[] = {
     { "int1_latch",       AT_INT1,   "isr_int1",           ROM_ISR_INT1,           true,  inj_latch,       0xC341, 0xC367 },
     { "int1_mute_01",     AT_INT1,   "isr_int1",           ROM_ISR_INT1,           true,  inj_mute_01,     0xC380, 0xC391 },
@@ -232,6 +265,14 @@ static probe g_probes[] = {
     { "tx_get_wrap",      AT_TX_PUT, "ser_tx_get",         ROM_SER_TX_GET,         false, inj_tx_get_wrap, 0xC4C2, 0xC4C4 },
     { "tx_send",          AT_TX_PUT, "ser_tx_send",        ROM_SER_TX_SEND,        false, inj_none,        0, ROM_SER_TX_SEND },
     { "tx_next_page",     AT_TX_PUT, "ser_tx_next_page",   ROM_SER_TX_NEXT_PAGE,   false, inj_tx_page,     0xC5F8, 0xC5FB },
+    { "cold_minor",  AT_BANK_ENTER,   "bank_enter",        BANK_ENTER,        false, inj_cold_minor, 0x0228, 0x0235, true },
+    { "cold_major",  AT_BANK_ENTER,   "bank_enter",        BANK_ENTER,        false, inj_cold_major, 0x0230, 0x0235, true },
+    { "dip_enter",   AT_BANK_ENTER,   "bank_enter",        BANK_ENTER,        false, inj_none,       0x0263, 0x0266, true,
+      true },
+    { "dip_find",    AT_FIND_CURRENT, "bank_find_current", BANK_FIND_CURRENT, false, inj_none,       0x02F9, 0x02FC, false,
+      true },
+    { "no_bank",     AT_FIND_CURRENT, "bank_find_current", BANK_FIND_CURRENT, false, inj_no_bank,    0x0309, 0x030B },
+    { "safe_char",   AT_SAFE_CHAR,    "bank_safe_char",    BANK_SAFE_CHAR,    false, inj_safe_char,  0x02EB, 0x02ED },
 };
 #define PROBE_COUNT (sizeof g_probes / sizeof g_probes[0])
 
@@ -244,8 +285,9 @@ static bool on_dest(machine *m, void *user)
     return false;
 }
 
-/* Runs the probe's routine in m: an interrupt handler to its RTI, a subroutine through machine_rom_call. With b, the
-   routine's replacement is hooked first (copy B). */
+/* Runs the probe's routine in m: an interrupt handler to its RTI, a subroutine through machine_rom_call (bank_enter
+   entering a bank: until it resets the stack, then on to the bank entry). With b, the routine's replacement is hooked
+   first (copy B). */
 static bool run_copy(machine *m, const probe *p, fw_bridge *b)
 {
     if (b && (!fw_bridge_init(b, m) || !fw_install(m, b, p->routine)))
@@ -253,8 +295,13 @@ static bool run_copy(machine *m, const probe *p, fw_bridge *b)
     if (p->isr)
         return machine_finish_routine(m, PROBE_BUDGET);
     machine_regs r = { m->cpu.a, m->cpu.x, m->cpu.y, m->cpu.p };
-    return machine_rom_call(m, p->addr, &r, PROBE_BUDGET) == MCALL_RETURNED;
+    machine_call_result res = machine_rom_call(m, p->addr, &r, PROBE_BUDGET);
+    if (p->enters)
+        return res == MCALL_UNWOUND && diff_run_to_bank_entry(m);
+    return res == MCALL_RETURNED;
 }
+
+static bool in_ramcode(uint16_t addr) { return addr >= MACHINE_RAMCODE_FIRST && addr <= MACHINE_RAMCODE_LAST; }
 
 static void check_probe(machine *m, probe *p)
 {
@@ -268,7 +315,8 @@ static void check_probe(machine *m, probe *p)
     p->inject(&g_b);
     g_cur = p;
     g_hit = false;
-    CHECK(machine_hook(&g_a, p->dest, on_dest, NULL));
+    CHECK(in_ramcode(p->dest) ? machine_hook_ramcode(&g_a, p->dest, on_dest, NULL)
+                              : machine_hook(&g_a, p->dest, on_dest, NULL));
     bool a_ok = run_copy(&g_a, p, NULL);
     p->reached += g_hit;
     bool use_c = !g_self_check && fw_replacement_find(p->routine) != NULL;
@@ -277,7 +325,7 @@ static void check_probe(machine *m, probe *p)
         snprintf(why, sizeof why, "the ROM routine did not return (fault %d)", (int)g_a.fault);
     else if (!b_ok)
         snprintf(why, sizeof why, "copy B did not return (fault %d at $%04X)", (int)g_b.fault, g_b.fault_addr);
-    else if (diff_same(&g_a, &g_b, REGS, why, sizeof why))
+    else if (p->enters ? diff_same_at_entry(&g_a, &g_b, why, sizeof why) : diff_same(&g_a, &g_b, REGS, why, sizeof why))
         why[0] = '\0';
     if (why[0] && g_mismatches++ < 10)
         fprintf(stderr, "  %s: %s call %u (A=%02X X=%02X Y=%02X): %s\n", g_source, p->name, call, m->cpu.a, m->cpu.x,
@@ -287,7 +335,7 @@ static void check_probe(machine *m, probe *p)
 static void check_point(machine *m, probe_point at)
 {
     for (size_t i = 0; i < PROBE_COUNT; i++)
-        if (g_probes[i].at == at)
+        if (g_probes[i].at == at && g_probes[i].dip == g_dip)
             check_probe(m, &g_probes[i]);
 }
 
@@ -305,18 +353,46 @@ static bool on_tx_put(machine *m, void *user)
     return false;
 }
 
+static bool on_bank_enter(machine *m, void *user)
+{
+    (void)user;
+    check_point(m, AT_BANK_ENTER);
+    return false;
+}
+
+static bool on_find_current(machine *m, void *user)
+{
+    (void)user;
+    check_point(m, AT_FIND_CURRENT);
+    return false;
+}
+
+static bool on_safe_char(machine *m, void *user)
+{
+    (void)user;
+    check_point(m, AT_SAFE_CHAR);
+    return false;
+}
+
 static void install(machine *m, void *user)
 {
     (void)user;
     CHECK(machine_hook(m, ROM_ISR_INT1, on_int1, NULL));
     CHECK(machine_hook(m, ROM_SER_TX_PUT, on_tx_put, NULL));
+    CHECK(machine_hook_ramcode(m, BANK_ENTER, on_bank_enter, NULL));
+    CHECK(machine_hook_ramcode(m, BANK_FIND_CURRENT, on_find_current, NULL));
+    CHECK(machine_hook_ramcode(m, BANK_SAFE_CHAR, on_safe_char, NULL));
 }
 
 static void run(const uint8_t *rom, size_t len, const char *source, const char *text, bool boot)
 {
     frame_list fl = { 0 };
+    machine_config cfg;
+    machine_default_config(&cfg);
+    if (g_dip)
+        cfg.port_in[4] |= P4_DIP_ALT;   /* P2.1 is low in the default pins ($70): boot_selftest passes */
     g_source = source;
-    machine_status st = rom_engine_run(&g_m, rom, len, NULL, install, NULL, text, boot, &fl, NULL);
+    machine_status st = rom_engine_run(&g_m, rom, len, &cfg, install, NULL, text, boot, &fl, NULL);
     if (st != MACHINE_IDLE)
         machine_dump(&g_m, stderr);
     CHECK_EQ(st, MACHINE_IDLE);
@@ -329,6 +405,14 @@ static void strip_newline(char *s)
     size_t n = strlen(s);
     while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r'))
         s[--n] = '\0';
+}
+
+static bool not_c_yet(const char *routine)
+{
+    for (size_t i = 0; i < sizeof k_not_c_yet / sizeof k_not_c_yet[0]; i++)
+        if (!strcmp(k_not_c_yet[i], routine))
+            return true;
+    return false;
 }
 
 static void run_file(const uint8_t *rom, size_t len, const char *name)
@@ -358,8 +442,16 @@ static void report(void)
                    c ? "C" : "ROM", p->reached);
         CHECK(p->calls > 0);
         CHECK_EQ(p->reached, p->calls);
-        CHECK(c || g_self_check);   /* every probe's routine is C (M4.6a, M4.6b) */
+        CHECK(c || g_self_check || not_c_yet(p->routine));   /* every probe's routine is C (M4.6a-M4.6c1) */
     }
+}
+
+/* bank_select once more, with DIP bit 1 (the dip probes) */
+static void run_dip(const uint8_t *rom, size_t len)
+{
+    g_dip = true;
+    run_file(rom, len, "bank_select");
+    g_dip = false;
 }
 
 static void reset_counts(void)
@@ -375,17 +467,21 @@ void suite_diff_serial(void)
     if (!rom)
         SKIP("ROM not found (set APOLLO2_ROM)");
     g_mismatches = 0;
+    g_dip = false;
     g_self_check = true;   /* ROM against ROM: the probes and the comparison */
     reset_counts();
     run_file(rom, len, "queries");
-    printf("  self-check (ROM against ROM, queries):\n");
+    run_file(rom, len, "bank_select");
+    run_dip(rom, len);
+    printf("  self-check (ROM against ROM, queries, bank_select, bank_select with DIP bit 1):\n");
     report();
     g_self_check = false;
     reset_counts();
     for (size_t c = 0; c < sizeof k_corpus / sizeof k_corpus[0]; c++)
         run_file(rom, len, k_corpus[c]);
     run(rom, len, "boot", "", true);
-    printf("  corpus and boot:\n");
+    run_dip(rom, len);
+    printf("  corpus, boot and bank_select with DIP bit 1:\n");
     report();
     for (size_t i = 0; i < diff_probed_count; i++) {   /* every routine diff_lts never sees is compared here */
         bool probed = false;
