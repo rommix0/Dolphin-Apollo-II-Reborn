@@ -11,6 +11,7 @@
 #define LTS_AFFIX_NEXT          0xAF11
 #define LTS_AFFIX_PREV          0xAF1C
 #define LTS_AFFIX_MATCH_BACK    0xAF69
+#define LTS_STEP_BACK           0xB004
 #define LTS_AFFIX_FIRST         3      /* lts_sym_suffix: the index of lts_suffixes' first entry (after $00 CR LF) */
 #define LTS_SIBILANTS_LAST      0x1F   /* lts_sym_sibilant: the index of lts_sibilants' last character */
 #define LTS_AT_CONSONANTS_LAST  0x14   /* lts_sym_at: the index of lts_at_consonants' last character */
@@ -269,7 +270,7 @@ const fw_insn fw_bank_lts_code[] = {
     { 0xAFBF, FWI_TAX, FWM_IMP },
     { 0xAFC0, FWI_LDA, FWM_ABX, LTS_CHAR_CLASS },
     { 0xAFC3, FWI_AND, FWM_IMM, CC_VOICED },
-    { 0xAFC5, FWI_BBC, FWM_BIT_ZP_REL, LTS_MATCH_DIR, 0xB004, 0 },
+    { 0xAFC5, FWI_BBC, FWM_BIT_ZP_REL, LTS_MATCH_DIR, LTS_STEP_BACK, 0 },
     { 0xAFC8, FWI_INC, FWM_ZP, LTS_MATCH_POS },
     { 0xAFCA, FWI_RTS, FWM_IMP },
     /* lts_sym_consonant */
@@ -278,7 +279,7 @@ const fw_insn fw_bank_lts_code[] = {
     { 0xAFD0, FWI_TAX, FWM_IMP },
     { 0xAFD1, FWI_LDA, FWM_ABX, LTS_CHAR_CLASS },
     { 0xAFD4, FWI_AND, FWM_IMM, CC_CONSONANT },
-    { 0xAFD6, FWI_BBC, FWM_BIT_ZP_REL, LTS_MATCH_DIR, 0xB004, 0 },
+    { 0xAFD6, FWI_BBC, FWM_BIT_ZP_REL, LTS_MATCH_DIR, LTS_STEP_BACK, 0 },
     { 0xAFD9, FWI_INC, FWM_ZP, LTS_MATCH_POS },
     { 0xAFDB, FWI_RTS, FWM_IMP },
     /* lts_sym_front_vowel */
@@ -287,7 +288,7 @@ const fw_insn fw_bank_lts_code[] = {
     { 0xAFE1, FWI_TAX, FWM_IMP },
     { 0xAFE2, FWI_LDA, FWM_ABX, LTS_CHAR_CLASS },
     { 0xAFE5, FWI_AND, FWM_IMM, CC_FRONT_VOWEL },
-    { 0xAFE7, FWI_BBC, FWM_BIT_ZP_REL, LTS_MATCH_DIR, 0xB004, 0 },
+    { 0xAFE7, FWI_BBC, FWM_BIT_ZP_REL, LTS_MATCH_DIR, LTS_STEP_BACK, 0 },
     { 0xAFEA, FWI_INC, FWM_ZP, LTS_MATCH_POS },
     { 0xAFEC, FWI_RTS, FWM_IMP },
     /* lts_sym_nonletter (its last two instructions follow at $AFFE) */

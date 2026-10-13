@@ -361,8 +361,9 @@ static void cmd_run_due_regs(fw *f, cpu740 *c)
 /* cmd_run_next $A893: X in (the position). A = X = the X it pushed (cmd_run_done $A8BD: PLA / TAX) out; Y is the
    handler's (no C handler sets it; the NUL-bug fallback leaves the ROM's). Its one ROM caller, cmd_run_due ($A88D,
    ROM where it is not replaced), branches back to $A880 (LDY cmd_next, then CPX cmd_next_pos: X read, Y written) and
-   returns to tn_convert_clause, which loads A before reading it ($B20F CPX tn_pos, LDA $1A00,X). No caller reads a
-   flag. A bank entry (bank_cmd_select) leaves the C through fw_enter. Declared: A, X. */
+   returns to tn_convert_clause at one of two call sites: $B20F, which loads A before reading it (CPX tn_pos, LDA
+   $1A00,X), or $B29E JSR cmd_run_due / $B2A1 RTS, where the A = x left by cmd_run_done reaches tn_convert_clause's
+   caller (boot_loop_text), which reads no register (see the tn_convert_clause row). No caller reads a flag. A bank entry (bank_cmd_select) leaves the C through fw_enter. Declared: A, X. */
 static void cmd_run_next_regs(fw *f, cpu740 *c)
 {
     uint8_t x = c->x;
