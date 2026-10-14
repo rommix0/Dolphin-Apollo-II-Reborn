@@ -10,10 +10,15 @@ Requires MSVC 2022 Build Tools. From Git Bash in the repo root:
     cmd //c ".\build.bat test"            # build + run every test suite
     cmd //c ".\build.bat test cpu"        # only suites whose name contains "cpu"
 
-The original ROM is not part of this repository. Put `UK_V2.01_4.04_ROM.BIN` in the
-repo root, or point `APOLLO2_ROM` at it. Tests that need it print SKIP without it.
+`apollo2` needs no ROM: it is built from `src/` alone and runs the firmware as native C. The original ROM
+is not part of this repository; only the test oracle uses it (see "Tests and the oracle" below). Put
+`UK_V2.01_4.04_ROM.BIN` in the repo root, or point `APOLLO2_ROM` at it. Tests that need it print SKIP without it.
+
+    cmd //c ".\build.bat test-norom"      # every suite as if no ROM existed, then the program itself
 
 ## Frames from the original firmware
+
+`apollo2_frames` is a test-side tool (tests/oracle/apps): it runs the ROM on the emulator and needs the ROM.
 
     build/apollo2_frames.exe "Hello world."      # one produced DSP frame per line (hex)
     build/apollo2_frames.exe --boot "Hi"          # include the startup announcement
@@ -33,7 +38,9 @@ them only after reviewing an intentional emulator change:
     build/apollo2.exe --text-file story.txt -o story.wav
     build/apollo2.exe --audio-check                   # is live 10 kHz playback available?
 
-Text goes through the original firmware's serial input (emulated), so the `@` commands in
+Exit codes: 0 ok, 1 usage/file error, 2 firmware fault, 3 cycle limit, 4 audio error, 5 unmodelled access logged.
+
+Text goes through the firmware's serial input (the C firmware on the native engine), so the `@` commands in
 `docs/apollo2.txt` section 6 work. `--hyp b11,b13` enables synthesizer hypotheses for
 listening tests (see `docs/calibration/report.md`).
 
@@ -42,7 +49,7 @@ device's DAC filter; both are always on.
 
 ## Hybrid engine (milestone 4)
 
-`apollo2 --engine hybrid "text" -o out.wav` runs the original firmware with the ported routines replaced by C
+The hybrid engine (tests/oracle/engine, a test oracle) runs the original firmware with the ported routines replaced by C
 (src/firmware). Today these are the letter-to-sound routines (M4.0), text normalisation, tn_convert_clause
 and tn_append_phonetic (M4.1), the command parser: the @ command matcher, the clause scan, the dispatcher
 and every deferred command handler (M4.2), the segment generator: phoneme expansion, the phrase generator,
@@ -70,7 +77,8 @@ The converted tables in src/firmware/data come from `python tools/extract_tables
 reviewed); `build.bat test firmware_data` checks them against the ROM. RAM names in src/firmware/fw_ram.h come
 from `python tools/gen_fw_ram.py` (rerun after the Ghidra annotations change).
 
-A ROM whose MD5 is not the UK V2.01 4.04 image is refused by the CLIs unless `--rom-any` is given.
+A ROM whose MD5 is not the UK V2.01 4.04 image is refused by the oracle tools (`apollo2_frames`,
+`apollo2_coverage`, `cpu740_vectors`) unless `--rom-any` is given.
 
 ## Native engine (milestone 5)
 
@@ -79,8 +87,19 @@ CPU-less board (src/board) supplies the M50734's timers, UART and ports, the int
 charges exactly the cycles the hybrid engine's emulated CPU spends waiting, so the two agree state for state.
 `build.bat test golden_native` reproduces every golden frame stream on it without the ROM, and
 `build.bat test diff_native` runs the hybrid and the native engine side by side over every diff_main run,
-comparing RAM, the peripheral state and the cycle count at every input idle and frame event. Until milestone 5b
-the CLI still runs the emulated engines; 5b makes it native-only, with no ROM needed.
+comparing RAM, the peripheral state and the cycle count at every input idle and frame event. Since milestone 5b
+the CLI runs the native engine only and needs no ROM.
+
+## Tests and the oracle
+
+The emulator is the test oracle: `tests/oracle/` holds the 740 CPU core, the machine model, the `rom` and
+`hybrid` engines and the three tools that need the ROM (`apollo2_frames`, `apollo2_coverage`,
+`cpu740_vectors`, built into `build/` under those names). `apollo2.exe` is compiled and linked from `src/`
+alone, so it cannot reach them. In `tests/suites.h` each suite is marked `SUITE` (needs no ROM) or
+`SUITE_ROM` (has parts that need the ROM, set by `APOLLO2_ROM` or found in the repo root), and the runner
+fails a suite whose mark is wrong. `build.bat test-norom` runs every suite with `APOLLO2_NO_ROM=1`, so the
+ROM is never looked for: every `SUITE` must run in full, the `SUITE_ROM` suites skip their ROM parts, and
+then `tests/check_cli.bat` runs `apollo2.exe` itself.
 
 ## Ghidra project (milestone 3)
 
