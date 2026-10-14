@@ -77,8 +77,8 @@ The converted tables in src/firmware/data come from `python tools/extract_tables
 reviewed); `build.bat test firmware_data` checks them against the ROM. RAM names in src/firmware/fw_ram.h come
 from `python tools/gen_fw_ram.py` (rerun after the Ghidra annotations change).
 
-A ROM whose MD5 is not the UK V2.01 4.04 image is refused by the oracle tools (`apollo2_frames`,
-`apollo2_coverage`, `cpu740_vectors`) unless `--rom-any` is given.
+A ROM whose MD5 is not the UK V2.01 4.04 image is refused by the oracle tools that read the ROM
+(`apollo2_frames`, `apollo2_coverage`) unless `--rom-any` is given.
 
 ## Native engine (milestone 5)
 
@@ -93,13 +93,14 @@ the CLI runs the native engine only and needs no ROM.
 ## Tests and the oracle
 
 The emulator is the test oracle: `tests/oracle/` holds the 740 CPU core, the machine model, the `rom` and
-`hybrid` engines and the three tools that need the ROM (`apollo2_frames`, `apollo2_coverage`,
-`cpu740_vectors`, built into `build/` under those names). `apollo2.exe` is compiled and linked from `src/`
-alone, so it cannot reach them. In `tests/suites.h` each suite is marked `SUITE` (needs no ROM) or
+`hybrid` engines, the two tools that need the ROM (`apollo2_frames`, `apollo2_coverage`) and `cpu740_vectors`,
+which needs none (all three built into `build/` under those names). `apollo2.exe` is compiled and linked from
+`src/` alone, so it cannot reach them. In `tests/suites.h` each suite is marked `SUITE` (needs no ROM) or
 `SUITE_ROM` (has parts that need the ROM, set by `APOLLO2_ROM` or found in the repo root), and the runner
-fails a suite whose mark is wrong. `build.bat test-norom` runs every suite with `APOLLO2_NO_ROM=1`, so the
-ROM is never looked for: every `SUITE` must run in full, the `SUITE_ROM` suites skip their ROM parts, and
-then `tests/check_cli.bat` runs `apollo2.exe` itself.
+fails a suite whose mark is wrong. `build.bat test-norom` runs every suite with `APOLLO2_NO_ROM=1`, so the ROM
+is never looked for: every `SUITE` must run in full (only `suite_audio` may skip, when no waveOut device
+accepts 10 kHz), the `SUITE_ROM` suites skip their ROM parts, and then `tests/check_cli.bat` runs
+`apollo2.exe` itself.
 
 ## Ghidra project (milestone 3)
 
