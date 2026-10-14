@@ -74,11 +74,13 @@ HEADER = ("/* Converted from the Apollo 2 ROM by tools/extract_tables.py (M4.0 s
 LTS_HEADER = HEADER.replace(
     " with the ROM. */\n",
     " with the ROM.\n"
-    "   Two bytes above $7F appear, as octal escapes. \\220 ($90), among the characters a rule consumes\n"
-    "   (CAF\\220), is E acute in code page 437 (cmd_case_map folds the lower-case $82 to it): lts_char_class has it\n"
-    "   a letter, so lts_match_symbol matches it against the text like any letter. \\300 ($C0), in an output, is the\n"
-    "   phonetic symbol $C0, a long syllabic consonant (the final L of LEVEL, CANCEL): tn_append_phonetic copies it\n"
-    "   into tn_phonetic like any other symbol, and its phoneme list (pros_data.c) is phoneme 41 alone. */\n", 1)
+    "   Two bytes above $7F appear in the two-letter rules, as octal escapes. \\220 ($90), among the characters a\n"
+    "   rule consumes (CAF\\220, under CA), is E acute in code page 437 (cmd_case_map folds the lower-case $82 to"
+    " it):\n"
+    "   lts_char_class has it a letter, so lts_match_symbol matches it against the text like any letter. \\300 ($C0),\n"
+    "   in an output, is the phonetic symbol $C0, a long syllabic consonant (the final L of LEVEL, CANCEL):\n"
+    "   tn_append_phonetic copies it into tn_phonetic like any other symbol, and its phoneme list (pros_data.c) is\n"
+    "   phoneme 41 alone. */\n", 1)
 
 
 def cstr(b):
