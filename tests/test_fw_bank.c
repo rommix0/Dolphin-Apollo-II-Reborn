@@ -12,7 +12,6 @@
 #include "firmware/data/fw_data.h"
 
 #define MAX_LOG 512
-#define SFR_P2  0xF0
 #define SFR_P0  0xF6
 
 typedef enum { EV_READ, EV_WRITE, EV_BANK, EV_ENTER, EV_CALL } ev_kind;

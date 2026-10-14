@@ -5,8 +5,6 @@
 #include "fw_data.h"
 #include "../bank_addr.h"
 
-#define SFR_P2   0xF0   /* bank_select, bank_restore and bank_find_current read and write P2 */
-
 /* The labels of the letter-to-sound code $AF11-$AFFD (ghidra740/annotations/lts.txt) */
 #define LTS_AFFIX_NEXT          0xAF11
 #define LTS_AFFIX_PREV          0xAF1C

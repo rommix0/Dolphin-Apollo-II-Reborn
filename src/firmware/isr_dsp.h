@@ -7,14 +7,13 @@
    (fw_sfr*), each SEB/CLB as a read then a write. */
 #include "fw.h"
 
-/* The SFRs of speech timing (M4.6b spec 2.5; ghidra740/annotations/sfr.txt) */
+/* The SFRs of speech timing (M4.6b spec 2.5; ghidra740/annotations/sfr.txt); P2 (SFR_P2) is in fw.h */
 #define SFR_T2_PRE      0xDE
 #define SFR_T2_RELOAD   0xDF
 #define SFR_T3_PRE      0xE0
 #define SFR_T3_RELOAD   0xE1
 #define SFR_P23_FUNC    0xED
 #define SFR_P3          0xEE   /* bits 3-6: the inverted volume level; bit 0 set by isr_timer_start */
-#define SFR_P2          0xF0   /* bit 0: the DSP reset line */
 #define SFR_ICR2        0xFE   /* timers 1-3: enable bits 0, 2, 4, request bits 1, 3, 5 */
 
 /* $B2D9, an interrupt handler, entered through vec_int2_timers $FFF8 (timer 3, the 10 kHz DSP tick): CLB5 ICR2;

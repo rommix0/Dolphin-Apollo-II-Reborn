@@ -3,8 +3,6 @@
 #include "cmd_handlers.h"
 #include "cmd_match.h"
 
-#define SFR_P2  0xF0
-
 void bank_load_ramcode(fw *f, fw_regs *r)
 {
     fw_wr8(f, FW_TMP_78, r->y);                                    /* STY $78 */

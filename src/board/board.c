@@ -9,7 +9,8 @@
 #include "firmware/isr_serial.h"
 #include "firmware/ser_addr.h"
 
-#define P2_LOWER_HALF 0x80   /* P2 bit 7: $4000-$7FFF read the lower half of the image */
+#define P2_LOW_WINDOW 0x80   /* P2 bit 7: $4000-$7FFF read the lower half of the image; matches the firmware's
+                                P2_LOW_WINDOW (firmware/fw.h) */
 
 void board_init(board *b, const uint8_t port_in[5], uint32_t cycle_num, uint32_t cycle_den)
 {
@@ -107,7 +108,7 @@ uint8_t board_peek(const board *b, uint16_t addr)
         return b->ram[addr];
     if (!b->rom || (addr >= 0x8000 && !board_main_bank(b)))
         return 0xFF;
-    if (addr < 0x8000 && (m50734_port_pins(&b->sfr, 2) & P2_LOWER_HALF))
+    if (addr < 0x8000 && (m50734_port_pins(&b->sfr, 2) & P2_LOW_WINDOW))
         return 0xFF;   /* the lower half: not in the image the board holds (the C never points a frame there) */
     return b->rom[addr];
 }
@@ -192,7 +193,7 @@ bool board_call(board *b, uint16_t addr, uint8_t a, uint8_t x)
         if (k_dispatch[i].addr != addr)
             continue;
         uint8_t p2 = m50734_port_pins(&b->sfr, 2);   /* sync_p2: the window and the bank from the pins */
-        b->fw->low_window = (p2 & P2_LOWER_HALF) != 0;
+        b->fw->low_window = (p2 & P2_LOW_WINDOW) != 0;
         b->fw->bank = p2 & BOARD_P2_BANK_MASK;
         fw_regs r = { a, x, 0, 0 };
         k_dispatch[i].fn(b->fw, &r);

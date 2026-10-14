@@ -1,15 +1,12 @@
 #include "engine/native_host.h"
 #include "firmware/data/fw_data.h"
 
-#define SFR_P2          0xF0
-#define P2_LOWER_WINDOW 0x80
-
 /* sync_p2: the firmware's window and bank read back from the board's pins after a wait (an interrupt handler may have
    written P2). */
 static void sync_p2(native_host *h)
 {
     uint8_t p2 = m50734_port_pins(&h->b->sfr, 2);
-    h->f.low_window = (p2 & P2_LOWER_WINDOW) != 0;
+    h->f.low_window = (p2 & P2_LOW_WINDOW) != 0;
     h->f.bank = p2 & P2_BANK_BITS;
 }
 
@@ -29,7 +26,7 @@ static void host_set_low_window(void *ctx, bool on)
 {
     board *b = ((native_host *)ctx)->b;
     uint8_t v = board_read_sfr(b, SFR_P2);
-    board_write_sfr(b, SFR_P2, (uint8_t)(on ? v | P2_LOWER_WINDOW : v & ~P2_LOWER_WINDOW));
+    board_write_sfr(b, SFR_P2, (uint8_t)(on ? v | P2_LOW_WINDOW : v & ~P2_LOW_WINDOW));
 }
 
 static uint8_t host_read_sfr(void *ctx, uint8_t addr) { return board_read_sfr(((native_host *)ctx)->b, addr); }

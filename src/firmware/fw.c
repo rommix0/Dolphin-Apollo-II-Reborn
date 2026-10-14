@@ -1,8 +1,5 @@
 #include "fw.h"
 
-#define SFR_P2         0xF0
-#define P2_LOW_WINDOW  0x80   /* P2 bit 7: the lower-ROM window */
-
 void fw_init(fw *f, uint8_t *ram, const fw_image *img, const fw_host *host)
 {
     f->ram = ram;
@@ -30,6 +27,9 @@ static void fault(fw *f, uint16_t addr)
 
 static bool converted(const uint8_t *ok, uint32_t i) { return (ok[i >> 3] >> (i & 7)) & 1; }
 
+/* An SFR address, $DA-$FF: a 16-bit addr above $FF is none. */
+static bool is_sfr(uint16_t addr) { return addr >= SFR_FIRST && addr <= 0xFF; }
+
 uint8_t fw_rom8(fw *f, uint16_t addr)
 {
     const fw_image *img = f->img;
@@ -55,7 +55,7 @@ uint8_t fw_mem8(fw *f, uint16_t addr)
 {
     if (addr >= 0x4000)
         return fw_rom8(f, addr);
-    if (addr >= 0xDA && addr <= 0xFF) {
+    if (is_sfr(addr)) {
         fault(f, addr);
         return 0xFF;
     }
@@ -70,7 +70,7 @@ uint8_t fw_ind_y(fw *f, uint8_t zp, uint8_t y)
 void fw_wr_ind_y(fw *f, uint8_t zp, uint8_t y, uint8_t v)
 {
     uint16_t addr = (uint16_t)(fw_rd16(f, zp) + y);
-    if (addr >= FW_RAM_SIZE || (addr >= 0xDA && addr <= 0xFF)) {
+    if (addr >= FW_RAM_SIZE || is_sfr(addr)) {
         fault(f, addr);
         return;
     }
@@ -79,7 +79,7 @@ void fw_wr_ind_y(fw *f, uint8_t zp, uint8_t y, uint8_t v)
 
 uint8_t fw_sfr8(fw *f, uint8_t addr)
 {
-    if (addr >= 0xDA && f->host && f->host->read_sfr)
+    if (is_sfr(addr) && f->host && f->host->read_sfr)
         return f->host->read_sfr(f->host->ctx, addr);
     fault(f, addr);
     return 0xFF;
@@ -97,7 +97,7 @@ static void p2_written(fw *f, uint8_t addr, uint8_t v)
 
 void fw_wr_sfr8(fw *f, uint8_t addr, uint8_t v)
 {
-    if (addr >= 0xDA && f->host && f->host->write_sfr) {
+    if (is_sfr(addr) && f->host && f->host->write_sfr) {
         f->host->write_sfr(f->host->ctx, addr, v);
         p2_written(f, addr, v);
         return;
@@ -108,7 +108,7 @@ void fw_wr_sfr8(fw *f, uint8_t addr, uint8_t v)
 /* SEB/CLB: one read, then one write of the changed value. */
 static void sfr_rmw(fw *f, uint8_t addr, uint8_t set, uint8_t clear)
 {
-    if (addr >= 0xDA && f->host && f->host->read_sfr && f->host->write_sfr) {
+    if (is_sfr(addr) && f->host && f->host->read_sfr && f->host->write_sfr) {
         uint8_t v = (uint8_t)((f->host->read_sfr(f->host->ctx, addr) | set) & ~clear);
         f->host->write_sfr(f->host->ctx, addr, v);
         p2_written(f, addr, v);
