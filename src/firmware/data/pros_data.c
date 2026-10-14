@@ -207,10 +207,10 @@ const uint8_t fw_ph_symbol_features[256] = {
     [0x87] = PHF_CONSONANT | PHF_STOP | PHF_VOICED,   /* $87 */
     [0x8C] = PHF_CONSONANT | PHF_LIQUID,   /* $8C */
     [0x98] = PHF_CONSONANT | PHF_STOP | PHF_VOICED,   /* $98 */
-    [0xC0] = PHF_CONSONANT | PHF_LIQUID | PHF_LONG | PHF_VOICED,   /* $C0; also in the pointer slot of symbol $00 */
-    [0xE0] = PHF_VOWEL | PHF_VOICED,   /* $E0; also in the pointer slot of symbol $10 */
-    [0xE1] = PHF_VOWEL | PHF_VOICED,   /* $E1; also in the pointer slot of symbol $10 */
-    [0xE2] = PHF_VOWEL | PHF_VOICED,   /* $E2; also in the pointer slot of symbol $11 */
+    [0xC0] = PHF_CONSONANT | PHF_LIQUID | PHF_LONG | PHF_VOICED,   /* $C0; also symbol $00's pointer slot, low byte */
+    [0xE0] = PHF_VOWEL | PHF_VOICED,   /* $E0; also symbol $10's pointer slot, low byte */
+    [0xE1] = PHF_VOWEL | PHF_VOICED,   /* $E1; also symbol $10's pointer slot, high byte */
+    [0xE2] = PHF_VOWEL | PHF_VOICED,   /* $E2; also symbol $11's pointer slot, low byte */
 };
 
 /* The phoneme lists ($A187-$A396), by symbol: the (phoneme, max, min) triples ph_decode_symbol turns

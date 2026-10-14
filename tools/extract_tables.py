@@ -70,6 +70,15 @@ CLASS_BITS = [(0x80, "CC_LETTER"), (0x40, "CC_VOWEL"), (0x20, "CC_FRONT_VOWEL"),
 HEADER = ("/* Converted from the Apollo 2 ROM by tools/extract_tables.py (M4.0 spec section 4), then reviewed.\n"
           "   tests/test_firmware_data.c re-encodes it and compares it byte for byte with the ROM. */\n"
           "#include <stddef.h>\n#include \"fw_data.h\"\n\n")
+# The two-letter rule files' header: HEADER with what their two bytes above $7F (octal escapes) mean
+LTS_HEADER = HEADER.replace(
+    " with the ROM. */\n",
+    " with the ROM.\n"
+    "   Two bytes above $7F appear, as octal escapes. \\220 ($90), among the characters a rule consumes\n"
+    "   (CAF\\220), is E acute in code page 437 (cmd_case_map folds the lower-case $82 to it): lts_char_class has it\n"
+    "   a letter, so lts_match_symbol matches it against the text like any letter. \\300 ($C0), in an output, is the\n"
+    "   phonetic symbol $C0, a long syllabic consonant (the final L of LEVEL, CANCEL): tn_append_phonetic copies it\n"
+    "   into tn_phonetic like any other symbol, and its phoneme list (pros_data.c) is phoneme 41 alone. */\n", 1)
 
 
 def cstr(b):
@@ -296,7 +305,8 @@ def write_prosody_data(rom):
     for s in range(256):
         v = rom[PH_SYMBOL_FEATURES + s]
         if v:
-            alias = "; also in the pointer slot of symbol $%02X" % ((s - 0xC0) // 2) if s >= 0xC0 else ""
+            alias = ("; also symbol $%02X's pointer slot, %s byte" % ((s - 0xC0) // 2, "high" if s & 1 else "low")
+                     if s >= 0xC0 else "")
             lines.append("    [0x%02X] = %s,   /* %s%s */" % (s, bits(v, PH_FEATURE_BITS), char_name(s), alias))
     lines += ["};", ""]
 
@@ -493,7 +503,7 @@ def main():
         assert word(0x4200 + 2 * k) == 0x4234 + 52 * k, "lts_pair_index is not the plain table sequence"
     pair_ptr = [[word(0x4234 + 52 * k + 2 * s) for s in range(26)] for k in range(26)]
     for group, keys in (("aj", PAIR_TABLES[:10]), ("kz", PAIR_TABLES[10:])):
-        lines = [HEADER]
+        lines = [LTS_HEADER]
         for key, addr, size in keys:
             k = ord(key) - ord("a")
             low = k >= 10
