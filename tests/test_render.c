@@ -1,10 +1,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "test.h"
+#include "corpus_list.h"
 #include "rom_fixture.h"
 #include "render/render.h"
+#include "render/render_native.h"
 
 static machine g_m;
+static const char *const k_corpus[] = { CORPUS_NAMES };
 
 static int peak_of(const render_result *r)
 {
@@ -15,15 +18,85 @@ static int peak_of(const render_result *r)
     return peak;
 }
 
+static void strip_newline(char *s)
+{
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r'))
+        s[--n] = '\0';
+}
+
+/* text through render_text with the hybrid engine and through render_text_native (M5a spec 4.5): the same status,
+   samples and clipping. Returns the samples compared. */
+static size_t same_on_native(const uint8_t *rom, size_t len, const char *name, const char *text,
+                             const render_options *opt)
+{
+    render_options hopt = *opt;
+    render_result h = { 0 }, n = { 0 };
+    hopt.engine = RENDER_ENGINE_HYBRID;
+    machine_status hs = render_text(&g_m, rom, len, text, &hopt, &h);
+    engine_status ns = render_text_native(text, opt, &n);
+    bool same = (int)hs == (int)ns && h.count == n.count && h.frames == n.frames && h.clipped == n.clipped &&
+                (h.count == 0 || !memcmp(h.samples, n.samples, h.count * sizeof h.samples[0]));
+    if (!same) {
+        fprintf(stderr, "  render %s: hybrid %d, %zu samples; native %d, %zu samples (or they differ)\n", name, (int)hs,
+                h.count, (int)ns, n.count);
+        g_test_failures++;
+    }
+    size_t count = h.count;
+    render_result_free(&h);
+    render_result_free(&n);
+    return count;
+}
+
+/* Every corpus text, the raw stream, and the M5a plan's Review Focus 5: the second voice with the prosody extremes
+   @R0 and @R7, and a mute (Ctrl-X) in the middle of a text. */
+static void test_native(const uint8_t *rom, size_t len)
+{
+    render_options opt;
+    size_t texts = 0, samples = 0;
+    render_default_options(&opt);
+    for (size_t c = 0; c < sizeof k_corpus / sizeof k_corpus[0]; c++) {
+        char path[128];
+        snprintf(path, sizeof path, "tests/corpus/%s.txt", k_corpus[c]);
+        char *text = test_read_file(path);
+        CHECK(text != NULL);
+        if (!text)
+            continue;
+        strip_newline(text);
+        samples += same_on_native(rom, len, k_corpus[c], text, &opt);
+        texts++;
+        free(text);
+    }
+    printf("  native: %zu corpus texts, %zu samples the same as the hybrid's\n", texts, samples);
+    opt.stream = RENDER_STREAM_RAW;
+    CHECK(same_on_native(rom, len, "raw", "Hello world.", &opt) > 0);
+    render_default_options(&opt);
+    opt.voice = 'b';
+    for (int r = 0; r <= 7; r += 7) {
+        opt.prosody = r;
+        CHECK(same_on_native(rom, len, r ? "b @R7" : "b @R0", "Is this the second voice? It is.", &opt) > 0);
+    }
+    render_default_options(&opt);
+    CHECK(same_on_native(rom, len, "mute", "One two three four \030 five six seven.", &opt) > 0);
+}
+
 void suite_render(void)
 {
+    render_options opt;
+    render_result nat = { 0 };
+    render_default_options(&opt);
+    CHECK_EQ(render_text_native("Hello world.", &opt, &nat), ENGINE_IDLE);   /* no ROM needed */
+    CHECK_EQ(nat.frames, 105);                               /* tests/golden/hello.frm */
+    CHECK_EQ(nat.count, 105 * SYNTH_FRAME_SAMPLES);
+    CHECK_EQ(nat.clipped, 0);
+    CHECK(peak_of(&nat) > 1000);
     size_t len;
     const uint8_t *rom = test_rom(&len);
-    if (!rom)
+    if (!rom) {
+        render_result_free(&nat);
         SKIP("ROM not found (set APOLLO2_ROM)");
-    render_options opt;
+    }
     render_result a = { 0 }, b = { 0 }, voice_b = { 0 }, raw = { 0 }, r3 = { 0 }, plain = { 0 };
-    render_default_options(&opt);
 
     CHECK_EQ(render_text(&g_m, rom, len, "Hello world.", &opt, &a), MACHINE_IDLE);
     print_unmodelled(&g_m);
@@ -95,6 +168,9 @@ void suite_render(void)
         frame_list_free(&fl);
     }
 
+    CHECK(a.count == nat.count && !memcmp(a.samples, nat.samples, a.count * sizeof a.samples[0]));
+    test_native(rom, len);
+    render_result_free(&nat);
     render_result_free(&a);
     render_result_free(&b);
     render_result_free(&voice_b);
