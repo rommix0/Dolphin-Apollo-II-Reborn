@@ -5,12 +5,6 @@
 #include "tn_convert.h"
 #include "data/fw_data.h"
 
-/* The five pros_params of each phrase type start at its @R letter (index = letter - 'A'): baseline, baseline end,
-   stress, nucleus, final */
-#define PROS_PARAM_SET_A  (PROS_PARAMS + 0)    /* '.' ';' */
-#define PROS_PARAM_SET_F  (PROS_PARAMS + 5)    /* ',' ':' */
-#define PROS_PARAM_SET_K  (PROS_PARAMS + 10)   /* '?' */
-#define PROS_PARAM_SET_P  (PROS_PARAMS + 15)   /* '!' */
 #define PROS_LONG_WORD    5                    /* CMP #5: a word of 5 syllables or more is shortened */
 
 /* $CEF6-$CF17: the pass's state, in the ROM's order. */
@@ -53,6 +47,15 @@ static void word_end(fw *f, uint8_t x)
     fw_wr8(f, PROS_WORD_POS, 0);
 }
 
+void pros_load_params(fw *f, uint16_t set)
+{
+    fw_wr8(f, PROS_STRESS_PARAM, fw_rd8(f, (uint16_t)(set + 2)));
+    fw_wr8(f, PROS_NUCLEUS_PARAM, fw_rd8(f, (uint16_t)(set + 3)));
+    fw_wr8(f, PROS_FINAL_PARAM, fw_rd8(f, (uint16_t)(set + 4)));
+    fw_wr8(f, PROS_BASELINE, fw_rd8(f, set));
+    fw_wr8(f, PROS_BASELINE_END, fw_rd8(f, (uint16_t)(set + 1)));
+}
+
 /* $CF9A-$D04A: the five parameters of the punctuation's phrase type, and the nucleus mask back to 7; any other
    punctuation keeps the current set and mask ($D001 JMP $D04D). */
 static void phrase_params(fw *f, uint8_t sym)
@@ -74,11 +77,7 @@ static void phrase_params(fw *f, uint8_t sym)
     default:
         return;
     }
-    fw_wr8(f, PROS_STRESS_PARAM, fw_rd8(f, (uint16_t)(set + 2)));
-    fw_wr8(f, PROS_NUCLEUS_PARAM, fw_rd8(f, (uint16_t)(set + 3)));
-    fw_wr8(f, PROS_FINAL_PARAM, fw_rd8(f, (uint16_t)(set + 4)));
-    fw_wr8(f, PROS_BASELINE, fw_rd8(f, set));
-    fw_wr8(f, PROS_BASELINE_END, fw_rd8(f, (uint16_t)(set + 1)));
+    pros_load_params(f, set);
     fw_wr8(f, FW_PROS_NUCLEUS_MASK, PSF_NUCLEUS);
 }
 

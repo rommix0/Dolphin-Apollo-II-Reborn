@@ -3,6 +3,9 @@
 /* The rule-format helpers of text normalisation (ROM $B0C3-$B171), decompiled (M4.0 spec section 3.4). */
 #include "fw.h"
 
+/* (tn_rule_ptr),Y: byte y of the current rule (text normalisation's and the letter-to-sound rules'). */
+static inline uint8_t tn_rule_byte(fw *f, uint8_t y) { return fw_ind_y(f, (uint8_t)TN_RULE_PTR, y); }
+
 /* tn_append_phonetic: len = the length byte at (tn_rule_ptr),*y. Unless len is 0: $78 = len, *x = tn_phon_len,
    and with the voice on (cmd_voice) the len bytes after the length byte are appended to tn_phonetic (*y ends on
    the last one, $78 counts down to 0, *x and tn_phon_len advance by len). len = 0 leaves *x, *y and $78 alone.

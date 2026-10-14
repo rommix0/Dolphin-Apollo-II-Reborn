@@ -211,7 +211,7 @@ static void vowel(fw *f, fw_regs *r)
     uint8_t x = r->x;
     uint8_t next = fw_rd8(f, FW_PROS_NEXT_FEATURES);
     if (next == 0 || (next & PHF_CONSONANT))            /* INC: 8 bits */
-        fw_wr8(f, FW_PROS_SYLLABLES, (uint8_t)(fw_rd8(f, FW_PROS_SYLLABLES) + 1));
+        fw_inc8(f, FW_PROS_SYLLABLES);
     fw_wr8(f, FW_PROS_VOWEL_SEEN, 1);
     if (fw_rd8(f, PROS_SYMBOL) == 'x')
         fw_wr8(f, FW_PROS_STRESS_TOGGLE, 0);
@@ -344,7 +344,7 @@ void pros_mark_stress(fw *f, fw_regs *r)
     start(f, r);
     for (;;) {
         fw_par_ready(f, *r);                            /* $CB1F */
-        fw_wr8(f, PROS_POS, (uint8_t)(fw_rd8(f, PROS_POS) + 1));
+        fw_inc8(f, PROS_POS);
         r->x = fw_rd8(f, PROS_POS);
         if (r->x >= fw_rd8(f, TN_PHON_LEN))
             return;                                     /* $CB2C RTS */

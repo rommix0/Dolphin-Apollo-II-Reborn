@@ -29,7 +29,7 @@ static void rewrite_events(fw *f)
         fw_wr8(f, (uint16_t)(CMD_EV_POSITIONS + 1 + i), fw_rd8(f, PROS_SEG_COUNT + 1));
         fw_wr8(f, CMD_EV_POS, fw_rd8(f, (uint16_t)(CMD_EV_POSITIONS + 2 + i)));
         fw_wr8(f, CMD_EV_POS + 1, 0);
-        fw_wr8(f, CMD_EV_NEXT, (uint8_t)(fw_rd8(f, CMD_EV_NEXT) + 1));
+        fw_inc8(f, CMD_EV_NEXT);
     }
 }
 
@@ -206,7 +206,7 @@ uint8_t pros_phrase_gen(fw *f, uint8_t *x, uint8_t *y)
     r.a = 0xFF;
     fw_wr8(f, PROS_POS, r.a);
     for (;;) {
-        fw_wr8(f, PROS_POS, (uint8_t)(fw_rd8(f, PROS_POS) + 1));   /* $D152 */
+        fw_inc8(f, PROS_POS);   /* $D152 */
         fw_par_ready(f, r);
         rewrite_events(f);
         r.x = fw_rd8(f, PROS_POS);

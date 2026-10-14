@@ -5,7 +5,6 @@
 static uint8_t text_at(const fw *f, uint8_t x) { return fw_rd8(f, (uint16_t)(CMD_TEXT + x)); }
 static uint8_t char_class(fw *f, uint8_t c) { return fw_rom8(f, (uint16_t)(LTS_CHAR_CLASS + c)); }
 static uint8_t affix_byte(fw *f, uint8_t y) { return fw_ind_y(f, (uint8_t)LTS_AFFIX_PTR, y); }
-static uint8_t rule_byte(fw *f, uint8_t y) { return fw_ind_y(f, (uint8_t)TN_RULE_PTR, y); }
 static uint8_t clause_len(const fw *f) { return fw_rd8(f, BOOT_CLAUSE_LEN); }
 
 /* INC or DEC lts_match_pos by lts_match_dir bit 0 (1 = forwards, for the right context) */
@@ -89,7 +88,7 @@ static uint8_t sym_consonants(fw *f)
 /* any other byte: it must equal the text (the ROM reads it again from the rule) */
 static uint8_t sym_literal(fw *f, uint8_t y)
 {
-    uint8_t a = rule_byte(f, y);
+    uint8_t a = tn_rule_byte(f, y);
     if (a != text_at(f, fw_rd8(f, LTS_MATCH_POS)))
         a = 0;
     step_match_pos(f);
@@ -192,7 +191,7 @@ bool lts_match_list(fw *f)
         bool ok = true;
         fw_wr8(f, LTS_MATCH_POS, (uint8_t)(fw_rd8(f, TN_KEY_POS) - 1));
         fw_wr8(f, LTS_MATCH_DIR, 0);
-        while ((a = rule_byte(f, y)) >= 0x1E) {   /* the left context, backwards */
+        while ((a = tn_rule_byte(f, y)) >= 0x1E) {   /* the left context, backwards */
             if (lts_match_symbol(f, a, y) == 0) {
                 ok = false;
                 break;
@@ -208,9 +207,9 @@ bool lts_match_list(fw *f)
             if (fw_rd8(f, LTS_KEY_NEXT))
                 pos++;                            /* a two-letter key: the right context starts after both */
             fw_wr8(f, LTS_MATCH_POS, pos);
-            a = rule_byte(f, y++);                /* the count n */
+            a = tn_rule_byte(f, y++);             /* the count n */
             fw_wr8(f, TN_POS, (uint8_t)(a + pos));   /* set now: it stays even when the right context fails */
-            while ((a = rule_byte(f, y)) >= 0x1E) {  /* the right context, forwards */
+            while ((a = tn_rule_byte(f, y)) >= 0x1E) {  /* the right context, forwards */
                 if (lts_match_symbol(f, a, y) == 0) {
                     ok = false;
                     break;
@@ -225,7 +224,7 @@ bool lts_match_list(fw *f)
         }
         a = tn_rule_skip_text(f, &y);             /* the rest of the right context */
         tn_rule_skip_field(f, a, &y);             /* the length and the output */
-        if (rule_byte(f, y) == 0xFF)
+        if (tn_rule_byte(f, y) == 0xFF)
             return false;
     }
 }

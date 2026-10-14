@@ -1,6 +1,6 @@
 #include "tn_convert.h"
 #include "cmd_run.h"
-#include "isr_serial.h"
+#include "fw_ops.h"
 #include "lts.h"
 #include "par_play.h"
 #include "pros_make.h"
@@ -29,8 +29,7 @@ void tn_convert_clause(fw *f)
         fw_wr8(f, TN_POS, x);
         fw_wr8(f, TN_KEY_POS, x);
         for (;;) {                                              /* per character: $B1F6 */
-            fw_regs pr = { 0, x, 0, 0 };
-            isr_par_ready(f, &pr);                              /* X kept */
+            fw_par_ready(f, (fw_regs){ 0, x, 0, 0 });           /* X kept */
             if (fw_rd8(f, TN_PHON_LEN) >= TN_PHONETIC_FLUSH)
                 break;                                          /* nearly full: speak it now */
             for (;;) {                                          /* $B20A: the deferred commands up to tn_pos */
@@ -38,7 +37,7 @@ void tn_convert_clause(fw *f)
                 cmd_run_due(f, x);                              /* X kept: every handler ends at cmd_run_done */
                 if (x >= fw_rd8(f, TN_POS))
                     break;
-                fw_wr8(f, TN_KEY_POS, (uint8_t)(fw_rd8(f, TN_KEY_POS) + 1));
+                fw_inc8(f, TN_KEY_POS);
             }
             uint8_t c = text_at(f, x);
             if (fw_rd8(f, CMD_PHONETIC)) {                      /* @X: copied verbatim; tn_key_pos lags */

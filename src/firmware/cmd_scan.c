@@ -1,6 +1,6 @@
 #include "cmd_scan.h"
 #include "cmd_match.h"
-#include "isr_serial.h"
+#include "fw_ops.h"
 #include "data/fw_data.h"
 
 void cmd_scan_clause(fw *f)
@@ -10,10 +10,7 @@ void cmd_scan_clause(fw *f)
     fw_wr8(f, CMD_NEXT, y);
     fw_wr8(f, (uint16_t)(CMD_POSITIONS + x), a);    /* cmd_positions[0] = $FF: no command yet */
     do {                                            /* $AD09: one boot_clause character */
-        fw_regs r = { a, x, y, 0 };
-        isr_par_ready(f, &r);                                    /* parallel mode: ready for the next byte */
-        x = r.x;
-        y = r.y;
+        fw_par_ready(f, (fw_regs){ a, x, y, 0 });                /* parallel mode: ready for the next byte */
         a = fw_rd8(f, (uint16_t)(BOOT_CLAUSE + x++));
         if (a != fw_rd8(f, CMD_CHAR)) {
             if (!(fw_rd8(f, CMD_PHONETIC) & 1) && a >= 0x21) {   /* BBS0: bit 0 only; control codes stay raw */

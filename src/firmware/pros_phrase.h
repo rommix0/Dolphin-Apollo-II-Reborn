@@ -6,6 +6,19 @@
 
 #define PROS_PHRASE_LEN_MARK  0x80   /* ORA #$80: bit 7 of a stored phrase count (pros_declination_step masks it) */
 
+/* The five pros_params of each phrase type start at its @R letter (index = letter - 'A'): baseline, baseline end,
+   stress, nucleus, final */
+#define PROS_PARAM_SET_A  (PROS_PARAMS + 0)    /* '.' ';', and a statement's (pros_make_segments) */
+#define PROS_PARAM_SET_F  (PROS_PARAMS + 5)    /* ',' ':' */
+#define PROS_PARAM_SET_K  (PROS_PARAMS + 10)   /* '?' */
+#define PROS_PARAM_SET_P  (PROS_PARAMS + 15)   /* '!' */
+
+/* The five parameters of the phrase type at set (a PROS_PARAM_SET_*) into pros_stress_param, pros_nucleus_param,
+   pros_final_param, pros_baseline and pros_baseline_end, read and written in that order (set + 2, 3, 4, 0, 1: the
+   ROM's LDA / STA pairs): pros_make_segments' set A ($CA92-$CAAD), and each punctuation's in pros_mark_phrases
+   ($CF9A-$D04A), which then sets the nucleus mask. */
+void pros_load_params(fw *f, uint16_t set);
+
 /* $D0FD: pros_phrase_len into pros_sym_lengthen and pros_sym_shorten at pros_pos, with bit 7 unless
    FW_PROS_PUNCT_NOT_KIND3 is set (the punctuation stored before, later in the text, had no class bit 3); then
    pros_phrase_len = 0, and FW_PROS_PUNCT_NOT_KIND3 = 1 when pros_class has no bit 3 (PHC_KIND_3), else 0.
