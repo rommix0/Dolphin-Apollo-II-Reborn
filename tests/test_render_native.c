@@ -39,8 +39,9 @@ static void check_report(void (*print)(const board *b, FILE *out), const board *
 }
 
 /* One render of text on g_e, then on a zeroed g_fresh: the same status, samples, sample count, frame count and
-   clipping, and for a fault the same fault kind and address. Returns g_e's status. */
-static engine_status render_same(const char *name, const char *text, const render_options *opt)
+   clipping, and for a fault the same fault kind and address. Returns g_e's status; a non-NULL count gets g_e's sample
+   count. */
+static engine_status render_same(const char *name, const char *text, const render_options *opt, size_t *count)
 {
     render_result a = { 0 }, b = { 0 };
     engine_status sa = render_text_native(&g_e, text, opt, &a);
@@ -55,6 +56,8 @@ static engine_status render_same(const char *name, const char *text, const rende
                 (int)g_fresh.b.fault, g_fresh.b.fault_addr);
         g_test_failures++;
     }
+    if (count)
+        *count = a.count;
     render_result_free(&a);
     render_result_free(&b);
     return sa;
@@ -76,7 +79,7 @@ static void corpus_same(const char *name, char voice, render_stream stream)
     render_default_options(&opt);
     opt.voice = voice;
     opt.stream = stream;
-    CHECK_EQ(render_same(name, text, &opt), ENGINE_IDLE);
+    CHECK_EQ(render_same(name, text, &opt, NULL), ENGINE_IDLE);
     CHECK(g_e.b.frames_produced > 0);
     free(text);
 }
@@ -108,7 +111,9 @@ static void overflow_same(void)
     memset(spaces, ' ', OVERFLOW_SPACES);
     render_options opt;
     render_default_options(&opt);
-    CHECK_EQ(render_same("overflow", spaces, &opt), ENGINE_FAULT);
+    size_t count = 1;
+    CHECK_EQ(render_same("overflow", spaces, &opt, &count), ENGINE_FAULT);
+    CHECK_EQ(count, 0);   /* the fault ends the run with no sample */
     CHECK_EQ(g_e.b.fault, BOARD_FAULT_INPUT_OVERFLOW);
     check_report(board_print_fault, &g_e.b, "firmware fault: input longer than the serial queue after 819809 cycles\n");
 }
