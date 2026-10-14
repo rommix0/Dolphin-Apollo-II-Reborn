@@ -24,7 +24,8 @@ static fw_host g_host;
 static uint8_t g_sfr[0x100];     /* the stub's SFRs: a read returns g_sfr[addr], a write sets it */
 static event g_log[MAX_LOG];
 static unsigned g_nlog;
-static bool g_wait_ok;           /* what the stub's wait returns */
+static bool g_wait_ok;           /* what the stub's wait returns ... */
+static unsigned g_waits_ok;      /* ... but with g_wait_ok false, the first g_waits_ok waits still return */
 static unsigned g_iwaits;        /* FW_WAIT_INTERRUPT waits so far */
 static uint8_t g_at_event[4];    /* isr_tick_div, isr_word_ofs, isr_words_left and isr_frame_flag at the frame event */
 static unsigned g_flag_every;    /* the scripted timer interrupt sets isr_frame_flag bit 0 at every n-th (0: never) */
@@ -54,9 +55,14 @@ static fw_wait_result stub_wait(void *ctx, fw_wait_kind kind, uint16_t at)
 {
     (void)ctx;
     log_add(EV_WAIT, at, (uint8_t)kind);
-    if (kind == FW_WAIT_INTERRUPT && g_wait_ok && g_flag_every && ++g_iwaits % g_flag_every == 0)
+    bool ok = g_wait_ok;
+    if (!ok && g_waits_ok) {
+        g_waits_ok--;
+        ok = true;
+    }
+    if (kind == FW_WAIT_INTERRUPT && ok && g_flag_every && ++g_iwaits % g_flag_every == 0)
         g_ram[ISR_FRAME_FLAG] |= 1;
-    return g_wait_ok ? FW_WAIT_RETURNED : FW_WAIT_FAILED;
+    return ok ? FW_WAIT_RETURNED : FW_WAIT_FAILED;
 }
 
 static void stub_dsp_write(void *ctx, uint8_t byte)
@@ -87,6 +93,7 @@ static void setup(void)
     g_host.frame_done = stub_frame_done;
     g_nlog = 0;
     g_wait_ok = true;
+    g_waits_ok = 0;
     g_iwaits = 0;
     g_flag_every = 0;
     fw_init(&g_f, g_ram, fw_image_get(), &g_host);
@@ -434,6 +441,31 @@ static void test_timer_start(void)
     CHECK_EQ(g_ram[ISR_TICK_DIV], 0xFF);         /* 8-bit DEC */
 }
 
+/* isr_timer_start untrapped, a wait failing: a fault at that wait's loop and nothing after it, as at
+   isr_wait_frame. Timer 2's wait failing: the log ends at the wait at $B372 (the first 10 events); timer 3's (the
+   first wait returns): it ends at the wait at $B37F (the first 17). A, X and Y untouched. */
+static void test_timer_start_fail(void)
+{
+    static const event log[] = { TIMER_START_LOG(0x80) };
+    static const unsigned ends[2] = { 10, 17 };
+    static const uint16_t loops[2] = { 0xB372, 0xB37F };
+    for (unsigned i = 0; i < 2; i++) {
+        setup();
+        g_sfr[SFR_ICR2] = 0x3F;
+        g_sfr[SFR_P3] = 0x80;
+        g_wait_ok = false;
+        g_waits_ok = i;
+        fw_regs r = { 0x11, 0x22, 0x33, 0 };
+        isr_timer_start(&g_f, &r);
+        check_log(log, ends[i]);
+        CHECK(g_f.fault);
+        CHECK_EQ(g_f.fault_addr, loops[i]);
+        CHECK_EQ(r.a, 0x11);
+        CHECK_EQ(r.x, 0x22);
+        CHECK_EQ(r.y, 0x33);
+    }
+}
+
 /* isr_speech_stop $B398: P23_FUNC = 0, ICR2 = 0 (LDM: writes only), isr_dsp_reset, then boot_speaking bit 0
    cleared (the other bits kept). A, X and Y untouched. */
 static void test_speech_stop(void)
@@ -683,6 +715,7 @@ void suite_fw_dsp(void)
     test_par_handshake();
     test_dsp_reset();
     test_timer_start();
+    test_timer_start_fail();
     test_speech_stop();
     test_speech_start();
     test_wait_frame();

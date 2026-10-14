@@ -95,11 +95,15 @@ void isr_timer_start(fw *f, fw_regs *r)
     fw_sfr_clb(f, SFR_ICR2, ICR2_T2_REQ);            /* CLB3 ICR2 */
     fw_sfr_clb(f, SFR_ICR2, ICR2_T2_EN);             /* CLB2 ICR2 */
     fw_wait(f, FW_WAIT_TIMER2, FW_WAIT_TIMER2_LOOP); /* $B372 BBC3 ICR2,$B372 */
+    if (f->fault)
+        return;                                      /* the wait failed (without a trap): the bit would never come */
     fw_wr_sfr8(f, SFR_T3_RELOAD, T3_RELOAD_SYNC);    /* LDM #$28,T3_RELOAD */
     fw_sfr_clb(f, SFR_ICR2, ICR2_T3_REQ);            /* CLB5 ICR2 */
     fw_sfr_clb(f, SFR_ICR2, ICR2_T3_EN);             /* CLB4 ICR2 */
     fw_wr_sfr8(f, SFR_P23_FUNC, 1);                  /* LDM #1,P23_FUNC */
     fw_wait(f, FW_WAIT_TIMER3, FW_WAIT_TIMER3_LOOP); /* $B37F BBC5 ICR2,$B37F */
+    if (f->fault)
+        return;
     fw_wr_sfr8(f, SFR_T3_RELOAD, T3_RELOAD_TICK);    /* LDM #$31,T3_RELOAD */
     fw_wr_sfr8(f, SFR_ICR2, ICR2_T3_ONLY);           /* LDM #$10,ICR2 */
 }

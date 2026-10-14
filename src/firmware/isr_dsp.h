@@ -39,7 +39,8 @@ void isr_dsp_reset(fw *f, fw_regs *r);
 /* $B35D: starts the 10 kHz DSP tick, inside PHP/SEI ... PLP: T2_PRE = T3_PRE = 0; isr_tick_div decremented twice;
    P3.0 set; T2_RELOAD = 4; ICR2 bits 3 and 2 cleared; a wait for timer 2's request bit (FW_WAIT_TIMER2, $B372);
    T3_RELOAD = $28; ICR2 bits 5 and 4 cleared; P23_FUNC = 1; a wait for timer 3's request bit (FW_WAIT_TIMER3,
-   $B37F); T3_RELOAD = $31; ICR2 = $10 (timer 3's interrupt alone). A, X and Y untouched. */
+   $B37F); T3_RELOAD = $31; ICR2 = $10 (timer 3's interrupt alone). A, X and Y untouched. A failed wait ends it (a
+   fault). */
 void isr_timer_start(fw *f, fw_regs *r);
 /* $B398: P23_FUNC = 0, ICR2 = 0, isr_dsp_reset, boot_speaking bit 0 cleared. A, X and Y untouched. */
 void isr_speech_stop(fw *f, fw_regs *r);
