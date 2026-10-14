@@ -53,11 +53,8 @@ void render_synthesize(const frame_list *fl, const render_options *opt, render_r
     out->clipped = s.clipped;
 }
 
-engine_status render_text_native(const char *text, const render_options *opt, render_result *out)
+engine_status render_text_native(native_engine *e, const char *text, const render_options *opt, render_result *out)
 {
-    native_engine *e = malloc(sizeof *e);   /* each call its own engine: nothing carries over */
-    if (!e)
-        abort();
     char *input = render_input(text, opt);
     frame_list produced = { 0 }, raw = { 0 };
     bool want_raw = opt->stream == RENDER_STREAM_RAW;
@@ -68,6 +65,5 @@ engine_status render_text_native(const char *text, const render_options *opt, re
     frame_list_free(&produced);
     frame_list_free(&raw);
     free(input);
-    free(e);
     return st;
 }

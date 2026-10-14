@@ -83,6 +83,7 @@ int main(int argc, char **argv)
     const char *rom_path = getenv("APOLLO2_ROM");
     const char *out_path = NULL, *text = NULL, *text_file = NULL;
     bool rom_any = false;
+    render_engine engine = RENDER_ENGINE_ROM;
     render_options opt;
     render_default_options(&opt);
 
@@ -101,9 +102,9 @@ int main(int argc, char **argv)
             i++;
         } else if (!strcmp(a, "--engine") && val) {
             if (!strcmp(val, "rom"))
-                opt.engine = RENDER_ENGINE_ROM;
+                engine = RENDER_ENGINE_ROM;
             else if (!strcmp(val, "hybrid"))
-                opt.engine = RENDER_ENGINE_HYBRID;
+                engine = RENDER_ENGINE_HYBRID;
             else {
                 fprintf(stderr, "engine '%s' is not available: use rom or hybrid (native arrives in milestone 5)\n", val);
                 return 1;
@@ -159,7 +160,7 @@ int main(int argc, char **argv)
         return 1;
 
     render_result r;
-    machine_status st = render_text(&g_machine, rom, sizeof rom, text, &opt, &r);
+    machine_status st = render_text(&g_machine, rom, sizeof rom, engine, text, &opt, &r);
     if (st == MACHINE_FAULT) {
         machine_dump(&g_machine, stderr);
         return 2;

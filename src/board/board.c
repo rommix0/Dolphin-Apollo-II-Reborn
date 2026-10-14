@@ -347,3 +347,36 @@ bool board_wait_uart_tx(board *b, uint64_t end)
     b->handler_due = false;
     return false;
 }
+
+void board_print_fault(const board *b, FILE *out)
+{
+    unsigned long long cycles = (unsigned long long)b->cycles;
+    switch (b->fault) {
+    case BOARD_FAULT_NONE:
+        fprintf(out, "no firmware fault after %llu cycles\n", cycles);
+        break;
+    case BOARD_FAULT_DME:
+        fprintf(out, "firmware fault: DME (data-memory strobe) enabled after %llu cycles\n", cycles);
+        break;
+    case BOARD_FAULT_ESCAPED:
+        fprintf(out, "firmware fault: code run from a deselected ROM bank after %llu cycles\n", cycles);
+        break;
+    case BOARD_FAULT_VECTOR:
+        fprintf(out, "firmware fault: unmapped vector $%04X after %llu cycles\n", b->fault_addr, cycles);
+        break;
+    case BOARD_FAULT_INPUT_OVERFLOW:
+        fprintf(out, "firmware fault: input longer than the serial queue after %llu cycles\n", cycles);
+        break;
+    case BOARD_FAULT_FIRMWARE:
+        fprintf(out, "firmware fault at $%04X after %llu cycles\n", b->fault_addr, cycles);
+        break;
+    }
+}
+
+void board_print_unmodelled(const board *b, FILE *out)
+{
+    for (unsigned i = 0; i < b->unmodelled_count; i++)
+        fprintf(out, "unmodelled %s $%04X\n", b->unmodelled[i].write ? "write" : "read", b->unmodelled[i].addr);
+    if (b->unmodelled_dropped)
+        fprintf(out, "unmodelled log full: %u more accesses not listed\n", b->unmodelled_dropped);
+}

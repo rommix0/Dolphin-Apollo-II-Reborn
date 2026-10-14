@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include "board/m50734.h"
 
 #define BOARD_RAM_SIZE        0x4000   /* $0000-$3FFF; $00DA-$00FF are SFRs instead (MACHINE_RAM_SIZE) */
@@ -145,5 +146,18 @@ bool board_wait_interrupt(board *b, uint64_t end);
 board_input_result board_wait_input(board *b, uint64_t end, board_idle_fn idle, void *user);
 bool board_wait_timer(board *b, unsigned bit, uint64_t end);
 bool board_wait_uart_tx(board *b, uint64_t end);
+/* The CLI's reports (M5b spec 3.2); the board has no CPU, so they name no PC.
+   - board_print_fault: one line, the fault with its address where it has one, and the cycles spent:
+     BOARD_FAULT_FIRMWARE   "firmware fault at $A893 after N cycles" (the NUL bug: fault_addr)
+     BOARD_FAULT_DME        "firmware fault: DME (data-memory strobe) enabled after N cycles"
+     BOARD_FAULT_ESCAPED    "firmware fault: code run from a deselected ROM bank after N cycles"
+     BOARD_FAULT_VECTOR     "firmware fault: unmapped vector $D300 after N cycles" (fault_addr)
+     BOARD_FAULT_INPUT_OVERFLOW "firmware fault: input longer than the serial queue after N cycles"
+     BOARD_FAULT_NONE       "no firmware fault after N cycles"
+   - board_print_unmodelled: machine_print_unmodelled without the PC: "unmodelled read $00DA" or
+     "unmodelled write $00DA" per logged access, then "unmodelled log full: N more accesses not listed" when accesses
+     were dropped. */
+void board_print_fault(const board *b, FILE *out);
+void board_print_unmodelled(const board *b, FILE *out);
 
 #endif

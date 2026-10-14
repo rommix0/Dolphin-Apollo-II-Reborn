@@ -120,9 +120,8 @@ static void test_render_matches_rom(const uint8_t *rom, size_t len)
     render_options opt;
     render_result a, b;
     render_default_options(&opt);
-    CHECK_EQ(render_text(&g_m, rom, len, "Hello world.", &opt, &a), MACHINE_IDLE);
-    opt.engine = RENDER_ENGINE_HYBRID;
-    CHECK_EQ(render_text(&g_m, rom, len, "Hello world.", &opt, &b), MACHINE_IDLE);
+    CHECK_EQ(render_text(&g_m, rom, len, RENDER_ENGINE_ROM, "Hello world.", &opt, &a), MACHINE_IDLE);
+    CHECK_EQ(render_text(&g_m, rom, len, RENDER_ENGINE_HYBRID, "Hello world.", &opt, &b), MACHINE_IDLE);
     CHECK(a.count > 0);
     CHECK_EQ(a.count, b.count);
     CHECK(a.count == b.count && memcmp(a.samples, b.samples, a.count * sizeof a.samples[0]) == 0);
