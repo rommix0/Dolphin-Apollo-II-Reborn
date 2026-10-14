@@ -98,8 +98,8 @@ For every text and option, `apollo2 -o out.wav` writes byte for byte the WAV it 
 ### 4.2 The suites are marked
 
 In `tests/suites.h` every suite is one of two kinds:
-- **`SUITE(fn)`, ROM-free:** today's 30 suites that run in full without the ROM, plus `suite_render_native` (§4.5).
-- **`SUITE_ROM(fn)`, with parts that need the ROM:** rom_boot, rom_speak, golden, raw_stream, render, rom_id, machine_hooks, firmware_data, diff_lts, diff_play, diff_serial, diff_main, golden_hybrid, diff_native (14). Their ROM-free parts still run without the ROM.
+- **`SUITE(fn)`, ROM-free:** today's suites that run in full without the ROM and never ask for it (29: `suite_native` asks for the ROM in its queue-fit comparison with the ROM engine, so it is a ROM suite), plus `suite_render_native` (§4.5): 30 in all. *(Corrected 2026-10-14 from the plan's proof.)*
+- **`SUITE_ROM(fn)`, with parts that need the ROM:** rom_boot, rom_speak, golden, raw_stream, render, rom_id, machine_hooks, firmware_data, diff_lts, diff_play, diff_serial, diff_main, golden_hybrid, diff_native, native (15). *(Corrected 2026-10-14 from the plan's proof.)* Their ROM-free parts still run without the ROM.
 
 ### 4.3 The runner enforces the marks
 
@@ -139,7 +139,7 @@ The plan's last code task runs the full suite (`build.bat test`, not `test-norom
 
 1. `apollo2.exe` builds from `src\` alone (`/Isrc`, no oracle source or include root); nothing under `src/` includes an oracle header.
 2. `build.bat test`: 45 suites, 0 failures, 0 skips with the ROM; every golden byte-identical; `diff_main` (66 runs, 129 idles, 31,533 frame events), `diff_native` (69 runs, 135 idles, 40,329 frame events), `golden_native` (48 goldens, 23,281 frames) and the other suites' counts unchanged.
-3. `build.bat test-norom`: passes; 31 ROM-free suites in full, the 14 ROM suites skip only their ROM parts, the product runs pass.
+3. `build.bat test-norom`: passes; 30 ROM-free suites in full, the 15 ROM suites skip only their ROM parts, the product runs pass (`tests/check_cli.bat`). *(Corrected 2026-10-14 from the plan's proof.)*
 4. The one-time worktree run with no ROM file passes; its summary is recorded in §6.
 5. `ghidra740\coverage.bat`, `ghidra740\validate.bat` and `tools/calibrate.py` find their tools under the same names in `build\`, and the tools behave as before.
 
