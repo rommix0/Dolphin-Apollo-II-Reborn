@@ -10,8 +10,8 @@
    position from 0 to tn_phon_len - 1: the position's flags and counts cleared; the next symbol and the next
    phonetic symbol looked up; the markers ~ | } { ` x; the stress toggle and the stress flag; the shortening and
    lengthening counts from the context (8 bits each); a word's syllable count stored at the space or
-   punctuation that ends it. tn_phonetic is rewritten in place: | before a vowel becomes R, the first of two equal consonants becomes |, a ? after a
-   backquote becomes a full stop.
+   punctuation that ends it. tn_phonetic is rewritten in place: | before a vowel becomes R, the first of two equal
+   consonants becomes |, a ? after a backquote becomes a full stop.
    r in: the registers at entry (Y reaches isr_par_ready at the first position; A and X are written first).
    r out: the A, X and Y the ROM leaves at its RTS ($CB2C): A and Y as at the last isr_par_ready, X = pros_pos
    (tn_phon_len). r->p is not used. */

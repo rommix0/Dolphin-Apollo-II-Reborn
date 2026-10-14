@@ -85,8 +85,8 @@
                                                ($CEB3); 0 at its start, at that '?' and at $CEC2 */
 #define FW_PROS_PUNCT_NOT_KIND3    0x1C15   /* pros_store_phrase_len: the punctuation it stored at last (the next one
                                                in the text) had no class bit 3 (PHC_KIND_3 is set for . : ; ?), so
-                                               this store gets no bit 7. Cleared by pros_mark_stress at its start ($CAE0),
-                                               which pros_mark_phrases' entry relies on; then by each
+                                               this store gets no bit 7. Cleared by pros_mark_stress at its start
+                                               ($CAE0), which pros_mark_phrases' entry relies on; then by each
                                                pros_store_phrase_len call ($D11B), which sets it to 1 ($D125) when
                                                pros_class has no bit 3 */
 #define FW_PROS_FINAL_LENGTHEN     0x1C16   /* pros_mark_phrases: the phrase-final syllable's lengthening: 8

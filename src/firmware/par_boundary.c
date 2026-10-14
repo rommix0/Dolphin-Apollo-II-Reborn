@@ -164,7 +164,8 @@ static uint8_t sum_whole(fw *f, uint8_t x)
     return (uint8_t)(fw_rd8(f, PAR_DOMINATED_TARGET) + fw_rom8(f, (uint16_t)(PAR_TARGET_BIAS + x)));
 }
 
-/* $C0C5-$C0CF, proportion & 3 = 0, a multiple of 4 other than 0 and 8 (4, 12, 16, ...; 0 and 8 take their own paths first): bias + target (CLC; 8 bits) >> 1 (LSR), rounded (ADC #0). */
+/* $C0C5-$C0CF, proportion & 3 = 0, a multiple of 4 other than 0 and 8 (4, 12, 16, ...; 0 and 8 take their own
+   paths first): bias + target (CLC; 8 bits) >> 1 (LSR), rounded (ADC #0). */
 static uint8_t sum_half(fw *f, uint8_t x)
 {
     uint8_t s = (uint8_t)(fw_rom8(f, (uint16_t)(PAR_TARGET_BIAS + x)) + fw_rd8(f, PAR_DOMINATED_TARGET));

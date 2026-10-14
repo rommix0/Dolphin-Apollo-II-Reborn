@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <math.h>
 #include "synth/calib.h"
 #include "synth/params.h"
@@ -36,6 +37,7 @@ static float flow(float t, float oq)
 
 float source_step(source *s, const source_params *p, float fs)
 {
+    assert(p->f0_hz > 0.0f);            /* divided by below; params_from_frame clamps it to CAL_F0_MIN_HZ and up */
     float inc = p->f0_hz / fs;          /* pitch periods per sample */
     float t0 = fs / p->f0_hz;           /* period in samples */
     float voiced;

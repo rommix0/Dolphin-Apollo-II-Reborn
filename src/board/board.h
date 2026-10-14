@@ -114,7 +114,7 @@ void board_dsp_write(board *b, uint8_t v);
 /* The frame event: the 20 bytes at the BOARD_PRODUCER_PTR pointer to the frame callback, frames_produced counted. */
 void board_capture_frame(board *b);
 /* A byte as the CPU reads it (machine_peek): RAM, an SFR 0, else the converted image under the current P2 ($FF for
-   another bank, or without an image). */
+   another bank, for $4000-$7FFF under the lower window (P2 bit 7), or without an image). */
 uint8_t board_peek(const board *b, uint16_t addr);
 /* P2 selects the main ROM. */
 bool board_main_bank(const board *b);
