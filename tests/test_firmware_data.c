@@ -136,8 +136,9 @@ static void test_counts(void)
           fw_vec_int4_timerx != fw_vec_int2_timers);
 }
 
-/* fw_opcodes against the emulator's 740 opcode table (src/cpu740/optable.c; M4.6c1 spec 3.5): each opcode decodes
-   to its mnemonic and addressing mode, and a bit instruction's does for each of the 8 bits (opcode + $20 x bit). */
+/* fw_opcodes against the emulator's 740 opcode table (tests/oracle/cpu740/optable.c; M4.6c1 spec 3.5): each opcode
+   decodes to its mnemonic and addressing mode, and a bit instruction's does for each of the 8 bits (opcode + $20 x
+   bit). */
 static void test_listing_opcodes(void)
 {
     static const uint8_t k_mode[] = {

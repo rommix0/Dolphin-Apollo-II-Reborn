@@ -1,10 +1,10 @@
 #ifndef ENGINE_NATIVE_HOST_H
 #define ENGINE_NATIVE_HOST_H
 /* The native host (M5a spec 3.5): the fw_host of the C firmware on a CPU-less board, with no ROM and no emulated CPU.
-   Every call does what the hybrid host (src/engine/thunks.c) does on the machine, the cycles included: the SFRs, the
-   DSP port and the frame event on the board; each wait on the board's clock, with the hybrid's budgets, the phase
-   deadline and its end (a stop at the deadline, else a failure); read_bank $FF; enter records the bank entry; the CPU
-   calls the I flag; a ROM call fails. Nothing here includes a machine/ or cpu740/ header. */
+   Every call does what the hybrid host (tests/oracle/engine/thunks.c) does on the machine, the cycles included: the
+   SFRs, the DSP port and the frame event on the board; each wait on the board's clock, with the hybrid's budgets, the
+   phase deadline and its end (a stop at the deadline, else a failure); read_bank $FF; enter records the bank entry;
+   the CPU calls the I flag; a ROM call fails. Nothing here includes a machine/ or cpu740/ header. */
 #include <stdbool.h>
 #include <stdint.h>
 #include "board/board.h"

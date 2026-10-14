@@ -1,12 +1,13 @@
 #ifndef BOARD_BOARD_H
 #define BOARD_BOARD_H
-/* The CPU-less board (M5a spec 3.2-3.4): what the machine (src/machine/machine.c) holds outside the CPU, with the
-   machine's rules, so that the native host can give the C firmware everything the emulator gives it and the two can be
-   compared field by field (diff_native). Time passes only in the waits, which charge exactly the cycles the all-C
-   hybrid's emulated CPU spends in them (cpu740.c): a WIT step 4, an interrupt entry 7, the loops' instructions at their
-   cycles. Each step mirrors machine_step: prepare (serial delivery at the idle point, then the IRQ lines), act (a WIT
-   step, an interrupt entry, the handler of a taken interrupt in 0 cycles, or the instruction the wait mirrors), then
-   the tick of the peripheral timers through the timer scale. Nothing here includes a machine/ or cpu740/ header. */
+/* The CPU-less board (M5a spec 3.2-3.4): what the machine (tests/oracle/machine/machine.c) holds outside the CPU,
+   with the machine's rules, so that the native host can give the C firmware everything the emulator gives it and the
+   two can be compared field by field (diff_native). Time passes only in the waits, which charge exactly the cycles the
+   all-C hybrid's emulated CPU spends in them (cpu740.c): a WIT step 4, an interrupt entry 7, the loops' instructions
+   at their cycles. Each step mirrors machine_step: prepare (serial delivery at the idle point, then the IRQ lines),
+   act (a WIT step, an interrupt entry, the handler of a taken interrupt in 0 cycles, or the instruction the wait
+   mirrors), then the tick of the peripheral timers through the timer scale. Nothing here includes a machine/ or
+   cpu740/ header. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>

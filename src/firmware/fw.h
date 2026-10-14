@@ -150,7 +150,7 @@ typedef enum { FW_WAIT_FAILED = 0, FW_WAIT_RETURNED, FW_WAIT_STOPPED } fw_wait_r
 #define P2_BANK_BITS          0x7C     /* P2 bits 2-6: the selected ROM bank (M4.6c1 spec 3.1) */
 #define P2_MAIN_BANK          0x70     /* the main ROM's bank bits (boot_init_ports $AC50 LDM #$70,P2) */
 
-/* The machine or native host. In hybrid runs it is the emulator (src/engine/thunks.c). */
+/* The machine or native host. In hybrid runs it is the emulator (tests/oracle/engine/thunks.c). */
 typedef struct fw_host {
     void *ctx;
     /* Runs the routine at addr, still in ROM, to its RTS, within budget cycles. A, X and Y in and out; the

@@ -165,7 +165,7 @@ static void put_sound_array(enc *e, uint32_t *at, const uint8_t *v, unsigned n, 
 }
 
 /* The opcodes of the code listings (M4.6c1 spec 3.5), from the 740 opcode table the emulator uses
-   (src/cpu740/optable.c, after MAME's dm740.lst); test_firmware_data checks each against it. */
+   (tests/oracle/cpu740/optable.c, after MAME's dm740.lst); test_firmware_data checks each against it. */
 const fw_opcode fw_opcodes[] = {
     { FWI_ADC, FWM_IMM, 0x69 }, { FWI_AND, FWM_IMM, 0x29 }, { FWI_AND, FWM_ZP, 0x25 },
     { FWI_BBC, FWM_BIT_A_REL, 0x13 }, { FWI_BBC, FWM_BIT_ZP_REL, 0x17 }, { FWI_BBS, FWM_BIT_ZP_REL, 0x07 },

@@ -1,7 +1,7 @@
 #ifndef HYBRID_ENGINE_H
 #define HYBRID_ENGINE_H
 /* The "hybrid" engine (spec section 3; M4.0 spec section 3): the rom engine with the routines of the
-   replacement table (src/engine/thunks.c) running as C. */
+   replacement table (tests/oracle/engine/thunks.c) running as C. */
 #include "engine/rom_engine.h"
 
 typedef struct {
