@@ -1,10 +1,20 @@
 #ifndef TEST_H
 #define TEST_H
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
 extern int g_test_failures;
 extern int g_test_skips;
+extern bool g_test_rom_asked;   /* test_rom() (rom_fixture.c) was called by the running suite */
+
+/* A suite's mark in suites.h (M5b spec 4.2): SUITE runs in full without the ROM, SUITE_ROM has parts that need it. */
+typedef enum { TEST_ROM_FREE, TEST_NEEDS_ROM } test_mark;
+
+/* The runner's verdict on one suite run (M5b spec 4.3; test_main.c): NULL when its mark holds, else the reason it
+   fails. A SUITE that asked for the ROM, or a SUITE_ROM that never did, fails in every mode; with no_rom
+   (APOLLO2_NO_ROM set) a SUITE that skipped fails too, except suite_audio (its skip is the waveOut device's). */
+const char *test_verdict(const char *name, test_mark mark, bool asked_rom, int skips, bool no_rom);
 
 #define CHECK(cond) \
     do { if (!(cond)) { fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); \

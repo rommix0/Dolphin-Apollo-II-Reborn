@@ -1,12 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "rom_fixture.h"
+#include "test.h"
 #include "engine/rom_id.h"
 
 const uint8_t *test_rom(size_t *len)
 {
     static uint8_t rom[0x10000];
     static int state;   /* 0 = not tried, 1 = loaded, -1 = missing, wrong size or not the UK V2.01 4.04 image */
+    g_test_rom_asked = true;   /* M5b spec 4.1: the runner checks the suite's mark against this */
+    const char *no_rom = getenv("APOLLO2_NO_ROM");
+    if (no_rom && *no_rom)
+        return NULL;           /* norom mode: as if no ROM existed, without looking */
     if (state == 0) {
         const char *path = getenv("APOLLO2_ROM");
         FILE *f = fopen(path ? path : "UK_V2.01_4.04_ROM.BIN", "rb");

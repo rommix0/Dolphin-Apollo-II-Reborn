@@ -1,7 +1,7 @@
 @echo off
 rem Builds the program build\apollo2.exe from src\ alone, the oracle tools build\apollo2_frames.exe,
 rem build\apollo2_coverage.exe and build\cpu740_vectors.exe, and the tests build\apollo2_tests.exe (M5b spec 2.3).
-rem Usage: build.bat [test [SUITE_FILTER]]
+rem Usage: build.bat [test [SUITE_FILTER] | test-norom [SUITE_FILTER]]
 setlocal EnableDelayedExpansion
 if not defined VSCMD_VER (
     call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
@@ -40,6 +40,17 @@ for %%a in (apollo2_frames apollo2_coverage cpu740_vectors) do (
 rem Step 3: the tests, with the oracle and the program's sources.
 cl %CFLAGS% /Isrc /Itests\oracle /Fobuild\ /Fdbuild\ /Febuild\apollo2_tests.exe tests\*.c !ORACLESRC! !PRODSRC! %LIBS% ^
     || exit /b 1
+if /i "%~1"=="test-norom" goto norom
 if /i not "%~1"=="test" exit /b 0
 build\apollo2_tests.exe %2
 exit /b %errorlevel%
+
+:norom
+rem M5b spec 4.4: the suite as if no ROM existed (APOLLO2_NO_ROM: test_rom() returns NULL without looking), then the
+rem program itself with APOLLO2_ROM unset (tests\check_cli.bat).
+set APOLLO2_NO_ROM=1
+build\apollo2_tests.exe %2 || exit /b 1
+set APOLLO2_NO_ROM=
+set APOLLO2_ROM=
+call tests\check_cli.bat build\apollo2.exe || exit /b 1
+exit /b 0
