@@ -132,7 +132,8 @@ static void test_counts(void)
     /* The vector table (M5a spec 3.4) */
     CHECK_EQ(fw_vec_int3_step, fw_vec_int0);    /* lines 3 and 0 share isr_unused, an RTI */
     CHECK_EQ(fw_vec_reset, 0xA61C);             /* boot_reset */
-    CHECK(fw_vec_int4_timerx != fw_vec_int1_serial && fw_vec_int1_serial != fw_vec_int2_timers);
+    CHECK(fw_vec_int4_timerx != fw_vec_int1_serial && fw_vec_int1_serial != fw_vec_int2_timers &&
+          fw_vec_int4_timerx != fw_vec_int2_timers);
 }
 
 /* fw_opcodes against the emulator's 740 opcode table (src/cpu740/optable.c; M4.6c1 spec 3.5): each opcode decodes

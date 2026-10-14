@@ -26,6 +26,8 @@ typedef struct {
     bool stopped;
 } native_run;
 
+_Static_assert(BOARD_FRAME_BYTES == ENGINE_FRAME_BYTES, "a board frame is an engine frame");
+
 /* The board's frame callback: the watch, then the produced-frame sink. */
 static void on_produced(void *user, const uint8_t frame[BOARD_FRAME_BYTES])
 {
@@ -85,8 +87,10 @@ static void run_entries(native_engine *e)
     for (;;) {
         e->entries++;
         e->h.entered = false;
-        if (setjmp(trap) == 0 && !board_call(b, entry, a, x))
-            break;   /* no C at the reset vector: BOARD_FAULT_VECTOR */
+        if (setjmp(trap) == 0) {
+            if (!board_call(b, entry, a, x))
+                break;   /* no C at the entry address: BOARD_FAULT_VECTOR */
+        }
         if (f->stopped)
             break;
         if (f->unwound && e->h.entered) {

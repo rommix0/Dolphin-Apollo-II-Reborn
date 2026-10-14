@@ -65,5 +65,7 @@ void suite_golden_native(void)
     }
     check("boot", "", true, &frames);   /* the startup announcement */
     files++;
+    CHECK_EQ(files, 48);
+    CHECK_EQ(frames, 23281);
     printf("  %zu goldens, %zu frames reproduced on the native engine\n", files, frames);
 }

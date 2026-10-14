@@ -88,7 +88,7 @@ static uint8_t g_mem[0x10000];
 static uint8_t mem_read(void *ctx, uint16_t a) { (void)ctx; return g_mem[a]; }
 static void mem_write(void *ctx, uint16_t a, uint8_t v) { (void)ctx; g_mem[a] = v; }
 
-/* The board's cycles are cpu740_step's on the instructions the waits mirror ($B372 BBC3 ICR2,$B372; $C500 BBC1
+/* The board's cycles are cpu740_step's on the instructions the waits mirror ($B372 BBC3 ICR2,$B372; $B37F BBC5 ICR2,$B37F; $C500 BBC1
    UART_STATUS,$C500; $C503 RTS), a WIT step and an interrupt entry. */
 static void test_cycles_match_cpu(void)
 {
@@ -98,6 +98,7 @@ static void test_cycles_match_cpu(void)
     g_mem[0xFFFE] = 0x72;
     g_mem[0xFFFF] = 0xB3;
     memcpy(&g_mem[FW_WAIT_TIMER2_LOOP], (const uint8_t[]){ 0x77, BOARD_ICR2, 0xFD }, 3);
+    memcpy(&g_mem[FW_WAIT_TIMER3_LOOP], (const uint8_t[]){ 0xB7, BOARD_ICR2, 0xFD }, 3);
     memcpy(&g_mem[FW_WAIT_UART_TX_LOOP], (const uint8_t[]){ 0x37, BOARD_UART_STATUS, 0xFD, 0x60 }, 4);
     cpu740_reset(&c, &bus);
     CHECK_EQ(c.pc, FW_WAIT_TIMER2_LOOP);
@@ -106,6 +107,13 @@ static void test_cycles_match_cpu(void)
     g_mem[BOARD_ICR2] = 0x08;
     CHECK_EQ(cpu740_step(&c, &bus), BOARD_BBC_EXIT);   /* set: on to $B375 */
     CHECK_EQ(c.pc, FW_WAIT_TIMER2_EXIT);
+    g_mem[BOARD_ICR2] = 0x08;               /* bit 5 clear */
+    c.pc = FW_WAIT_TIMER3_LOOP;
+    CHECK_EQ(cpu740_step(&c, &bus), BOARD_BBC_PASS);
+    CHECK_EQ(c.pc, FW_WAIT_TIMER3_LOOP);
+    g_mem[BOARD_ICR2] = 0x20;
+    CHECK_EQ(cpu740_step(&c, &bus), BOARD_BBC_EXIT);
+    CHECK_EQ(c.pc, FW_WAIT_TIMER3_EXIT);
     c.pc = FW_WAIT_UART_TX_LOOP;
     CHECK_EQ(cpu740_step(&c, &bus), BOARD_BBC_PASS);
     g_mem[BOARD_UART_STATUS] = 0x02;

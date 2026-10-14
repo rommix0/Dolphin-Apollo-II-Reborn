@@ -1,4 +1,3 @@
-#include <stdlib.h>
 #include <string.h>
 #include "engine/rom_engine.h"
 
