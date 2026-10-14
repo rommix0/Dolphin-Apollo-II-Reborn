@@ -148,7 +148,8 @@ typedef enum { FW_WAIT_FAILED = 0, FW_WAIT_RETURNED, FW_WAIT_STOPPED } fw_wait_r
 #define FW_FRAME_EVENT        0xB306   /* isr_swap_buffers: the ROM's point of the frame event, where fw_frame_done
                                           faults */
 #define SFR_FIRST             0xDA     /* the SFRs are $DA-$FF: zero page there is not RAM */
-#define SFR_P2                0xF0     /* port P2: bit 0 the DSP reset line, bits 2-6 the bank, bit 7 the window */
+#define SFR_P2                0xF0     /* port P2: bit 0 the DSP reset line, bit 1 the self-test pin, bits 2-6
+                                          the bank, bit 7 the window */
 #define P2_LOW_WINDOW         0x80     /* P2 bit 7: the lower-ROM window ($4000-$7FFF read the LOW overlay) */
 #define P2_BANK_BITS          0x7C     /* P2 bits 2-6: the selected ROM bank (M4.6c1 spec 3.1) */
 #define P2_MAIN_BANK          0x70     /* the main ROM's bank bits (boot_init_ports $AC50 LDM #$70,P2) */

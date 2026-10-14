@@ -9,9 +9,6 @@
 #include "firmware/isr_serial.h"
 #include "firmware/ser_addr.h"
 
-#define P2_LOW_WINDOW 0x80   /* P2 bit 7: $4000-$7FFF read the lower half of the image; matches the firmware's
-                                P2_LOW_WINDOW (firmware/fw.h) */
-
 void board_init(board *b, const uint8_t port_in[5], uint32_t cycle_num, uint32_t cycle_den)
 {
     memset(b, 0, sizeof *b);

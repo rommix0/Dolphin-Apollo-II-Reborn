@@ -23,7 +23,7 @@ static void set_below(fw *f, uint16_t setting, uint8_t a, uint8_t limit)
 uint8_t cmd_put_phonetic(fw *f, uint8_t x)
 {
     uint8_t y = 0;
-    tn_append_phonetic(f, fw_ind_y(f, (uint8_t)TN_RULE_PTR, 0), &x, &y);
+    tn_append_phonetic(f, tn_rule_byte(f, 0), &x, &y);
     return x;
 }
 
