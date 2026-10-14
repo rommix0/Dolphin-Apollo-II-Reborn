@@ -10,6 +10,10 @@
 #define LTS_AFFIX_PREV          0xAF1C
 #define LTS_AFFIX_MATCH_BACK    0xAF69
 #define LTS_STEP_BACK           0xB004
+/* Loop heads inside it, unnamed in the annotations: the JMPs back to them */
+#define LTS_SUFFIX_NEXT_ENTRY   0xAF33   /* lts_sym_suffix: the next entry, from lts_match_pos again (LDX) */
+#define LTS_SUFFIX_NEXT_CHAR    0xAF35   /* lts_sym_suffix: the entry's next character against the text */
+#define LTS_MATCH_BACK_NEXT     0xAF6B   /* lts_affix_match_back: the entry's next character, backwards */
 #define LTS_AFFIX_FIRST         3      /* lts_sym_suffix: the index of lts_suffixes' first entry (after $00 CR LF) */
 #define LTS_SIBILANTS_LAST      0x1F   /* lts_sym_sibilant: the index of lts_sibilants' last character */
 #define LTS_AT_CONSONANTS_LAST  0x14   /* lts_sym_at: the index of lts_at_consonants' last character */
@@ -212,9 +216,9 @@ const fw_insn fw_bank_lts_code[] = {
     { 0xAF54, FWI_CPX, FWM_ZP, BOOT_CLAUSE_LEN },
     { 0xAF56, FWI_BCS, FWM_REL, 0, 0xAF5C },
     { 0xAF58, FWI_INY, FWM_IMP },
-    { 0xAF59, FWI_JMP, FWM_ABS, 0xAF35 },
+    { 0xAF59, FWI_JMP, FWM_ABS, LTS_SUFFIX_NEXT_CHAR },
     { 0xAF5C, FWI_JSR, FWM_ABS, LTS_AFFIX_NEXT },
-    { 0xAF5F, FWI_JMP, FWM_ABS, 0xAF33 },
+    { 0xAF5F, FWI_JMP, FWM_ABS, LTS_SUFFIX_NEXT_ENTRY },
     { 0xAF62, FWI_STX, FWM_ZP, LTS_MATCH_POS },
     { 0xAF64, FWI_LDA, FWM_IMM, 1 },
     { 0xAF66, FWI_LDY, FWM_ZP, FW_TMP_78 },
@@ -229,7 +233,7 @@ const fw_insn fw_bank_lts_code[] = {
     { 0xAF76, FWI_BNE, FWM_REL, 0, 0xAF7D },
     { 0xAF78, FWI_DEX, FWM_IMP },
     { 0xAF79, FWI_DEY, FWM_IMP },
-    { 0xAF7A, FWI_JMP, FWM_ABS, 0xAF6B },
+    { 0xAF7A, FWI_JMP, FWM_ABS, LTS_MATCH_BACK_NEXT },
     { 0xAF7D, FWI_JSR, FWM_ABS, LTS_AFFIX_PREV },
     { 0xAF80, FWI_JMP, FWM_ABS, LTS_AFFIX_MATCH_BACK },
     { 0xAF83, FWI_STX, FWM_ZP, LTS_MATCH_POS },

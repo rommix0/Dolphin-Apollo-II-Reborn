@@ -1949,7 +1949,8 @@ static const fw_rule r_cff[] = {
 };
 static const fw_rule_list l_cff = { r_cff, 1 };
 
-/* One more empty list that no pointer uses; the two-letter rule lists follow. */
+/* One more list that no pointer uses: one empty rule (no context, no output), as $FF's above; the two-letter rule
+   lists follow. */
 /* tn_rules_high at $5622: no character points here */
 static const fw_rule r_unref_5622[] = {
     { "", "", "", "" },

@@ -51,7 +51,8 @@ void cmd_query(fw *f, uint8_t x, uint8_t a)
     cmd_reply_setting(f, fw_rd8(f, (uint16_t)(BOOT_CLAUSE - 1 + x)), x);
 }
 
-/* $ABBE @L: 'L', then the 7 bank ids of 14 characters from bank_id_table, then CR (ser_tx_records) */
+/* $ABBE @L: 'L', ser_reply_count 7 and ser_reply_size 14 in hex, low digit first ("70", "E0"), then the 7 bank
+   ids of 14 characters from bank_id_table, then CR (ser_tx_records) */
 void cmd_list_languages(fw *f, uint8_t x, uint8_t a)
 {
     fw_wr8(f, SER_REPLY_ID, 'L');

@@ -275,6 +275,7 @@ static void put_bank_code(enc *e)
     at = put_listing(e, at, fw_bank_ramcode, fw_bank_ramcode_count, BANK_RAMCODE_OFFSET);
     check_end(e, "the bank routines", at, BANK_RAMCODE_LTS + BANK_RAMCODE_OFFSET);
     at = put_listing(e, at, fw_bank_lts_code, fw_bank_lts_code_count, 0);
+    /* + 2: the copy's last byte $AFFC is the opcode of LDA #1, whose operand $AFFD lies one byte past the copy */
     check_end(e, "the letter-to-sound code", at, BANK_RAMCODE_IMAGE_END + 2);
     at = put_listing(e, BANK_ENTRY_COLD, fw_bank_entry_code, fw_bank_entry_code_count, 0);
     check_end(e, "bank_entry_cold", at, BANK_ENTRY_WARM);
@@ -283,7 +284,7 @@ static void put_bank_code(enc *e)
     check_end(e, "bank_hdr_lang_code", put_text(e, false, BANK_HDR_LANG_CODE, fw_bank_hdr_lang_code, false),
               BANK_HDR_LANG_CODE + BANK_LANG_CODE_CHARS);
     check_end(e, "bank_hdr_lang_ver_text", put_text(e, false, BANK_HDR_LANG_VER_TEXT, fw_bank_hdr_lang_ver_text, false),
-              BANK_HDR_LANG_VER_TEXT + 4);
+              BANK_HDR_LANG_VER_TEXT + BANK_VER_TEXT_CHARS);
     check_end(e, "bank_hdr_engine_ver_text",
               put_text(e, false, BANK_HDR_ENGINE_VER_TEXT, fw_bank_hdr_engine_ver_text, false), CMD_VERSION_ENGINE_TEXT);
 }

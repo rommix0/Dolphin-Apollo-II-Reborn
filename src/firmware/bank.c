@@ -96,11 +96,11 @@ void bank_read_id(fw *f, fw_regs *r)
             bank_put_id_char(f, &t);
             t.y++;
         } while (t.y < BANK_LANG_CODE_CHARS);
-        for (uint16_t i = 0; i < 4; i++) {                         /* LDA $9800 ... $9803 */
+        for (uint16_t i = 0; i < BANK_VER_TEXT_CHARS; i++) {       /* LDA $9800 ... $9803 */
             t.a = fw_rom8(f, (uint16_t)(BANK_HDR_ENGINE_VER_TEXT + i));
             bank_put_id_char(f, &t);
         }
-        for (uint16_t i = 0; i < 4; i++) {                         /* LDA $FFEA ... $FFED */
+        for (uint16_t i = 0; i < BANK_VER_TEXT_CHARS; i++) {       /* LDA $FFEA ... $FFED */
             t.a = fw_rom8(f, (uint16_t)(BANK_HDR_LANG_VER_TEXT + i));
             bank_put_id_char(f, &t);
         }

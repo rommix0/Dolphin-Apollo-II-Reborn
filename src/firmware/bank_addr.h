@@ -41,6 +41,8 @@
 #define BANK_HDR_ENGINE_VER_TEXT  0x9800   /* char[4]: ID part 2 */
 #define BANK_ID_CHARS             14       /* bank_read_id: 6 + 4 + 4 characters per bank in bank_id_table */
 #define BANK_LANG_CODE_CHARS      6        /* bank_read_id: the characters of bank_hdr_lang_code */
+#define BANK_VER_TEXT_CHARS       4        /* bank_read_id: the characters of bank_hdr_engine_ver_text, and of
+                                              bank_hdr_lang_ver_text */
 #define BANK_COUNT                7        /* bank_scan: banks 7 down to 1; bank_find_current: 1 to 7 */
 #define BANK_STACK_TOP            0xFF     /* bank_enter's stack reset (LDX #$FF / TXS) */
 #define BANK_ZP_CLEAR_LAST        0x64     /* bank_enter's cold path clears $01-$64 */

@@ -110,21 +110,22 @@ typedef struct { uint8_t mnem, mode, opcode; } fw_opcode;
 #define CMD_TABLE           0x994F   /* ptr[32]: the records in match order, then the end */
 #define CMD_QUERY_TABLE     0x998F   /* 18 x (letter, zero-page setting), then 0 */
 #define CMD_CASE_MAP        0x99B4   /* byte[256] */
-/* The version texts (phonetic texts converted in M4.1, fw_phonetic_texts) that cmd_say_version passes by tn_rule_ptr */
-#define CMD_VERSION_ENGINE_TEXT 0x9804   /* cmd_version_engine_text */
-#define CMD_VERSION_LANG_TEXT   0xF75B   /* cmd_version_lang_text */
-/* The baud texts (phonetic texts converted in M4.1) that boot_init_baud passes by tn_rule_ptr with X = 1 */
-#define BOOT_BAUD_TEXT_19200    0xACC7   /* boot_baud_text_19200: silent */
-#define BOOT_BAUD_TEXT_300      0xACCA   /* boot_baud_text_300 */
-#define BOOT_BAUD_TEXT_1200     0xACD8   /* boot_baud_text_1200 */
 #define CMD_SPEED_MAPS      0xC87B   /* ptr[10], indexed by speed - 1 */
 #define CMD_SPEED_LIMITS    0xC88F   /* byte[9], indexed by speed - 1 */
 #define CMD_SPEED_MAP_DATA  0xC898   /* byte[9][32], converted with the prosody data: cmd_speed_maps point into it */
 #define PAR_VOICE_A_COUNT   0xD469   /* byte: the phoneme count heading the voice A table (M4.4) */
-#define PAR_VOICE_B_COUNT   0xE5E2   /* byte: the same for voice B */
 #define PAR_VOICE_A         0xD46A   /* par_table of voice A: rank row, spare row, five rows per parameter, N = 86 */
+#define PAR_VOICE_B_COUNT   0xE5E2   /* byte: the same for voice B */
 #define PAR_VOICE_B         0xE5E3   /* par_table of voice B */
 #define PAR_PHONEMES        86       /* N, the phoneme count of both voices */
+
+/* The phonetic texts converted in M4.1 (fw_phonetic_texts), passed by tn_rule_ptr: the version texts cmd_say_version
+   says, and the baud texts boot_init_baud says with X = 1 */
+#define CMD_VERSION_ENGINE_TEXT 0x9804   /* cmd_version_engine_text */
+#define BOOT_BAUD_TEXT_19200    0xACC7   /* boot_baud_text_19200: silent */
+#define BOOT_BAUD_TEXT_300      0xACCA   /* boot_baud_text_300 */
+#define BOOT_BAUD_TEXT_1200     0xACD8   /* boot_baud_text_1200 */
+#define CMD_VERSION_LANG_TEXT   0xF75B   /* cmd_version_lang_text */
 
 /* Pinned addresses of the prosody data (ghidra740/annotations: phoneme.txt, command.txt, unused.txt; M4.3a spec 3) */
 #define PH_SYMBOL_CLASS     0x9BB4   /* byte[256]: PHC_* bits per symbol code */
