@@ -9,11 +9,12 @@
    kind and the same snapshot; the first difference ends the comparison of that run. At the end of a run both engines
    must have the same status (MACHINE_IDLE, or MACHINE_CYCLE_LIMIT where the ROM never idles again) and the same number
    of events, and their final states are compared as one more event.
-   The runs: every corpus text, and extra runs whose configuration (the P4 DIP switches, the P2 and P0 input pins) or
-   injection (made to both engines at the same event: an idle or a frame event, before the snapshot is taken) reaches
-   what no corpus text does; each names a ROM address its ROM run must execute (a hook on the ROM engine only), so that
-   every extra run is seen to reach its path. Parallel mode (DIP bit 0) never idles: the run ends at the boot phase's
-   deadline in both engines, after the boot announcement's frame events. */
+   The runs: every corpus text, and the extra runs (diff_runs.c, shared with diff_native) whose configuration (the P4
+   DIP switches, the P2 and P0 input pins) or injection (made to both engines at the same event: an idle or a frame
+   event, before the snapshot is taken) reaches what no corpus text does; each names a ROM address its ROM run must
+   execute (a hook on the ROM engine only), so that every extra run is seen to reach its path. Parallel mode (DIP bit
+   0) never idles: the run ends at the boot phase's deadline in both engines, after the boot announcement's frame
+   events. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,16 +22,9 @@
 #include "corpus_list.h"
 #include "rom_fixture.h"
 #include "diff_state.h"
+#include "diff_runs.h"
 #include "engine/hybrid_engine.h"
 #include "engine/thunks.h"
-#include "firmware/bank_addr.h"
-
-#define P4_DIP_PARALLEL  0x01   /* the P4 input's DIP bit 0: the parallel interface */
-#define P4_DIP_ALT       0x02   /* DIP bit 1: the alternative bank table and the self-test input */
-#define P2_SELFTEST      0x02   /* P2.1: the self-test input (boot_selftest $C60B BBC1 P2) */
-#define P0_HOST_LINE     0x04   /* P0.2: the host's handshake line */
-#define P3_BAUD_300      0x02   /* P3.1: a baud jumper (boot_init_baud $AC81 BBS1 P3) */
-#define P3_BAUD_1200     0x04   /* P3.2: the other ($AC84, $AC9A BBS2 P3) */
 
 /* One event of a run. */
 typedef struct {
@@ -42,22 +36,6 @@ typedef struct {
     uint8_t raw_buf[APOLLO_FRAME_BYTES];
     bool dsp_reset_level, i;
 } snapshot;
-
-typedef enum { AT_IDLE, AT_SPEECH } inject_at;   /* the n-th idle; the n-th frame event after the first idle */
-
-/* An extra run: its input, its configuration, an injection at the n-th idle or frame event (inject NULL: none), the
-   ROM address its ROM run must execute and the status both engines must end with. */
-typedef struct {
-    const char *name, *text;
-    uint8_t p4, p2, p0;               /* ORed into the default input pins of P4, P2, P0 */
-    void (*inject)(machine *m);
-    inject_at at;
-    unsigned n;
-    uint16_t target;
-    bool target_ramcode;
-    machine_status want;
-    uint8_t p3;                       /* ORed into the default input pins of P3 (the baud jumpers) */
-} extra_run;
 
 static machine g_m;
 static snapshot *g_rom_events;        /* the ROM run's events: g_nrom of them, room for g_cap */
@@ -134,8 +112,10 @@ static void event(machine *m, bool idle)
 {
     unsigned k = idle ? g_idles++ : g_frames++;
     unsigned at = idle ? k : g_idles ? g_speech_frames++ : ~0u;
-    if (g_extra && g_extra->inject && (g_extra->at == AT_IDLE) == idle && g_extra->n == at)
-        g_extra->inject(m);
+    if (g_extra && g_extra->inject && (g_extra->at == AT_IDLE) == idle && g_extra->n == at) {
+        diff_view v = { m->ram, &m->sfr, m->queue, &m->q_head, &m->q_tail };
+        g_extra->inject(&v);
+    }
     if (g_rom_side) {
         if (g_nrom == g_cap) {
             g_cap = g_cap ? g_cap * 2 : 1024;
@@ -251,88 +231,6 @@ static void run_pair(const uint8_t *rom, size_t len, const char *name, const cha
     }
 }
 
-/* ---- the extra runs' injections ---- */
-
-/* At the end of boot: the running engine's minor version altered, so @=1 finds the bank's header different: the
-   cold entry (bank_enter $0228). */
-static void inj_cold(machine *m) { m->ram[BANK_VER_MINOR]++; }
-/* A status byte due (as isr_host_line_high leaves it, $C3F0) with the host line low, as at boot; or with the line
-   raised too (the pin only: the machine raises no INT4). */
-static void inj_status_due(machine *m) { m->ram[SER_STATUS_DUE] = 1; }
-static void inj_status_line_high(machine *m)
-{
-    m->ram[SER_STATUS_DUE] = 1;
-    m->sfr.port_in[0] |= P0_HOST_LINE;
-}
-/* At a frame event of the speech: "Two." arrives in the input ring, each byte put as ser_rx_put puts it (the machine
-   delivers serial bytes at the idle WIT only, never while speech plays). */
-static void inj_ring_two(machine *m)
-{
-    for (const char *s = "Two."; *s; s++) {
-        m->ram[m->ram[SER_RX_WRITE] | m->ram[SER_RX_WRITE + 1] << 8] = (uint8_t)*s;
-        if (++m->ram[SER_RX_WRITE] == 0) {
-            uint8_t page = (uint8_t)(m->ram[SER_RX_WRITE + 1] + 1);
-            m->ram[SER_RX_WRITE + 1] = page == 0x39 ? 0x21 : page;
-        }
-    }
-    m->ram[SER_RX_IDLE] &= (uint8_t)~1;
-}
-
-/* Words for the long clauses (44 characters) */
-#define WORDS44 "the quick brown fox jumps over the lazy dog "
-
-static const extra_run k_extra[] = {
-    /* @=1: the main bank, its version equal: the warm entry $FFD4, the rest of the clause dropped */
-    { "warm", "@=1 One. Two.", 0, 0, 0, NULL, AT_IDLE, 0, BANK_ENTRY_WARM, false, MACHINE_IDLE },
-    /* @=1 twice: the second from under the C bank_entry_warm, which enters $FFD4 again (its C run afresh) */
-    { "warm_again", "@=1 One. @=1 Two. Three.", 0, 0, 0, NULL, AT_IDLE, 0, BANK_ENTRY_WARM, false, MACHINE_IDLE },
-    /* @=1 with the version altered at the end of boot: the cold entry $FFD0 (boot_read_dip, boot_init_settings) */
-    { "cold", "@=1 One. Two.", 0, 0, 0, inj_cold, AT_IDLE, 0, BANK_ENTRY_COLD, false, MACHINE_IDLE },
-    /* DIP bit 1: bank_select reads the alternative table at boot (bank_scan) and at @=5 (bank_enter) */
-    { "dip_bank", "@=5 Five.", P4_DIP_ALT, 0, 0, NULL, AT_IDLE, 0, BANK_ENTER, true, MACHINE_IDLE },
-    /* the self-test failing: DIP bit 1 and the P2.1 input high; the three long buzzes at boot ($A7AB) */
-    { "selftest_fail", "Hello.", P4_DIP_ALT, P2_SELFTEST, 0, NULL, AT_IDLE, 0, 0xA7AB, false, MACHINE_IDLE },
-    /* a status byte due and the host line high at the end of boot: after the empty clause of the CR, boot_get_clause
-       sends it ($A6D7: a NAK, no reply pending), a pass that changed state, then idles. (A longer input cannot follow:
-       the busy line P0.5 that ser_tx_service sets after the send is not the level the machine delivers bytes at.) */
-    { "status_sent", "", 0, 0, 0, inj_status_line_high, AT_IDLE, 0, 0xA6D7, false, MACHINE_IDLE },
-    /* a query (@L, its reply queued) with a status byte due from the speech's second frame event on and the host line
-       low: the reply waits on the host line; par_play's ser_tx_service and then boot_get_clause's ($A6D7) send
-       nothing, and boot_get_clause loops with nothing changed until the speaking phase's deadline */
-    { "status_waits", "@L One.", 0, 0, 0, inj_status_due, AT_SPEECH, 1, 0xA6D7, false, MACHINE_CYCLE_LIMIT },
-    /* parallel mode: isr_idle returns at once ($C603 by its BBS0), no idle; the boot announcement, then the deadline */
-    { "parallel", "Hello.", P4_DIP_PARALLEL, 0, 0, NULL, AT_IDLE, 0, 0xC603, false, MACHINE_CYCLE_LIMIT },
-    /* the M4.6c2 plan's Review Focus 1: no punctuation and no CR inside, longer than a clause: cut at X >= $DC on a
-       space ($A731 CMP #$20 reached); one word of 260 letters, cut at X >= $FA; and cmd_char at $DC (after the
-       self-test's space at boot_clause[1] and 218 characters), carried in $1827 into the next clause ($A739) */
-    { "rf1_space", WORDS44 WORDS44 WORDS44 WORDS44 WORDS44 WORDS44, 0, 0, 0, NULL, AT_IDLE, 0, 0xA731, false,
-      MACHINE_IDLE },
-    { "rf1_full", "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"
-                  "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij"
-                  "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghij",
-      0, 0, 0, NULL, AT_IDLE, 0, 0xA731, false, MACHINE_IDLE },
-    { "rf1_carry", WORDS44 WORDS44 WORDS44 WORDS44 "the quick brown fox jumps over the lazy do@W5 now slower.", 0, 0, 0,
-      NULL, AT_IDLE, 0, 0xA739, false, MACHINE_IDLE },
-    /* Review Focus 2: several sentences in one input, each punctuation the end of a clause ($A704), spoken in order
-       with no idle between */
-    { "rf2_sentences", "One. Two? Three!", 0, 0, 0, NULL, AT_IDLE, 0, 0xA704, false, MACHINE_IDLE },
-    /* Review Focus 3: an empty input, the CR alone: the clause "   " (boot_clause[0], the self-test's space,
-       the CR's), then idle again */
-    { "rf3_empty", "", 0, 0, 0, NULL, AT_IDLE, 0, 0xA704, false, MACHINE_IDLE },
-    /* Review Focus 4: commands only (cmd_set_speed $A9C9 run), nothing spoken */
-    { "rf4_commands", "@W5 @A3", 0, 0, 0, NULL, AT_IDLE, 0, 0xA9C9, false, MACHINE_IDLE },
-    /* Review Focus 5: "Two." arrives in the ring during the speech of "One.": taken after it with no wait */
-    { "rf5_during", "One.", 0, 0, 0, inj_ring_two, AT_SPEECH, 5, 0xA6E4, false, MACHINE_IDLE },
-    /* the baud jumpers (the branch probe): P3.1 ($AC9D: UART_BAUD $BF), P3.2 ($ACB0: $2F), both ($ACC3: $05) */
-    { "baud_p31", "Hello.", 0, 0, 0, NULL, AT_IDLE, 0, 0xAC9D, false, MACHINE_IDLE, P3_BAUD_300 },
-    { "baud_p32", "Hello.", 0, 0, 0, NULL, AT_IDLE, 0, 0xACB0, false, MACHINE_IDLE, P3_BAUD_1200 },
-    { "baud_both", "Hello.", 0, 0, 0, NULL, AT_IDLE, 0, 0xACC3, false, MACHINE_IDLE, P3_BAUD_300 | P3_BAUD_1200 },
-    /* the host line high at boot (the branch probe): boot_init_host_lines' CLB5 P0 path ($AC72), isr_host_line_high;
-       the status byte that leaves due is sent before the end of boot. The CR alone after it: the busy line P0.5 that
-       ser_tx_service sets is then the level the machine delivers bytes at, and the byte's interrupt clears it. */
-    { "host_line_high", "", 0, 0, P0_HOST_LINE, NULL, AT_IDLE, 0, 0xAC72, false, MACHINE_IDLE },
-};
-
 static const char *const k_corpus[] = { CORPUS_NAMES };
 
 static void strip_newline(char *s)
@@ -361,8 +259,8 @@ void suite_diff_main(void)
         free(text);
     }
     printf("  corpus: %u texts, %u idles, %u frame events compared\n", g_runs, g_total_idles, g_total_frames);
-    for (size_t i = 0; i < sizeof k_extra / sizeof k_extra[0]; i++)
-        run_pair(rom, len, k_extra[i].name, k_extra[i].text, &k_extra[i]);
+    for (size_t i = 0; i < diff_extra_run_count; i++)
+        run_pair(rom, len, diff_extra_runs[i].name, diff_extra_runs[i].text, &diff_extra_runs[i]);
     printf("  %u runs, %u idles, %u frame events compared in all\n", g_runs, g_total_idles, g_total_frames);
     CHECK_EQ(g_mismatches, 0);
     free(g_rom_events);
