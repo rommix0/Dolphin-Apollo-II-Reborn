@@ -1,16 +1,16 @@
-/* apollo2: text -> speech through the original Apollo 2 firmware (emulated) and a Holmes-style
-   parallel-formant synthesizer at 10 kHz (spec R1, R2). */
+/* apollo2: text -> speech through the Apollo 2 firmware, run as native C on a model of the board (no ROM, no emulated
+   CPU), and a Holmes-style parallel-formant synthesizer at 10 kHz (spec R1, R2). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "audio/playback.h"
 #include "audio/wav.h"
-#include "engine/rom_id.h"
-#include "render/render.h"
+#include "render/render_native.h"
 
-#define APOLLO2_MAX_TEXT 1500   /* keeps the speech inside ROM_ENGINE_SPEAK_CYCLES (about 200 s) */
+#define APOLLO2_MAX_TEXT 1500   /* keeps the speech inside the native engine's speaking budget, NATIVE_SPEAK_CYCLES
+                                   (about 200 s) */
 
-static machine g_machine;
+static native_engine g_engine;
 
 static int usage(void)
 {
@@ -19,9 +19,6 @@ static int usage(void)
             "       apollo2 [options] --text-file FILE\n"
             "  -o FILE            write a WAV file (10 kHz, mono, 16-bit) instead of playing live\n"
             "  --voice a|b        speaker table: a = male (default), b = non-male (@K1)\n"
-            "  --engine E         firmware engine: rom (default) or hybrid (ported routines in C)\n"
-            "  --rom PATH         ROM image (default: $APOLLO2_ROM or UK_V2.01_4.04_ROM.BIN)\n"
-            "  --rom-any          accept a ROM whose MD5 is not the UK V2.01 4.04 image (with a warning)\n"
             "  --hyp LIST         synthesizer hypothesis switches, comma-separated: b11,b13\n"
             "  --stream S         frame stream fed to the synthesizer: produced (default) or raw\n"
             "  --prosody N        intonation strength 0-7, sent as @Rn (default 4 = the firmware's\n"
@@ -29,19 +26,9 @@ static int usage(void)
             "  --text-file FILE   read the text from FILE (first line; device control codes allowed)\n"
             "  --audio-check      report whether live 10 kHz playback is available, then exit\n"
             "TEXT may contain the device's @ commands (docs/apollo2.txt section 6); at most %d characters.\n"
-            "exit codes: 0 ok, 1 usage/ROM/file error, 2 emulation fault, 3 cycle limit, 4 audio error, 5 unmodelled access logged\n",
+            "exit codes: 0 ok, 1 usage/file error, 2 firmware fault, 3 cycle limit, 4 audio error, 5 unmodelled access logged\n",
             APOLLO2_MAX_TEXT);
     return 1;
-}
-
-static bool load_rom(const char *path, uint8_t *rom)
-{
-    FILE *f = fopen(path, "rb");
-    if (!f)
-        return false;
-    bool ok = fread(rom, 1, MACHINE_ROM_SIZE, f) == MACHINE_ROM_SIZE && fgetc(f) == EOF;
-    fclose(f);
-    return ok;
 }
 
 /* First line of a file (CR/LF stripped) in a static buffer; NULL if unreadable. */
@@ -79,11 +66,7 @@ static bool parse_hyp(const char *list, synth_options *o)
 
 int main(int argc, char **argv)
 {
-    static uint8_t rom[MACHINE_ROM_SIZE];
-    const char *rom_path = getenv("APOLLO2_ROM");
     const char *out_path = NULL, *text = NULL, *text_file = NULL;
-    bool rom_any = false;
-    render_engine engine = RENDER_ENGINE_ROM;
     render_options opt;
     render_default_options(&opt);
 
@@ -100,21 +83,6 @@ int main(int argc, char **argv)
         } else if (!strcmp(a, "--voice") && val && (!strcmp(val, "a") || !strcmp(val, "b"))) {
             opt.voice = val[0];
             i++;
-        } else if (!strcmp(a, "--engine") && val) {
-            if (!strcmp(val, "rom"))
-                engine = RENDER_ENGINE_ROM;
-            else if (!strcmp(val, "hybrid"))
-                engine = RENDER_ENGINE_HYBRID;
-            else {
-                fprintf(stderr, "engine '%s' is not available: use rom or hybrid (native arrives in milestone 5)\n", val);
-                return 1;
-            }
-            i++;
-        } else if (!strcmp(a, "--rom") && val) {
-            rom_path = val;
-            i++;
-        } else if (!strcmp(a, "--rom-any")) {
-            rom_any = true;
         } else if (!strcmp(a, "--hyp") && val) {
             if (!parse_hyp(val, &opt.synth))
                 return usage();
@@ -129,7 +97,7 @@ int main(int argc, char **argv)
             text_file = val;
             i++;
         } else if (a[0] == '-' && a[1] != '\0') {
-            return usage();
+            return usage();   /* an unknown option, the M5a CLI's --engine, --rom and --rom-any included */
         } else if (!text) {
             text = a;
         } else {
@@ -150,31 +118,24 @@ int main(int argc, char **argv)
         fprintf(stderr, "text too long: %zu characters (at most %d)\n", strlen(text), APOLLO2_MAX_TEXT);
         return 1;
     }
-    if (!rom_path)
-        rom_path = "UK_V2.01_4.04_ROM.BIN";
-    if (!load_rom(rom_path, rom)) {
-        fprintf(stderr, "cannot load a %d-byte ROM from %s\n", MACHINE_ROM_SIZE, rom_path);
-        return 1;
-    }
-    if (!rom_id_accept(rom_path, rom, sizeof rom, rom_any, stderr))
-        return 1;
 
     render_result r;
-    machine_status st = render_text(&g_machine, rom, sizeof rom, engine, text, &opt, &r);
-    if (st == MACHINE_FAULT) {
-        machine_dump(&g_machine, stderr);
+    engine_status st = render_text_native(&g_engine, text, &opt, &r);
+    if (st == ENGINE_FAULT) {   /* no samples: nothing is written or played */
+        board_print_fault(&g_engine.b, stderr);
+        board_print_unmodelled(&g_engine.b, stderr);
         return 2;
     }
-    if (st == MACHINE_CYCLE_LIMIT) {
+    if (st == ENGINE_CYCLE_LIMIT) {
         fprintf(stderr, "cycle limit reached before the firmware went idle\n");
         return 3;
     }
     if (r.clipped)
         fprintf(stderr, "warning: %llu samples clipped\n", (unsigned long long)r.clipped);
     int rc = 0;
-    if (g_machine.unmodelled_count || g_machine.unmodelled_dropped) {   /* spec section 4: never accept silently */
-        fprintf(stderr, "the firmware made accesses the machine model does not cover:\n");
-        machine_print_unmodelled(&g_machine, stderr);
+    if (g_engine.b.unmodelled_count || g_engine.b.unmodelled_dropped) {   /* spec section 4: never accept silently */
+        fprintf(stderr, "the firmware made accesses the board model does not cover:\n");
+        board_print_unmodelled(&g_engine.b, stderr);
         rc = 5;
     }
     if (out_path) {
