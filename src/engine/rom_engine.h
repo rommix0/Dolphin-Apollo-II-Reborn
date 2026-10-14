@@ -5,26 +5,13 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "machine/machine.h"
+#include "engine/frame_list.h"
 
 #define ROM_ENGINE_BOOT_CYCLES  100000000ULL   /* 50 s of emulated time at 2 MHz */
 #define ROM_ENGINE_SPEAK_CYCLES 400000000ULL   /* 200 s */
 
-typedef struct {
-    uint8_t (*frames)[APOLLO_FRAME_BYTES];
-    size_t count, cap;
-} frame_list;
-
-void frame_list_free(frame_list *fl);
-
-/* One frame per line, 40 uppercase hex digits + '\n'. Caller frees. */
-char *frame_list_hex(const frame_list *fl);
-
 /* Called once after machine_init, before boot: installs hooks (hybrid engine, differential tests). */
 typedef void (*engine_setup_fn)(machine *m, void *user);
-
-/* The input an engine run feeds at the end of boot: n bytes (raw serial input: a NUL may be among them), then a CR
-   when cr is set. */
-typedef struct { const uint8_t *bytes; size_t n; bool cr; } engine_input;
 
 /* Watches an engine run (diff_main, M4.6c2 spec 4.1), each callback when not NULL: on_frame at every frame event (the
    machine's frame callback, whether the frames are kept or not), on_idle at every input idle, before the engine's

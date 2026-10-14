@@ -10,43 +10,8 @@ typedef struct {
 static void on_frame(void *user, const uint8_t frame[APOLLO_FRAME_BYTES])
 {
     frame_sink *s = user;
-    frame_list *fl = s->list;
-    if (!s->enabled)
-        return;
-    if (fl->count == fl->cap) {
-        size_t cap = fl->cap ? fl->cap * 2 : 256;
-        void *grown = realloc(fl->frames, cap * sizeof fl->frames[0]);
-        if (!grown)
-            abort();
-        fl->frames = grown;
-        fl->cap = cap;
-    }
-    memcpy(fl->frames[fl->count++], frame, APOLLO_FRAME_BYTES);
-}
-
-void frame_list_free(frame_list *fl)
-{
-    free(fl->frames);
-    fl->frames = NULL;
-    fl->count = fl->cap = 0;
-}
-
-char *frame_list_hex(const frame_list *fl)
-{
-    static const char k_hex[] = "0123456789ABCDEF";
-    char *s = malloc(fl->count * (APOLLO_FRAME_BYTES * 2 + 1) + 1);
-    char *p = s;
-    if (!s)
-        abort();
-    for (size_t i = 0; i < fl->count; i++) {
-        for (int b = 0; b < APOLLO_FRAME_BYTES; b++) {
-            *p++ = k_hex[fl->frames[i][b] >> 4];
-            *p++ = k_hex[fl->frames[i][b] & 0x0F];
-        }
-        *p++ = '\n';
-    }
-    *p = '\0';
-    return s;
+    if (s->enabled)
+        frame_list_add(s->list, frame);
 }
 
 machine_status rom_engine_speak(machine *m, const uint8_t *rom, size_t len, const char *text,

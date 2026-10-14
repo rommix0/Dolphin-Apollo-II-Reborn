@@ -17,13 +17,15 @@ for %%d in (src\firmware src\firmware\data) do (
 if defined FWSRC (
     cl /nologo /std:c11 /W4 /WX /wd4244 /Zs /D_CRT_SECURE_NO_WARNINGS !FWSRC! || exit /b 1
 )
-rem M5a spec 3.1: src\board builds without the emulator too. Syntax-check it against an include root holding only the
-rem headers it may use (src\board and src\firmware, copied to build\noemu), so an include of a machine\ or cpu740\
-rem header cannot be found.
+rem M5a spec 3.1: src\board and the native files build without the emulator too. Syntax-check them against an include
+rem root holding only the headers they may use (src\board, src\firmware and the native headers of src\engine, copied
+rem to build\noemu), so an include of a machine\ or cpu740\ header cannot be found.
 if exist build\noemu rmdir /s /q build\noemu
-for %%d in (board firmware\data) do mkdir build\noemu\%%d
+for %%d in (board firmware\data engine) do mkdir build\noemu\%%d
 for %%d in (board firmware firmware\data) do copy /y src\%%d\*.h build\noemu\%%d >nul
-cl /nologo /std:c11 /W4 /WX /wd4244 /Zs /D_CRT_SECURE_NO_WARNINGS /Ibuild\noemu src\board\*.c || exit /b 1
+for %%f in (frame_list native_host native_engine) do copy /y src\engine\%%f.h build\noemu\engine >nul
+cl /nologo /std:c11 /W4 /WX /wd4244 /Zs /D_CRT_SECURE_NO_WARNINGS /Ibuild\noemu src\board\*.c src\engine\frame_list.c ^
+    src\engine\native_host.c src\engine\native_engine.c || exit /b 1
 set LIBSRC=
 for %%d in (src\cpu740 src\machine src\board src\engine src\firmware src\firmware\data src\synth src\audio src\render) do (
     if exist %%d\*.c set LIBSRC=!LIBSRC! %%d\*.c
