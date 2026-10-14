@@ -1,11 +1,12 @@
 /* Converted from the Apollo 2 ROM by tools/extract_tables.py (M4.0 spec section 4), then reviewed.
    tests/test_firmware_data.c re-encodes it and compares it byte for byte with the ROM.
-   Two bytes above $7F appear in the two-letter rules, as octal escapes. \220 ($90), among the characters a
+   Three bytes above $7F appear in the two-letter rules, as octal escapes. \220 ($90), among the characters a
    rule consumes (CAF\220, under CA), is E acute in code page 437 (cmd_case_map folds the lower-case $82 to it):
-   lts_char_class has it a letter, so lts_match_symbol matches it against the text like any letter. \300 ($C0),
-   in an output, is the phonetic symbol $C0, a long syllabic consonant (the final L of LEVEL, CANCEL):
-   tn_append_phonetic copies it into tn_phonetic like any other symbol, and its phoneme list (pros_data.c) is
-   phoneme 41 alone. */
+   lts_char_class has it a letter, so lts_match_symbol matches it against the text like any letter. The other
+   two are in outputs, phonetic symbols that tn_append_phonetic copies into tn_phonetic like any other (their
+   features and phoneme lists are in pros_data.c). \230 ($98), under ME, is a voiced stop (the G of MEGATON):
+   its list, phonemes 21 and 23, is the only one with phoneme 23. \300 ($C0) is a long syllabic consonant (the
+   final L of LEVEL, CANCEL): its list is phoneme 41 alone. */
 #include <stddef.h>
 #include "fw_data.h"
 

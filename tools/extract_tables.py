@@ -70,17 +70,18 @@ CLASS_BITS = [(0x80, "CC_LETTER"), (0x40, "CC_VOWEL"), (0x20, "CC_FRONT_VOWEL"),
 HEADER = ("/* Converted from the Apollo 2 ROM by tools/extract_tables.py (M4.0 spec section 4), then reviewed.\n"
           "   tests/test_firmware_data.c re-encodes it and compares it byte for byte with the ROM. */\n"
           "#include <stddef.h>\n#include \"fw_data.h\"\n\n")
-# The two-letter rule files' header: HEADER with what their two bytes above $7F (octal escapes) mean
+# The two-letter rule files' header: HEADER with what their three bytes above $7F (octal escapes) mean
 LTS_HEADER = HEADER.replace(
     " with the ROM. */\n",
     " with the ROM.\n"
-    "   Two bytes above $7F appear in the two-letter rules, as octal escapes. \\220 ($90), among the characters a\n"
+    "   Three bytes above $7F appear in the two-letter rules, as octal escapes. \\220 ($90), among the characters a\n"
     "   rule consumes (CAF\\220, under CA), is E acute in code page 437 (cmd_case_map folds the lower-case $82 to"
     " it):\n"
-    "   lts_char_class has it a letter, so lts_match_symbol matches it against the text like any letter. \\300 ($C0),\n"
-    "   in an output, is the phonetic symbol $C0, a long syllabic consonant (the final L of LEVEL, CANCEL):\n"
-    "   tn_append_phonetic copies it into tn_phonetic like any other symbol, and its phoneme list (pros_data.c) is\n"
-    "   phoneme 41 alone. */\n", 1)
+    "   lts_char_class has it a letter, so lts_match_symbol matches it against the text like any letter. The other\n"
+    "   two are in outputs, phonetic symbols that tn_append_phonetic copies into tn_phonetic like any other (their\n"
+    "   features and phoneme lists are in pros_data.c). \\230 ($98), under ME, is a voiced stop (the G of MEGATON):\n"
+    "   its list, phonemes 21 and 23, is the only one with phoneme 23. \\300 ($C0) is a long syllabic consonant (the\n"
+    "   final L of LEVEL, CANCEL): its list is phoneme 41 alone. */\n", 1)
 
 
 def cstr(b):
