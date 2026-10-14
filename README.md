@@ -72,6 +72,16 @@ from `python tools/gen_fw_ram.py` (rerun after the Ghidra annotations change).
 
 A ROM whose MD5 is not the UK V2.01 4.04 image is refused by the CLIs unless `--rom-any` is given.
 
+## Native engine (milestone 5)
+
+The native engine (src/engine/native_engine.c) runs the same C firmware with no ROM and no emulated CPU: a
+CPU-less board (src/board) supplies the M50734's timers, UART and ports, the interrupts and the DSP port, and
+charges exactly the cycles the hybrid engine's emulated CPU spends waiting, so the two agree state for state.
+`build.bat test golden_native` reproduces every golden frame stream on it without the ROM, and
+`build.bat test diff_native` runs the hybrid and the native engine side by side over every diff_main run,
+comparing RAM, the peripheral state and the cycle count at every input idle and frame event. Until milestone 5b
+the CLI still runs the emulated engines; 5b makes it native-only, with no ROM needed.
+
 ## Ghidra project (milestone 3)
 
 `ghidra740/` holds a Ghidra 12.1.3 processor module for the MELPS 740 and the scripts that rebuild

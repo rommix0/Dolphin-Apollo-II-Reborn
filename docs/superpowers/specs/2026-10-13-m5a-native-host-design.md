@@ -1,6 +1,6 @@
 # M5a — The native host and engine (the firmware without the emulated CPU) — Design
 
-**Status:** design, awaiting user review
+**Status:** implemented (plan docs/superpowers/plans/2026-10-13-m5a-native-host.md)
 **Parent specs:**
 - `docs/superpowers/specs/2026-09-30-software-apollo2-design.md` (rev 18): R1, R3, R5, §3, §4 (the machine model: serial delivery at the idle WIT, frame capture at `$B306`, the raw DSP stream), §6 step 3–4, §8 milestone 5.
 - `docs/superpowers/specs/2026-10-13-m4-6c2-boot-main-loop-design.md`: the input wait and the idle handler, phase budgets, `reset_cpu`/`set_interrupts`, entries run afresh, `diff_main` (§3, §4.1, §6 "As built").
@@ -44,8 +44,7 @@ After M4.6c2 the C performs every firmware routine; the emulator supplies only t
 - `src/engine/native_host.c/.h` (new): the `fw_host` on a board (§3.5).
 - `src/engine/native_engine.c/.h` (new): the engine run (§3.6).
 - `src/render/render_native.c/.h` (new): the native render entry (§3.7).
-- `build.bat`: the syntax check without `/Isrc` that guards `src/firmware` also covers `src/board` and the native files (`frame_list.c`, `native_host.c`, `native_engine.c`, `render_native.c`), each compiled with only the include paths it may use, so that none of them can include a `cpu740/` or `machine/` header. *(Corrected 2026-10-14 from the plan's proof.)* One include root serves them all: `build
-oemu`, a copy of the `srcoard` and `srcirmware` headers (and, from Task 3 on, the native engine's), made by `build.bat` before the check. The machine model does not change (parent spec §4); `machine.c` is not edited beyond its include path.
+- `build.bat`: the syntax check without `/Isrc` that guards `src/firmware` also covers `src/board` and the native files (`frame_list.c`, `native_host.c`, `native_engine.c`, `render_native.c`), each compiled with only the include paths it may use, so that none of them can include a `cpu740/` or `machine/` header. *(Corrected 2026-10-14 from the plan's proof.)* One include root serves them all: `build\noemu`, a copy of the `src\board` and `src\firmware` headers (and, from Task 3 on, the native engine's), made by `build.bat` before the check. The machine model does not change (parent spec §4); `machine.c` is not edited beyond its include path.
 
 ### 3.2 The board
 
@@ -167,3 +166,109 @@ Every golden in `tests/golden/` (48 files, the boot golden with `include_boot`) 
 - Option ROMs (the sockets read `$FF`), the parallel-port front end and serial replies to a real host (parent spec §9).
 - Fixing the NUL bug or any other ROM quirk: the C stays the ROM's.
 - Real-time streaming of the native output; the CLI renders, then plays.
+
+## 6. As built
+
+Where the code is more precise than, or differs from, the sections above.
+
+- **The files** (§3.1): `src/board/m50734.c` differs from the old `src/machine/m50734.c` only in its include line, and `machine.h` and `test_m50734.c` include `board/m50734.h`. `frame_list.h` also holds `ENGINE_FRAME_BYTES` (20) and a new `frame_list_add`, which `rom_engine.c`'s frame sink uses too; `rom_engine.h` includes it where the moved types were. `engine_status` lists `ENGINE_IDLE`, `ENGINE_FAULT` and `ENGINE_CYCLE_LIMIT` in `machine_status`'s order, which `suite_native` checks; `diff_main` compares a run's `machine_status` with the extra run's `want` (an `engine_status`) as numbers.
+- **The build check** (§3.1), as built: the firmware's check without `/Isrc` is unchanged. A second `cl /Zs` compiles `src\board\*.c`, `frame_list.c`, `native_host.c`, `native_engine.c` and `render_native.c` in one call against the single include root `/Ibuild\noemu`, not one set of include paths per file. `build.bat` deletes and remakes `build\noemu` on every build from the headers of `src\board`, `src\firmware`, `src\firmware\data` and `src\synth`, the engine's `frame_list.h`, `native_host.h` and `native_engine.h`, and `render_native.h`. `src\board` is in the sources of the test binary and of every app.
+- **The board's layout** (§3.2, `board.h`): the `board` struct mirrors the machine's fields under their names: `ram`, `sfr` (the `m50734`), `i`, `waiting`, `cycles`, `cycle_num`, `cycle_den`, `cycle_rem`, `fault`, `queue`, `q_head`, `q_tail`, `busy_level_known`, `busy_idle_level`, the sinks (`on_frame` and `user`, `on_raw` and `raw_user`), `raw_buf`, `raw_pos`, `dsp_reset_level`, `raw_frames`, `dsp_resets`, `raw_discarded`, `frames_produced`, `port_writes` and the unmodelled log (`unmodelled`, `unmodelled_count`, `unmodelled_dropped`). Its own fields are `idle_point`, `handler_due`, `handler_i` (the I flag the handler's RTI restores), `handler`, `irq_lines`, `fault_addr`, `rom` (the converted image by CPU address) and `fw` (the firmware the handlers run on). Its constants: `BOARD_RAM_SIZE` $4000, `BOARD_QUEUE_SIZE` 4096, `BOARD_MAX_UNMODELLED` 64, `BOARD_FRAME_BYTES` 20, `BOARD_PRODUCER_PTR` $2C, `BOARD_P2_BANK_MASK` $7C, `BOARD_P2_MAIN_BANK` $70, `BOARD_P2_DSP_RESET` $01, `BOARD_P0_BUSY` $20, `BOARD_ICR2_T3_ENABLE` $10, `BOARD_ICR2` $FE, `BOARD_UART_STATUS` $E7; the cycles `BOARD_WIT_CYCLES` 4, `BOARD_IRQ_CYCLES` 7, `BOARD_BBC_EXIT` 5, `BOARD_BBC_PASS` 7, `BOARD_RTS_CYCLES` 6; `BOARD_VEC_FIRST` $FFF4, `BOARD_VEC_RESET` $FFFE, `BOARD_EMPTY_VECTOR` $FFFF. `test_constants` checks the RAM size, the queue size, the log size, the frame size, the producer pointer, the bank mask and the main bank, ICR2, UART_STATUS and `BOARD_VEC_FIRST` against the machine's, the `m50734`'s and the firmware's names. `BOARD_P0_BUSY`, `BOARD_P2_DSP_RESET` and `BOARD_ICR2_T3_ENABLE` have the values of `machine.c`'s private `P0_BUSY`, `P2_DSP_RESET` and `ICR2_T3_ENABLE`, which no test can see, so no test compares them (§3.2 says one does). `test_cycles_match_cpu` checks the five cycle constants against `cpu740_step` on the loops' own bytes.
+- **The board's faults and calls** (§3.2–§3.4): `board_fault` is `BOARD_FAULT_NONE`, `BOARD_FAULT_DME`, `BOARD_FAULT_ESCAPED` (a wait's step, or a bank entry, while P2 selects another bank than the main ROM: `pc_escaped`'s counterpart), `BOARD_FAULT_VECTOR` (an address with no C; `fault_addr` holds it), `BOARD_FAULT_INPUT_OVERFLOW` and `BOARD_FAULT_FIRMWARE` (`fault_addr` where). The calls are `board_init`, `board_set_outputs`, `board_set_raw_output`, `board_feed_serial`, `board_read_sfr`, `board_write_sfr`, `board_dsp_write`, `board_capture_frame`, `board_peek`, `board_main_bank`, `board_prepare`, `board_idle`, `board_vector`, `board_has_handler`, `board_call` and the four waits (below). `board_peek` reads $FF in $4000–$7FFF while P2.7 selects the lower window, where `machine_peek` reads the image's lower half. Only frame capture reads through it (its comment: the C never points a frame there), and no test covers that case.
+- **A step** (§3.3), as built: each wait tests its bound (`cycles < end`) at the top of every iteration, then calls `board_prepare`, then (the interrupt and input waits) fails at once on a line that wakes the CPU with I set, then makes the step (`exec`). The step faults `BOARD_FAULT_ESCAPED` when P2 does not select the main ROM, since every point of a wait is at $8000 or above. A taken interrupt's handler runs at the step after its entry, through `board_call`, in 0 cycles and with no tick, and then I is set as its RTI pulls it back. Otherwise a waiting CPU with no line raised spends a WIT step (4); any raised line ends the WIT; a line with I clear is entered (7: the lowest line first, I saved and set, the handler read from $FFFC − 2 × line by `board_vector`); otherwise the wait's instruction runs. The tick follows: `cycles` += n, `acc = cycle_rem + n × cycle_num`, `cycle_rem = acc % cycle_den`, `m50734_tick(acc / cycle_den)`. A bound that passes between an entry and its handler therefore leaves I set and the handler unrun (`test_wait_interrupt_bound`: bound 41, 47 cycles spent, the request still pending).
+- **The waits' charges** (§3.3), as built:
+  - `board_wait_interrupt`: 4 per WIT step and 7 for the entry, the handler 0; it returns true once the handler's RTI is back, and fails with no cycle spent when a line is raised with I set.
+  - `board_wait_input`: the same at the idle point, with delivery. At each idle the handler (`board_idle_fn`) is called before any step. A feed (`BOARD_FEED`) goes on with no step, and the next prepare delivers the byte. A stop (`BOARD_STOP`), or no handler, returns `BOARD_INPUT_STOPPED` with the board left waiting at the idle point. The other results are `BOARD_INPUT_HANDLED` and `BOARD_INPUT_FAILED`.
+  - `board_wait_timer`: I is set for the loop and restored after it. Each pass reads ICR2 once through `board_read_sfr`: 7 cycles with the bit clear, 5 for the exit. The bound is tested before each pass, so the last pass may end past it and still succeed.
+  - `board_wait_uart_tx`: one read of UART_STATUS (7 taken, 5 not), then the RTS (6), with interrupts live. `m50734_read` always returns UART_STATUS with bit 1 set, so the wait costs 11 cycles plus 7 for each interrupt entered on the way.
+- **Dispatch and the vector table** (§3.4), as built: the six addresses are `fw_vec_int4_timerx`, `fw_vec_int3_step`, `fw_vec_int2_timers`, `fw_vec_int1_serial`, `fw_vec_int0` and `fw_vec_reset`. They are `const uint16_t` in `src/firmware/data/boot_data.c`, set from the address names `ROM_ISR_INT4_HOST_LINE`, `ROM_ISR_UNUSED`, `ROM_ISR_TIMER_DSP`, `ROM_ISR_INT1`, `ROM_ISR_UNUSED` and `ROM_BOOT_RESET`, and declared in `fw_data.h` with `FW_VECTORS` $FFF4. Step 14 of `fw_image_build` writes them low byte first up to $10000. `test_firmware_data` covers $FFF4–$FFFF (49,104 bytes compared with the ROM, 0 differ) and checks that lines 3 and 0 share a handler, that the reset is $A61C and that lines 4, 1 and 2 differ. The dispatch table is `board.c`'s static `k_dispatch`, seven rows as in §3.4's table; the reset goes through a static `reset_handler`, since `boot_reset` takes no registers. `board_call` first syncs the firmware's window and bank from the P2 pins, as a hybrid thunk does, then calls the C with the A and X it is given (Y 0). An interrupt's handler gets A = X = 0. With `b->fw` NULL every address is unmapped.
+- **The native host** (§3.5), as built: `native_host` holds the board, the `fw`, the `fw_host`, the phase `deadline` (0: none), the input wait's idle handler and its user, and the last bank entry (`entered`, `entry`, `entry_a`, `entry_x`). `native_host_init` runs `fw_init` on the board's RAM with `fw_image_get()`'s image, sets `b->rom` and `b->fw`, and fails when the image does not build.
+  - The waits' bounds: an engine run always has a deadline, as every host call of an all-C hybrid run is under the hybrid's phase deadline. So `FW_WAIT_UART_TX` gets at most `FW_ROM_CALL_BUDGET` and the cycles left, and the other waits the cycles left. A wait called once the deadline has passed stops at once, with no cycle spent.
+  - A wait that does not end is a stop (`FW_WAIT_STOPPED`) only when the deadline is set and reached with no board fault (`wait_ended`); otherwise it is a failure. Without a deadline (the unit tests) every wait gets `FW_ROM_CALL_BUDGET`, and its end is a failure.
+  - The window and the bank are read back from the P2 pins after every wait that started, a stopped input wait included. The wait's `at` is not used: each kind runs its own board wait.
+  - `rom_call` and `rom_call_unhooked` are the same function. It returns `FW_CALL_FAILED` even after the phase deadline, where the hybrid's `phase_call` turns a call that fails at the deadline into a stop. No test makes a ROM call past the deadline.
+- **The native engine** (§3.6), as built:
+  - **Its state:** `native_engine` is the board, the host and two counts: `entries` (the entries run, the reset's included) and `unwinds` (the bank entries made). `native_engine_run_input` wipes it (`memset`), then calls `board_init` with `cfg`'s pins and scale. With `cfg` NULL it uses `native_default_config`: the pins $00 $00 $70 $00 $00 and scale 1/1, which `suite_native` checks against `machine_default_config`. A data image that does not build makes the run `ENGINE_FAULT` with `BOARD_FAULT_FIRMWARE`.
+  - **The trap:** the reset vector is read through `board_vector($FFFE)`, and its C is called by `board_call` with the firmware's trap (`setjmp`) set. `setjmp` is called only there and in `thunks.c`. The 4611 pragma sits at the top of `native_engine.c`, under `#ifdef _MSC_VER`.
+  - **After an entry's C ends:** a stop ends the run. An unwind with a recorded entry runs that entry's C afresh with its A and X: at once if it is the entry that was running; another entry only with no board fault, before the deadline and with the main ROM selected (else `BOARD_FAULT_ESCAPED`). Any other end, with no board fault already set, is `BOARD_FAULT_FIRMWARE`, at `f->fault_addr` if the C faulted, else at the entry's address. A C fault inside an interrupt handler longjmps to the same single trap.
+  - **The status:** a board fault makes the run `ENGINE_FAULT`, even after a stop. Otherwise a stop by the idle handler is `ENGINE_IDLE`, and anything else `ENGINE_CYCLE_LIMIT`.
+  - **The idle handler:** at the first idle it resets `frames_produced`, `raw_frames`, `dsp_resets` and `raw_discarded` and turns both sinks on (the produced one is already on with `include_boot`). It then queues the input and the CR (an overflow is `BOARD_FAULT_INPUT_OVERFLOW` and a stop) and sets the deadline `NATIVE_SPEAK_CYCLES` from there. The sinks and the handler are cleared when the run ends.
+- **Render** (§3.7), as built: `render_native.h` holds `render_stream`, `render_engine`, `render_options`, `render_result`, `render_default_options`, `render_input` (the `@K1`/`@Rn` prefix), `render_synthesize` (the median pitch centre and the samples; nothing for no frame), `render_text_native` and `render_result_free`. `render.h` includes it and keeps only `render_text`, which builds its input and synthesizes through the same two functions. `render_text_native` allocates a fresh `native_engine` on the heap for each call and runs `native_engine_speak` with the default configuration and no boot frames, with the raw sink only for `RENDER_STREAM_RAW`. It synthesizes only at `ENGINE_IDLE`. `apollo2.c` is unchanged.
+- **`diff_native`** (§4.3), as built: 69 runs: the 47 corpus texts, `diff_main`'s 19 extra runs and three Review Focus runs of its own (`rf2_longest`, `rf4_reentries`, `rf4_banks`).
+  - **The comparison:** events are paired by their index in each run. An injection is made in both engines at the same idle or speech frame event, before the snapshot. The snapshot holds §4.3's list, plus the partial bytes dropped at DSP resets and whether the busy level is known yet. The `m50734` struct is compared with `memcmp`, and the first field that differs is named. `diff_main`'s exclusion of `isr_tick_div`…`isr_words_left` at idles has no counterpart here. At the end the two runs must have the same status, the same number of events, the same final snapshot, and as many bank entries on native (`unwinds`) as the hybrid's `hybrid_stats.unwinds`.
+  - **The targets:** the extra runs' ROM targets are not checked here: the all-C hybrid runs none of those addresses as ROM, and `diff_main` keeps checking them. The three Review Focus runs check their number of bank entries (0, 2 and 1). No run reaches the NUL fallback, since every input is a C string, so §4.3's rule for one has nothing to apply to.
+  - **The output** (about 11 s alone):
+
+  ```
+    corpus: 47 texts, 94 idles, 25167 frame events compared
+    warm             idle, 2 idles, 101 frame events, 1 bank entries, 2019716 cycles
+    warm_again       idle, 2 idles, 106 frame events, 2 bank entries, 2119793 cycles
+    cold             idle, 2 idles, 101 frame events, 1 bank entries, 2019716 cycles
+    dip_bank         idle, 2 idles, 41 frame events, 1 bank entries, 819879 cycles
+    selftest_fail    idle, 2 idles, 365 frame events, 0 bank entries, 7299667 cycles
+    status_sent      idle, 2 idles, 41 frame events, 0 bank entries, 819838 cycles
+    status_waits     cycle limit, 1 idles, 100 frame events, 0 bank entries, 400819811 cycles
+    parallel         cycle limit, 0 idles, 41 frame events, 0 bank entries, 100000001 cycles
+    rf1_space        idle, 2 idles, 1565 frame events, 0 bank entries, 31301282 cycles
+    rf1_full         idle, 2 idles, 1675 frame events, 0 bank entries, 33501254 cycles
+    rf1_carry        idle, 2 idles, 1370 frame events, 0 bank entries, 27401065 cycles
+    rf2_sentences    idle, 2 idles, 220 frame events, 0 bank entries, 4399355 cycles
+    rf3_empty        idle, 2 idles, 41 frame events, 0 bank entries, 819816 cycles
+    rf4_commands     idle, 2 idles, 52 frame events, 0 bank entries, 1039674 cycles
+    rf5_during       idle, 2 idles, 161 frame events, 0 bank entries, 3219462 cycles
+    baud_p31         idle, 2 idles, 115 frame events, 0 bank entries, 2299667 cycles
+    baud_p32         idle, 2 idles, 115 frame events, 0 bank entries, 2299667 cycles
+    baud_both        idle, 2 idles, 115 frame events, 0 bank entries, 2299667 cycles
+    host_line_high   idle, 2 idles, 41 frame events, 0 bank entries, 819838 cycles
+    rf2_longest      idle, 2 idles, 8654 frame events, 0 bank entries, 173088979 cycles
+    rf4_reentries    idle, 2 idles, 101 frame events, 2 bank entries, 2019821 cycles
+    rf4_banks        idle, 2 idles, 41 frame events, 1 bank entries, 819949 cycles
+    69 runs, 135 idles, 40329 frame events compared in all
+  ```
+
+  0 mismatches. The printed bank entries and cycles are the native engine's.
+- **The shared run list** (§4.3), as built: `tests/diff_runs.h` and `diff_runs.c` hold `diff_view` (RAM, the `m50734`, the queue with its head and tail), `inject_at` (`AT_IDLE`, `AT_SPEECH`), `extra_run` (its `want` an `engine_status`), `diff_extra_runs` and `diff_extra_run_count`, and the four injections (`inj_cold`, `inj_status_due`, `inj_status_line_high`, `inj_ring_two`) written against the view. `diff_main` builds the view from the machine, and its output is unchanged: `66 runs, 129 idles, 31533 frame events compared in all`.
+- **`golden_native`** (§4.4): 48 goldens (the 47 corpus texts, and `boot` with the boot frames), 23,281 frames. Each is `ENGINE_IDLE` with no unmodelled access, and its frames are byte-identical to the golden. It reads no ROM and takes about a second.
+- **`test_timing_invariance`** (§4.5) runs inside `suite_golden`, which needs the ROM. At the scales 1/4 and 3/1 the native engine gives `hello.frm`'s 105 frames and exactly the hybrid's cycles at each scale (11,678,411 and 973,321), which the test checks.
+- **The render comparison** (§4.5): `suite_render` first renders "Hello world." natively with no ROM: 105 frames, 105 × `SYNTH_FRAME_SAMPLES` samples, no clipping and a peak above 1000. With the ROM it then checks:
+  - those samples against `render_text`'s on the ROM engine;
+  - every corpus text through `render_text` with the hybrid engine and through `render_text_native`: the same status, frames, clipping and samples, 2,328,100 samples over the 47 texts;
+  - the same comparison for the raw stream of "Hello world." and for the Review Focus 5 inputs.
+- **The no-ROM run** (§4.6 criterion 2): with `APOLLO2_ROM` unset and no ROM file in the worktree, the test binary prints `44 suite(s), 0 failure(s), 18 skip(s)` in about 2.4 s. `suite_board`, `suite_native` and `suite_golden_native` pass; `test_queue_fit` leaves out its ROM engine comparison; `suite_render` passes its native part before it skips.
+- **`tests/test_board.c`** (§4.1), no ROM file (the converted image's vectors; the handlers run on a firmware whose host is the board's SFRs):
+  - `test_constants` and `test_cycles_match_cpu` (above);
+  - `test_init`: I set, 0 cycles, the scale (0 read as 1), the pins and the P2.0 level;
+  - `test_wait_interrupt`: 10 WIT steps and an entry, 47 cycles; I restored; `isr_timer_dsp` cleared the request;
+  - `test_wait_interrupt_bound`: bounds of 40 and 41;
+  - `test_wait_interrupt_i_set`: a line with I set fails the wait with no cycle;
+  - `test_lowest_line_first`: lines 0 and 3 raised, line 0's vector read; on a test image whose vectors are unmapped, a `BOARD_FAULT_VECTOR` at it;
+  - `test_wait_timer`: both bits (three passes and the exit; two passes and the exit), the bound after three passes, I restored, timer 3's line not taken under the loop;
+  - `test_wait_uart_tx`: with an interrupt (7 + 5 + 6), without one (5 + 6), and the bound before the RTS;
+  - `test_delivery`: only at the idle point, none while the UART is full, the busy level of the first idle, and the ring holding 4,095 bytes;
+  - `test_idle`: the five conditions;
+  - `test_wait_input`: a stop, no handler, a byte delivered but never read until the bound, a handled interrupt in 47 cycles;
+  - `test_dsp`: 27 bytes, one raw frame; a rising P2.0 edge dropping the 7 bytes; no edge while P2.0 stays high;
+  - `test_capture`: the 20 bytes at the producer pointer;
+  - `test_scale`: 1/3, 8 cycles, remainder 2;
+  - `test_unmodelled`: once per address and direction, `UART_TX`'s read, the dropped count;
+  - `test_faults`: the DME strobe, and a timer wait under another bank;
+  - `test_dispatch`: every vector of the image has its C and so do both bank entries; `ROM_CMD_RUN_NEXT` has none; an unmapped address faults at itself; with `fw` NULL a call fails; under another bank the reset vector reads $FFFF, and with no image `board_peek` reads $FF.
+- **`tests/test_native.c`** (§4.2), no ROM except the comparison in `test_queue_fit`:
+  - `test_init`: the binding;
+  - `test_ports`: the SFRs, a DSP reset edge, the window's read-modify-write of P2, a DSP byte and a frame event through the firmware's calls;
+  - `test_bank_and_rom_calls`: another bank reading $FF; `fw_rom_call` ($C37E) and `fw_rom_call_unhooked` ($A893, with no cycle spent) each faulting at its address;
+  - `test_cpu_calls`: `reset_cpu`, `set_interrupts` both ways, `fw_enter` recording $FFD4, A $31 and X $FF, I set, the C unwound;
+  - `test_waits`: the timer and transmit waits' cycles; the window and bank read back; the interrupt wait's end at `FW_ROM_CALL_BUDGET`, a fault at its `at`; the input wait with no handler, a stop; an unknown kind, a fault;
+  - `test_deadline`: a wait reaching the deadline is a stop at it; one called after it stops with no cycle; the transmit wait is cut by it; a line with I set is a fault before it;
+  - `test_constants`: the budgets, the frame size, the statuses and the default configuration against the ROM engine's and the machine's;
+  - `test_boot_and_speak`: "Hello world.": 41 boot frame events, then `hello.frm`'s 105 frames, two idles, one entry, the board left at the idle point; with `include_boot`, 146 frames;
+  - `test_bank_entry`: "@=1 One. @=1 Two. Three.": 2 unwinds and 3 entries, and some frames;
+  - `test_nul_bug`, `test_queue_fit` and `test_runs_in_one_process` (below).
+- **The Review Focus** (the plan's header), as built and what each showed:
+  1. `test_runs_in_one_process`: "Hello world." on an engine used before by both NUL faults and by `test_queue_fit`'s runs (one of them an overflow) gives the first run's 105 frames, cycle count and RAM, and so does an engine never used. It compares those three, not the `m50734` state or the queue.
+  2. `rf2_longest` (1,500 characters: 34 times the 44-character words, then "dogs"; no punctuation): both engines end `ENGINE_IDLE` at the second idle, with 8,654 frame events and 173,088,979 cycles, the same at every event.
+  3. `test_queue_fit`: 4,094 spaces and the CR give `ENGINE_IDLE`; 4,095 and the CR give `ENGINE_FAULT` with `BOARD_FAULT_INPUT_OVERFLOW`. With the ROM, the ROM engine ends with the same status and fault kind and the same frames.
+  4. `rf4_reentries` ("@=1 One. @=5 Two. @=1 Three.") makes 2 bank entries and `rf4_banks` ("@=0 @=8 @=9 @=F @=G") makes 1, the same on both engines at every event.
+  5. `suite_render`: voice b with `@R0` and with `@R7` ("Is this the second voice? It is."), and a Ctrl-X in the middle of "One two three four … five six seven.". Each gives the same status and samples on native as on the hybrid, and a nonzero sample count.
+
+  The NUL bug (§4.2): `"@A"` NUL CR and `"@M5"` NUL CR end `ENGINE_FAULT`, `BOARD_FAULT_FIRMWARE` at $A893, with no frame (`test_nul_bug`).
