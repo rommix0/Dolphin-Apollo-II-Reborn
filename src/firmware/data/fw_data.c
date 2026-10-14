@@ -562,6 +562,16 @@ bool fw_image_build(fw_image *img, char *err, size_t errlen)
         for (uint32_t i = 0; i < BOOT_PROSODY_PARAMS; i++)
             put(&e, false, BOOT_PROSODY_DEFAULTS + i, fw_boot_prosody_defaults[i]);
     }
+    /* 14. The vector table (M5a spec 3.4): the six handler addresses, each low byte first, from FW_VECTORS to the top
+       of the address space. */
+    {
+        const uint16_t vec[] = { fw_vec_int4_timerx, fw_vec_int3_step, fw_vec_int2_timers, fw_vec_int1_serial,
+                                 fw_vec_int0, fw_vec_reset };
+        uint32_t at = FW_VECTORS;
+        for (size_t k = 0; k < sizeof vec / sizeof vec[0]; k++, at += 2)
+            put_word(&e, at, vec[k]);
+        check_end(&e, "the vector table", at, 0x10000);
+    }
     return e.ok;
 }
 

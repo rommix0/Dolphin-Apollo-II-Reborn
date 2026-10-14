@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "cpu740/cpu740.h"
-#include "machine/m50734.h"
+#include "board/m50734.h"
 #include "machine/coverage.h"
 
 #define MACHINE_ROM_SIZE        0x10000

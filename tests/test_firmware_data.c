@@ -10,7 +10,8 @@ typedef struct { uint32_t from, to; } range;   /* [from, to) in CPU addresses */
 static const range k_rom[] = { { 0x4000, 0x8FF4 }, { 0x9800, 0xA397 }, { 0xA7BE, 0xA7D4 }, { 0xACC7, 0xACE8 },
                                { 0xADFE, 0xAFFE }, { 0xB473, 0xB77D }, { 0xB783, 0xB7A1 }, { 0xB7A7, 0xB7B1 },
                                { 0xBAEC, 0xBAF2 }, { 0xC561, 0xC571 }, { 0xC65B, 0xC675 }, { 0xC67B, 0xC9B8 },
-                               { 0xD44A, 0xF77B }, { 0xFFD0, 0xFFD4 }, { 0xFFE0, 0xFFE8 }, { 0xFFEA, 0xFFEE } };
+                               { 0xD44A, 0xF77B }, { 0xFFD0, 0xFFD4 }, { 0xFFE0, 0xFFE8 }, { 0xFFEA, 0xFFEE },
+                               { 0xFFF4, 0x10000 } };
 static const range k_low[] = { { 0x4010, 0x7832 } };
 
 static bool bit(const uint8_t *ok, uint32_t i) { return (ok[i >> 3] >> (i & 7)) & 1; }
@@ -128,6 +129,10 @@ static void test_counts(void)
     CHECK_EQ(fw_boot_prosody_defaults[0], fw_boot_prosody_defaults[5]);    /* '.' and ',' start on one baseline */
     CHECK(fw_boot_prosody_defaults[10] > fw_boot_prosody_defaults[0]);    /* '?' starts higher */
     CHECK_EQ(fw_boot_prosody_defaults[23], 0);                             /* X, which nothing reads */
+    /* The vector table (M5a spec 3.4) */
+    CHECK_EQ(fw_vec_int3_step, fw_vec_int0);    /* lines 3 and 0 share isr_unused, an RTI */
+    CHECK_EQ(fw_vec_reset, 0xA61C);             /* boot_reset */
+    CHECK(fw_vec_int4_timerx != fw_vec_int1_serial && fw_vec_int1_serial != fw_vec_int2_timers);
 }
 
 /* fw_opcodes against the emulator's 740 opcode table (src/cpu740/optable.c; M4.6c1 spec 3.5): each opcode decodes
@@ -171,11 +176,12 @@ static void test_against_rom(const fw_image *img, const uint8_t *rom)
             fprintf(stderr, "  LOW $%04X: converted %02X, ROM %02X\n", a, img->low[a - 0x4000], rom[a - 0x4000]);
     }
     printf("  %u converted bytes compared with the ROM, %u differ\n", compared, bad);
-    CHECK_EQ(compared, 49092);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567),
+    CHECK_EQ(compared, 49104);   /* M4.0's 35,214, M4.1's phonetic texts (97), M4.2's command data (567),
                                     M4.3a's prosody data (2,319), M4.4a's playback data (9,495), M4.4b's
                                     par_slot_map (10), M4.5's frame builder data (794), M4.6a's ser_hex_chars
-                                    (16), M4.6c1's bank code (532: $ADFE-$AFFD and 20 header bytes) and M4.6c2's
-                                    boot data (48: the self-test strings, 22, and boot_prosody_defaults, 26) */
+                                    (16), M4.6c1's bank code (532: $ADFE-$AFFD and 20 header bytes), M4.6c2's
+                                    boot data (48: the self-test strings, 22, and boot_prosody_defaults, 26) and
+                                    M5a's vector table (12) */
     CHECK_EQ(bad, 0);
 }
 

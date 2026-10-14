@@ -1,5 +1,5 @@
 #include <string.h>
-#include "machine/m50734.h"
+#include "board/m50734.h"
 
 /* 16 crystal clocks per prescaler step; one CPU cycle = 4 crystal clocks. */
 static int32_t timer_period(const m50734 *p, int n)

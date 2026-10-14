@@ -167,6 +167,9 @@ typedef struct { uint8_t mnem, mode, opcode; } fw_opcode;
 #define BOOT_PROSODY_DEFAULTS     0xC65B   /* byte[26]: pros_params at power-up; the unconverted unused_C675 follows */
 #define BOOT_PROSODY_PARAMS       26
 
+/* Pinned address of the vector table (ghidra740/annotations: boot.txt; M5a spec 3.4) */
+#define FW_VECTORS                0xFFF4   /* vec_int4_timerx: the first of six handler addresses, to $FFFF */
+
 /* lts_char_class bits */
 #define CC_LETTER       0x80   /* also the apostrophe and the underscore */
 #define CC_VOWEL        0x40   /* A E I O U Y (also the underscore and lower-case x) */
@@ -264,6 +267,8 @@ extern const uint8_t fw_frm_template[FRAME_SIZE], fw_frm_source_codes[4], fw_frm
 extern const char fw_ser_hex_chars[17];   /* the 16 digits, then C's terminating 0 (not encoded) */
 extern const char fw_boot_selftest_ok_cmds[7], fw_boot_selftest_fail_cmds[15];   /* each with its zero end */
 extern const uint8_t fw_boot_prosody_defaults[BOOT_PROSODY_PARAMS];
+extern const uint16_t fw_vec_int4_timerx, fw_vec_int3_step, fw_vec_int2_timers, fw_vec_int1_serial, fw_vec_int0,
+    fw_vec_reset;
 extern const uint8_t fw_cmd_sound_flags[CMD_SOUND_MAX];
 extern const fw_cmd_sound_effect fw_cmd_sound_effects[CMD_SOUND_EFFECTS];
 extern const fw_cmd_sound fw_cmd_sound_table[CMD_SOUND_EFFECTS];

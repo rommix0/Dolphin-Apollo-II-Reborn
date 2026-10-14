@@ -1,5 +1,5 @@
 #include "test.h"
-#include "machine/m50734.h"
+#include "board/m50734.h"
 
 static m50734 g_p;
 static const uint8_t k_in[5] = { 0x00, 0x00, 0x70, 0x06, 0x0A };

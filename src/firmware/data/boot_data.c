@@ -1,6 +1,9 @@
 /* Converted from the Apollo 2 ROM (M4.6c2 spec 2.4), then reviewed: the boot's command strings and the power-up
    prosody parameters. tests/test_firmware_data.c re-encodes them and compares them byte for byte with the ROM. */
 #include "fw_data.h"
+#include "../boot_addr.h"
+#include "../isr_addr.h"
+#include "../ser_addr.h"
 
 /* The self-test's command strings ($A7BE, $A7C5): boot_selftest_sound points cmd_text_ptr at one and
    boot_queue_string queues it into the input ring up to its zero end (C's terminating 0, which the encoder writes).
@@ -45,3 +48,12 @@ const uint8_t fw_boot_prosody_defaults[26] = {
     TERM(1),     /* Y: a later stress of a word */
     TERM(0),     /* Z: pros_term_stress of a word's later symbols */
 };
+
+/* The vector table ($FFF4-$FFFF, M5a spec 3.4): the handler the CPU enters for each interrupt line, line n's vector
+   at $FFFC - 2n, and the reset's. The board dispatches each address to its C (src/board/board.c). */
+const uint16_t fw_vec_int4_timerx = ROM_ISR_INT4_HOST_LINE;   /* $FFF4, line 4: Timer X / CNTR (INT4, the host line) */
+const uint16_t fw_vec_int3_step = ROM_ISR_UNUSED;             /* $FFF6, line 3: the stepper counters */
+const uint16_t fw_vec_int2_timers = ROM_ISR_TIMER_DSP;        /* $FFF8, line 2: timers 1-3 (timer 3, the DSP tick) */
+const uint16_t fw_vec_int1_serial = ROM_ISR_INT1;             /* $FFFA, line 1: the _INT1 pin and the UART receive */
+const uint16_t fw_vec_int0 = ROM_ISR_UNUSED;                  /* $FFFC, line 0: the _INT2 pin */
+const uint16_t fw_vec_reset = ROM_BOOT_RESET;                 /* $FFFE: the reset */
