@@ -2,7 +2,8 @@
 rem Checks the program itself (the M5b plan's Review Focus 1, 2 and 4): the M5a options --engine, --rom and --rom-any
 rem are usage errors that write nothing and leave an existing file as it was; the program needs no ROM, run from a
 rem folder with no ROM file and APOLLO2_ROM unset, naming a missing file or naming a file that is not the ROM, and
-rem writes there the WAV it writes in the repo root; 1501 characters are refused. Every run writes a WAV with -o:
+rem writes there the WAV it writes in the repo root; 1501 characters are refused, a longer line with its real length, a
+rem NUL byte is refused, and -- ends the options. Every run writes a WAV with -o:
 rem nothing is ever played. Usage, from the repo root: tests\check_cli.bat EXE
 setlocal EnableExtensions DisableDelayedExpansion
 if "%~1"=="" (
@@ -68,6 +69,31 @@ for /l %%i in (1,1,34) do call set "LONG=%%LONG%%the quick brown fox jumps over 
 call :expect_rc %errorlevel% 1 "1501 characters"
 findstr /b /l /c:"text too long: 1501 characters (at most 1500)" err.txt >nul || call :fail "1501 characters: no 'text too long' line"
 call :expect_kept "1501 characters"
+
+rem A longer first line reports its real length: 1600 characters.
+set "LONG="
+for /l %%i in (1,1,36) do call set "LONG=%%LONG%%the quick brown fox jumps over the lazy dog "
+>long1600.txt echo %LONG%0123456789abcdef
+"%EXE%" --text-file long1600.txt -o keep.wav 2>err.txt
+call :expect_rc %errorlevel% 1 "1600 characters"
+findstr /b /l /c:"text too long: 1600 characters (at most 1500)" err.txt >nul || call :fail "1600 characters: no 'text too long: 1600' line"
+call :expect_kept "1600 characters"
+
+rem A NUL byte in the first line is refused, not cut off there: Hi<NUL>there.
+>zero.hex echo 48 69 00 74 68 65 72 65 2e 0d 0a
+certutil -f -decodehex zero.hex zero.txt >nul || call :fail "NUL byte: certutil could not write the file"
+"%EXE%" --text-file zero.txt -o keep.wav 2>err.txt
+call :expect_rc %errorlevel% 1 "NUL byte"
+findstr /b /l /c:"the text contains a NUL byte" err.txt >nul || call :fail "NUL byte: no 'contains a NUL byte' line"
+call :expect_kept "NUL byte"
+
+rem -- ends the options: a text that starts with - is spoken.
+"%EXE%" -o dash.wav -- "-5 degrees." 2>err.txt
+call :expect_rc %errorlevel% 0 "-- then a text starting with -"
+call :expect_wav dash.wav "-- then a text starting with -"
+"%EXE%" -o dash2.wav "-5 degrees." 2>err.txt
+call :expect_rc %errorlevel% 1 "a text starting with - without --"
+call :expect_absent dash2.wav "a text starting with - without --"
 
 popd
 rmdir /s /q "%WORK%"

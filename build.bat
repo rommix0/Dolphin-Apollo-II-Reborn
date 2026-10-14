@@ -18,6 +18,23 @@ for %%d in (src\firmware src\firmware\data) do (
 if defined FWSRC (
     cl /nologo /std:c11 /W4 /WX /wd4244 /Zs /D_CRT_SECURE_NO_WARNINGS !FWSRC! || exit /b 1
 )
+rem Two guards that keep the no-ROM proof (M5b spec 4) honest. No file under src\ includes a header by a path through
+rem tests\ or oracle\ (a relative "../../tests/oracle/..." include would get past /Isrc). No file under src\ or tests\
+rem looks for the ROM itself (its file name, or the APOLLO2_ROM variable read with getenv) except tests\rom_fixture.c,
+rem where test_rom() records the request and honours APOLLO2_NO_ROM, and the two oracle tools that read the ROM.
+findstr /s /n /r /c:"#include.*tests" /c:"#include.*oracle" src\*.c src\*.h && (
+    echo build.bat: a file under src\ includes a header through tests\ or oracle\
+    exit /b 1
+)
+set ROMLOOKUP=
+rem findstr /s searches one root at a time, and a backslash in a /c: string is an escape, hence the \\ below.
+for %%r in (src tests) do (
+    for /f "delims=" %%f in ('findstr /s /m /r /c:"UK_V2\.01_4\.04_ROM\.BIN" /c:"getenv(.APOLLO2_ROM.)" %%r\*.c %%r\*.h ^| findstr /v /i /l /c:"tests\\rom_fixture." /c:"tests\\oracle\\apps\\apollo2_frames.c" /c:"tests\\oracle\\apps\\apollo2_coverage.c"') do (
+        echo build.bat: %%f looks for the ROM itself; only tests\rom_fixture.c may
+        set ROMLOOKUP=1
+    )
+)
+if defined ROMLOOKUP exit /b 1
 rem M5b spec 2.3, step 1: the program, compiled and linked from src\ alone with /Isrc as its only include root and its
 rem objects in build\product: an include of an oracle header (tests\oracle) cannot be found, and a call into oracle
 rem code cannot link.

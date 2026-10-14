@@ -36,6 +36,7 @@ them only after reviewing an intentional emulator change:
     build/apollo2.exe --prosody 3 "Hello world."      # intonation 0-7 (@Rn); default 4, the device's own default is 3
     build/apollo2.exe "@W5 @F6 Faster and lower."     # device commands work in the text
     build/apollo2.exe --text-file story.txt -o story.wav
+    build/apollo2.exe -o minus.wav -- "-5 degrees."   # -- ends the options: a text may start with -
     build/apollo2.exe --audio-check                   # is live 10 kHz playback available?
 
 Exit codes: 0 ok, 1 usage/file error, 2 firmware fault, 3 cycle limit, 4 audio error, 5 unmodelled access logged.
