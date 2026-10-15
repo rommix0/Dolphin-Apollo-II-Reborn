@@ -11,7 +11,7 @@ static machine g_machine;
 static int usage(void)
 {
     fprintf(stderr, "usage: apollo2_frames [--rom PATH] [--rom-any] [--boot] TEXT\n"
-                    "  --rom PATH  ROM image (default: $APOLLO2_ROM or UK_V2.01_4.04_ROM.BIN)\n"
+                    "  --rom PATH  ROM image (default: $APOLLO2_ROM or xtras/UK_V2.01_4.04_ROM.BIN)\n"
                     "  --rom-any   accept a ROM whose MD5 is not the UK V2.01 4.04 image (with a warning)\n"
                     "  --boot      also print frames produced during boot\n");
     return 1;
@@ -49,7 +49,7 @@ int main(int argc, char **argv)
     if (!text)
         return usage();
     if (!rom_path)
-        rom_path = "UK_V2.01_4.04_ROM.BIN";
+        rom_path = "xtras/UK_V2.01_4.04_ROM.BIN";
     if (!load_rom(rom_path, rom)) {
         fprintf(stderr, "cannot load a %d-byte ROM from %s\n", MACHINE_ROM_SIZE, rom_path);
         return 1;

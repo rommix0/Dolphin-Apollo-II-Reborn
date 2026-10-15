@@ -1,4 +1,4 @@
-"""Synthesizer calibration (spec section 5). Fits src/synth/calib.h and writes docs/calibration/.
+"""Synthesizer calibration (spec section 5). Fits src/synth/calib.h and writes xtras/calibration/.
 
   python tools/calibrate.py fit [--ltas] [--master-gain G] [--b11-gain-db G]   refit src/synth/calib.h
   python tools/calibrate.py set [NAME=VALUE ...]            rewrite calib.h with overrides (no fitting)
@@ -7,7 +7,7 @@
 Inputs:
 - build/apollo2_frames.exe and the ROM, for the steady vowel frames;
 - tests/golden/*.frm, for the report's F0 distribution;
-- the male passages of dolphin_juno_demo.mp3, decoded by ffmpeg at its native rate (nothing is resampled,
+- the male passages of wavs/dolphin_juno_demo.mp3, decoded by ffmpeg at its native rate (nothing is resampled,
   spec R2);
 - build/apollo2.exe, for the report renders;
 - tools/data/wells1962_rp_male.csv, the reference formants and amplitudes.
@@ -26,12 +26,12 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CALIB_H = os.path.join(ROOT, 'src', 'synth', 'calib.h')
-REPORT_DIR = os.path.join(ROOT, 'docs', 'calibration')
+REPORT_DIR = os.path.join(ROOT, 'xtras', 'calibration')
 LTAS_JSON = os.path.join(REPORT_DIR, 'ltas.json')
 LISTEN_DIR = os.path.join(ROOT, 'build', 'listening')
 FRAMES_EXE = os.path.join(ROOT, 'build', 'apollo2_frames.exe')
 APOLLO2_EXE = os.path.join(ROOT, 'build', 'apollo2.exe')
-JUNO = os.path.join(ROOT, 'dolphin_juno_demo.mp3')
+JUNO = os.path.join(ROOT, 'wavs', 'dolphin_juno_demo.mp3')
 JUNO_START_S, JUNO_DUR_S = 5, 20          # the short snippet the user allowed
 JUNO_MALE = [(0.0, 9.4), (17.3, 20.0)]   # male passages within the snippet (file time 5-14.4 s and 22.3-25 s);
                                          # 14.5-22 s is a higher voice and is excluded

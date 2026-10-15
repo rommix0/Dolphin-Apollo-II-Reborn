@@ -4,7 +4,7 @@ character classes, the phonetic texts (M4.1), the command tables (M4.2) and the 
 C in src/firmware/data/. The output is a first draft: review it, annotate it by hand if useful, and commit it.
 Nothing runs this at build or test time; tests/test_firmware_data.c checks the committed C against the ROM.
 usage: python tools/extract_tables.py [--phonetic-only | --command-only | --prosody-only] [ROM]
-       (ROM: default $APOLLO2_ROM, else UK_V2.01_4.04_ROM.BIN)"""
+       (ROM: default $APOLLO2_ROM, else xtras/UK_V2.01_4.04_ROM.BIN)"""
 import os
 import sys
 
@@ -404,7 +404,7 @@ def write_prosody_data(rom):
 
 def main():
     args = [a for a in sys.argv[1:] if a not in ("--phonetic-only", "--command-only", "--prosody-only")]
-    path = args[0] if args else os.environ.get("APOLLO2_ROM", "UK_V2.01_4.04_ROM.BIN")
+    path = args[0] if args else os.environ.get("APOLLO2_ROM", "xtras/UK_V2.01_4.04_ROM.BIN")
     rom = open(path, "rb").read()
     assert len(rom) == 0x10000, "need the 64 KB ROM"
     if "--command-only" in sys.argv:   # M4.2: leave the reviewed M4.0 and M4.1 files alone

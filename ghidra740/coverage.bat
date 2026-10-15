@@ -1,6 +1,6 @@
 @echo off
 rem Writes ghidra740\coverage\corpus.cov: the instructions the firmware executes over boot and the golden
-rem corpus, plus the indirect JMP/JSR targets (M3 spec §5.1). Needs the ROM (APOLLO2_ROM or .\UK_V2.01_4.04_ROM.BIN).
+rem corpus, plus the indirect JMP/JSR targets (M3 spec §5.1). Needs the ROM (APOLLO2_ROM or xtras\UK_V2.01_4.04_ROM.BIN).
 setlocal
 pushd "%~dp0.." || exit /b 1
 call .\build.bat || (popd & exit /b 1)

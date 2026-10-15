@@ -6,7 +6,7 @@ British English*, MA thesis, University of London. Table 1, "Summary of results:
 https://www.phon.ucl.ac.uk/home/wells/formants/table-1.htm (archived copy:
 http://web.archive.org/web/2018/http://www.phon.ucl.ac.uk/home/wells/formants/table-1.htm).
 
-- `dolphin`: the Apollo 2 phoneme (docs/apollo2.txt Appendix 5) whose keyword matches Wells's.
+- `dolphin`: the Apollo 2 phoneme (xtras/apollo2.txt Appendix 5) whose keyword matches Wells's.
 - `wells`: Wells's SAMPA-style symbol.
 - `f1..f3`: formant frequencies in Hz (cps).
 - `a1_db..a3_db`: formant amplitudes in dB relative to F1 of /O/ (haw'd).

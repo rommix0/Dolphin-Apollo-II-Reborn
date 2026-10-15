@@ -2,7 +2,7 @@
 #define CORPUS_LIST_H
 /* Golden corpus (spec §7.1): tests/corpus/<name>.txt -> tests/golden/<name>.frm.
    The first six are plain text from milestone 1. The rest exercise the control codes of
-   docs/apollo2.txt section 6. tools/calibrate.py uses only the plain-text six for its F0 fit.
+   xtras/apollo2.txt section 6. tools/calibrate.py uses only the plain-text six for its F0 fit.
    long_clause (M4.1) is one clause long enough to fill tn_phonetic, so tn_convert_clause speaks it mid-clause.
    The next five (M4.2) reach the commands the rest never does: replies and ignored commands, the immediate
    @I+ / @I?, unusual arguments, an @ that matches no command, and @= (an empty socket, then a bank entered).

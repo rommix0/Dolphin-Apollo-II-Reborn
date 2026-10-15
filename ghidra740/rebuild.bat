@@ -12,7 +12,7 @@ rem too), else 1. With --format, --roundtrip or --reset it is also 1 unless buil
 setlocal
 pushd "%~dp0.." || exit /b 1
 set "ROM=%APOLLO2_ROM%"
-if not defined ROM set "ROM=UK_V2.01_4.04_ROM.BIN"
+if not defined ROM set "ROM=xtras\UK_V2.01_4.04_ROM.BIN"
 set "ROM=%ROM:/=\%"
 if not exist "%ROM%" (
     echo rebuild: ROM not found: %ROM%

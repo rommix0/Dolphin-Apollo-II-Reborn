@@ -14,7 +14,9 @@ const uint8_t *test_rom(size_t *len)
         return NULL;           /* norom mode: as if no ROM existed, without looking */
     if (state == 0) {
         const char *path = getenv("APOLLO2_ROM");
-        FILE *f = fopen(path ? path : "UK_V2.01_4.04_ROM.BIN", "rb");
+        if (!path)
+            path = "xtras/UK_V2.01_4.04_ROM.BIN";
+        FILE *f = fopen(path, "rb");
         state = -1;
         if (f) {
             if (fread(rom, 1, sizeof rom, f) == sizeof rom && fgetc(f) == EOF)
@@ -25,7 +27,7 @@ const uint8_t *test_rom(size_t *len)
             char hex[33];
             rom_id_md5_hex(rom, sizeof rom, hex);
             fprintf(stderr, "  ROM %s has MD5 %s, not the UK V2.01 4.04 image (%s): ROM tests are skipped\n",
-                    path ? path : "UK_V2.01_4.04_ROM.BIN", hex, ROM_ID_MD5);
+                    path, hex, ROM_ID_MD5);
             state = -1;
         }
     }

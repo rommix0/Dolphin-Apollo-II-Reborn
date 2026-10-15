@@ -1,6 +1,6 @@
 # ghidra740 — the Apollo 2 ROM in Ghidra (milestone 3)
 
-Design: `docs/superpowers/specs/2026-10-01-m3-ghidra740-design.md`.
+Design: `xtras/superpowers/specs/2026-10-01-m3-ghidra740-design.md`.
 
 - `module/MELPS740/`: the MELPS 740 SLEIGH module plus the project scripts (`ghidra_scripts/`).
 - `annotations/*.txt`: the source of truth. Every name, type, comment and extra seed lives here.

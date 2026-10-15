@@ -3,6 +3,7 @@ rem Builds the program build\apollo2.exe from src\ alone, the oracle tools build
 rem build\apollo2_coverage.exe and build\cpu740_vectors.exe, and the tests build\apollo2_tests.exe (M5b spec 2.3).
 rem Usage: build.bat [test [SUITE_FILTER] | test-norom [SUITE_FILTER] | dist]
 rem dist builds the program alone and packs it into dist\apollo2-COMMIT-win64.zip; it builds and runs no tests.
+rem The ROM is looked for by the tests and the oracle tools only: APOLLO2_ROM, else xtras\UK_V2.01_4.04_ROM.BIN.
 setlocal EnableDelayedExpansion
 if not defined VSCMD_VER (
     call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
@@ -75,15 +76,17 @@ call tests\check_cli.bat build\apollo2.exe || exit /b 1
 exit /b 0
 
 :dist
-rem The release: apollo2.exe (the static C runtime, so no redistributable is needed) and README.md in
-rem dist\apollo2\, zipped with Windows' own tar.
+rem The release, in dist\apollo2\ and zipped with Windows' own tar: apollo2.exe (the static C runtime, so no
+rem redistributable is needed), the end-user tools\dist\README.txt, and the device manual at xtras\apollo2.txt, where
+rem the program's usage text points for the @ commands.
 set COMMIT=
 for /f %%h in ('git rev-parse --short HEAD') do set COMMIT=%%h
 if not defined COMMIT exit /b 1
 if exist dist rmdir /s /q dist
-mkdir dist\apollo2 || exit /b 1
+mkdir dist\apollo2\xtras || exit /b 1
 copy /y build\apollo2.exe dist\apollo2\ >nul || exit /b 1
-copy /y README.md dist\apollo2\ >nul || exit /b 1
+copy /y tools\dist\README.txt dist\apollo2\ >nul || exit /b 1
+copy /y xtras\apollo2.txt dist\apollo2\xtras\ >nul || exit /b 1
 "%SystemRoot%\System32\tar.exe" -a -c -f dist\apollo2-%COMMIT%-win64.zip -C dist apollo2 || exit /b 1
 echo dist\apollo2-%COMMIT%-win64.zip
 exit /b 0

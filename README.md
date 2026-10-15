@@ -17,7 +17,9 @@ Requires MSVC 2022 Build Tools. From Git Bash in the repo root:
     cmd //c ".\build.bat test cpu"        # only the suites whose name contains "cpu"
     cmd //c ".\build.bat test-norom"      # every suite as if no ROM existed, then the program itself
 
-The ROM (`UK_V2.01_4.04_ROM.BIN`) is located in the "xtras" folder and only the tests use it: put it in the repo root or point `APOLLO2_ROM` at it. Without it, the tests that need it print SKIP.
+The ROM (`xtras/UK_V2.01_4.04_ROM.BIN`) is used only by the tests and the oracle tools, which find it there; `APOLLO2_ROM` can point them at another copy. Without it, the tests that need it print SKIP.
+
+`cmd //c ".\build.bat dist"` builds only the program and packs it into `dist\apollo2-COMMIT-win64.zip`, with no tests.
 
 ## Usage
 
@@ -25,12 +27,12 @@ The ROM (`UK_V2.01_4.04_ROM.BIN`) is located in the "xtras" folder and only the 
     build/apollo2.exe -o hello.wav "Hello world."     # write a WAV (10 kHz, mono, 16-bit)
     build/apollo2.exe --voice b "Hello world."        # second speaker table (@K1)
     build/apollo2.exe --prosody 3 "Hello world."      # intonation 0-7 (@Rn); default 4, the device's own is 3
-    build/apollo2.exe "@W5 @F6 Faster and lower."     # device commands (docs/apollo2.txt section 6)
+    build/apollo2.exe "@W5 @F6 Faster and lower."     # device commands (xtras/apollo2.txt section 6)
     build/apollo2.exe --text-file story.txt -o story.wav
     build/apollo2.exe -o minus.wav -- "-5 degrees."   # -- ends the options
     build/apollo2.exe --audio-check                   # is live 10 kHz playback available?
 
-`--hyp b11,b13` and `--stream raw` are for listening tests (`docs/calibration/report.md`). Exit codes: 0 ok, 1 usage or file error, 2 firmware fault, 3 cycle limit, 4 audio error, 5 unmodeled access logged.
+`--hyp b11,b13` and `--stream raw` are for listening tests (`xtras/calibration/report.md`). Exit codes: 0 ok, 1 usage or file error, 2 firmware fault, 3 cycle limit, 4 audio error, 5 unmodeled access logged.
 
 ## Layout
 
