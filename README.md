@@ -4,7 +4,9 @@
 
 A decompilation of the Dolphin Apollo 2 speech synthesizer. The original firmware is ported to C, and its DSP frames match the ROM byte for byte; a Holmes-style synthesizer turns them into 10 kHz audio.
 
-The program needs no ROM.
+The DSP program has been rewritten from scratch as the original NEC ROM has been lost to time.
+
+The program needs no main ROM to run.
 
 Please note that Claude Opus 5.5 was used to decompile the synthesizer, and some info may be verbose despite vigorous testing. If you notice anything off, feel free to do a pull request or raise an issue.
 
