@@ -1,10 +1,14 @@
 # Ghidra project (large, binary, machine-local)
 apollo_ghidra/
 
+# xtras folder
+xtras/
+
 # Dolphin-owned data stays out of the repo (spec R5): ROM images and reference audio
 *.BIN
 *.bin
 *.mp3
+*.wav
 
 # Build outputs
 build/
@@ -14,6 +18,3 @@ build/
 *.ilk
 *.sla
 __pycache__/
-
-# Third-party reference recordings (not ours to commit)
-apollo2_excerpt.wav
