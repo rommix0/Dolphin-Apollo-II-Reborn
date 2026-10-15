@@ -26,7 +26,7 @@ static int usage(void)
             "  --text-file FILE   read the text from FILE (first line; device control codes allowed)\n"
             "  --audio-check      report whether live 10 kHz playback is available, then exit\n"
             "  --                 end of the options: the next argument is TEXT even if it starts with -\n"
-            "TEXT may contain the device's @ commands (xtras/apollo2.txt section 6); at most %d characters.\n"
+            "TEXT may contain the device's @ commands (the device manual, section 6); at most %d characters.\n"
             "exit codes: 0 ok, 1 usage/file error, 2 firmware fault, 3 cycle limit, 4 audio error, 5 unmodelled access logged\n",
             APOLLO2_MAX_TEXT);
     return 1;
