@@ -1,9 +1,6 @@
 # Ghidra project (large, binary, machine-local)
 apollo_ghidra/
 
-# xtras folder
-xtras/
-
 # Dolphin-owned data stays out of the repo (spec R5): ROM images and reference audio
 *.BIN
 *.bin
