@@ -6,14 +6,13 @@ apollo_ghidra/
 *.bin
 *.mp3
 
-# Build outputs and generated ROM-derived tables
+# Build outputs
 build/
 *.obj
 *.exe
 *.pdb
 *.ilk
 *.sla
-firmware/generated/
 __pycache__/
 
 # Third-party reference recordings (not ours to commit)
