@@ -13,3 +13,6 @@ build/
 *.ilk
 *.sla
 __pycache__/
+
+# Binary release (build.bat dist)
+dist/

@@ -1,7 +1,8 @@
 @echo off
 rem Builds the program build\apollo2.exe from src\ alone, the oracle tools build\apollo2_frames.exe,
 rem build\apollo2_coverage.exe and build\cpu740_vectors.exe, and the tests build\apollo2_tests.exe (M5b spec 2.3).
-rem Usage: build.bat [test [SUITE_FILTER] | test-norom [SUITE_FILTER]]
+rem Usage: build.bat [test [SUITE_FILTER] | test-norom [SUITE_FILTER] | dist]
+rem dist builds the program alone and packs it into dist\apollo2-COMMIT-win64.zip; it builds and runs no tests.
 setlocal EnableDelayedExpansion
 if not defined VSCMD_VER (
     call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
@@ -44,6 +45,7 @@ for %%d in (src\board src\engine src\firmware src\firmware\data src\synth src\au
 )
 if not exist build\product mkdir build\product
 cl %CFLAGS% /Isrc /Fobuild\product\ /Fdbuild\product\ /Febuild\apollo2.exe src\apps\apollo2.c !PRODSRC! %LIBS% || exit /b 1
+if /i "%~1"=="dist" goto dist
 rem Step 2: the oracle tools, from tests\oracle\apps, under the names ghidra740\coverage.bat, ghidra740\validate.bat and
 rem tools\calibrate.py run them by.
 set ORACLESRC=
@@ -70,4 +72,18 @@ build\apollo2_tests.exe %2 || exit /b 1
 set APOLLO2_NO_ROM=
 set APOLLO2_ROM=
 call tests\check_cli.bat build\apollo2.exe || exit /b 1
+exit /b 0
+
+:dist
+rem The release: apollo2.exe (the static C runtime, so no redistributable is needed) and README.md in
+rem dist\apollo2\, zipped with Windows' own tar.
+set COMMIT=
+for /f %%h in ('git rev-parse --short HEAD') do set COMMIT=%%h
+if not defined COMMIT exit /b 1
+if exist dist rmdir /s /q dist
+mkdir dist\apollo2 || exit /b 1
+copy /y build\apollo2.exe dist\apollo2\ >nul || exit /b 1
+copy /y README.md dist\apollo2\ >nul || exit /b 1
+"%SystemRoot%\System32\tar.exe" -a -c -f dist\apollo2-%COMMIT%-win64.zip -C dist apollo2 || exit /b 1
+echo dist\apollo2-%COMMIT%-win64.zip
 exit /b 0
