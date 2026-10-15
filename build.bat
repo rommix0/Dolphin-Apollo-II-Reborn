@@ -77,16 +77,16 @@ exit /b 0
 
 :dist
 rem The release, in dist\apollo2\ and zipped with Windows' own tar: apollo2.exe (the static C runtime, so no
-rem redistributable is needed), the end-user tools\dist\README.txt, and the device manual at xtras\apollo2.txt, where
-rem the program's usage text points for the @ commands.
+rem redistributable is needed), the end-user tools\dist\README.txt, and the device manual xtras\apollo2.txt as
+rem manual.txt.
 set COMMIT=
 for /f %%h in ('git rev-parse --short HEAD') do set COMMIT=%%h
 if not defined COMMIT exit /b 1
 if exist dist rmdir /s /q dist
-mkdir dist\apollo2\xtras || exit /b 1
+mkdir dist\apollo2 || exit /b 1
 copy /y build\apollo2.exe dist\apollo2\ >nul || exit /b 1
 copy /y tools\dist\README.txt dist\apollo2\ >nul || exit /b 1
-copy /y xtras\apollo2.txt dist\apollo2\xtras\ >nul || exit /b 1
+copy /y xtras\apollo2.txt dist\apollo2\manual.txt >nul || exit /b 1
 "%SystemRoot%\System32\tar.exe" -a -c -f dist\apollo2-%COMMIT%-win64.zip -C dist apollo2 || exit /b 1
 echo dist\apollo2-%COMMIT%-win64.zip
 exit /b 0
