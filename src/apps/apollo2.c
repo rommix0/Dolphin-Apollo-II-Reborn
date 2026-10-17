@@ -19,7 +19,8 @@ static int usage(void)
             "       apollo2 [options] --text-file FILE\n"
             "  -o FILE            write a WAV file (10 kHz, mono, 16-bit) instead of playing live\n"
             "  --voice a|b        speaker table: a = male (default), b = non-male (@K1)\n"
-            "  --hyp LIST         synthesizer hypothesis switches, comma-separated: b11,b13\n"
+            "  --synth S          synthesizer: holmes (default) or orpheus (the Orpheus back end)\n"
+            "  --hyp LIST         synthesizer hypothesis switches, comma-separated: b11,b13 (holmes only)\n"
             "  --stream S         frame stream fed to the synthesizer: produced (default) or raw\n"
             "  --prosody N        intonation strength 0-7, sent as @Rn (default 4 = the firmware's\n"
             "                     unscaled contour; the device's own default is 3)\n"
@@ -77,6 +78,7 @@ int main(int argc, char **argv)
     char *file_text = NULL;
     size_t text_len;
     bool options_done = false;   /* after "--", every argument is TEXT */
+    bool hyp_given = false;      /* --hyp switches the Holmes synth's hypotheses only */
     render_options opt;
     render_default_options(&opt);
 
@@ -99,9 +101,13 @@ int main(int argc, char **argv)
         } else if (!strcmp(a, "--voice") && val && (!strcmp(val, "a") || !strcmp(val, "b"))) {
             opt.voice = val[0];
             i++;
+        } else if (!strcmp(a, "--synth") && val && (!strcmp(val, "holmes") || !strcmp(val, "orpheus"))) {
+            opt.synth_kind = !strcmp(val, "orpheus") ? RENDER_SYNTH_ORPHEUS : RENDER_SYNTH_HOLMES;
+            i++;
         } else if (!strcmp(a, "--hyp") && val) {
             if (!parse_hyp(val, &opt.synth))
                 return usage();
+            hyp_given = true;
             i++;
         } else if (!strcmp(a, "--stream") && val && (!strcmp(val, "produced") || !strcmp(val, "raw"))) {
             opt.stream = !strcmp(val, "raw") ? RENDER_STREAM_RAW : RENDER_STREAM_PRODUCED;
@@ -120,7 +126,7 @@ int main(int argc, char **argv)
             return usage();
         }
     }
-    if ((text == NULL) == (text_file == NULL))
+    if ((text == NULL) == (text_file == NULL) || (hyp_given && opt.synth_kind != RENDER_SYNTH_HOLMES))
         return usage();
     if (text_file) {
         if (!(text = file_text = read_text_file(text_file, &text_len))) {

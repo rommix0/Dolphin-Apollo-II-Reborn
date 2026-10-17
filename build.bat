@@ -41,7 +41,7 @@ rem M5b spec 2.3, step 1: the program, compiled and linked from src\ alone with 
 rem objects in build\product: an include of an oracle header (tests\oracle) cannot be found, and a call into oracle
 rem code cannot link.
 set PRODSRC=
-for %%d in (src\board src\engine src\firmware src\firmware\data src\synth src\audio src\render) do (
+for %%d in (src\board src\engine src\firmware src\firmware\data src\synth src\orpheus src\audio src\render) do (
     if exist %%d\*.c set PRODSRC=!PRODSRC! %%d\*.c
 )
 if not exist build\product mkdir build\product

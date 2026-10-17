@@ -14,12 +14,18 @@ typedef enum {
     RENDER_STREAM_RAW,        /* what the DSP received: one frame late, CPU-timing dependent */
 } render_stream;
 
+typedef enum {
+    RENDER_SYNTH_HOLMES,      /* src/synth: the Holmes-style synth (default) */
+    RENDER_SYNTH_ORPHEUS,     /* src/orpheus: the Orpheus back end, through the orpheus_bal mapping */
+} render_synth;
+
 typedef struct {
     char voice;               /* 'a' (default) or 'b': speaker table B, selected with @K1 */
     render_stream stream;
     int prosody;              /* 0-7: sent as @Rn before the text (default 4, the firmware's unscaled
                                  contour; the device default is 3); -1 = send nothing */
-    synth_options synth;
+    render_synth synth_kind;
+    synth_options synth;      /* RENDER_SYNTH_HOLMES only */
 } render_options;
 
 typedef struct {

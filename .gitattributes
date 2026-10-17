@@ -3,3 +3,5 @@
 ghidra740/annotations/*.txt text eol=lf
 ghidra740/coverage/* text eol=lf
 *.dat binary
+*.pcm binary
+*.par text eol=lf

@@ -10,6 +10,7 @@ Open a command prompt in this folder:
     apollo2.exe -o hello.wav "Hello world."     write a WAV (10 kHz, mono, 16-bit)
     apollo2.exe --voice b "Hello world."        second speaker table (@K1)
     apollo2.exe --prosody 3 "Hello world."      intonation 0-7 (@Rn); default 4, the device's own is 3
+    apollo2.exe --synth orpheus "Hello world."  the Orpheus synth back end (default: holmes)
     apollo2.exe "@W5 @F6 Faster and lower."     device commands (manual.txt section 6)
     apollo2.exe --text-file story.txt -o story.wav
     apollo2.exe -o minus.wav -- "-5 degrees."   -- ends the options

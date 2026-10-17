@@ -19,6 +19,10 @@ The Dolphin Apollo 2 (Mitsubishi M50734, a 740-family CPU, and a NEC uPD77C20 DS
   The emulator moved to `tests/oracle/` as the test oracle; `apollo2.exe` is built from `src/` alone.
 - **After M5:** follow-up cleanups, a CLI hardening pass, `build.bat dist` (a release zip with `apollo2.exe`,
   `README.txt` and `manual.txt`), and the move of docs, the manual, photos and the ROM into `xtras/`.
+- **Orpheus back end:** the synthesizer of Dolphin's Orpheus (`a3s.dll`, the Apollo's software successor), recovered
+  with capstone and checked against a Unicorn oracle, is ported to `src/orpheus/` and selected with `--synth orpheus`
+  (spec `xtras/superpowers/specs/2026-10-16-orpheus-synth-analysis.md`; tools `xtras/orpheus/`). It is equal to the
+  oracle sample for sample, including an x87 80-bit model where the DLL truncates. `holmes` stays the default.
 
 Still open (all optional): synth sound quality against the Juno reference (formant levels, treble, calibration
 refit), what the DSP does with b13 bits 6/4/3 and b14-b15, and test/oracle polish. Out of scope so far: serial
@@ -29,7 +33,7 @@ replies, the parallel port, option-ROM languages.
 - `cmd //c ".\build.bat"` builds; `test [FILTER]` runs suites; `test-norom` runs them as if no ROM existed, then
   `tests\check_cli.bat`; `dist` builds only the program and the zip. MSVC 2022, C11, `/W4 /WX`.
 - The full suite takes about 16 minutes: run it in the background. A clean run prints
-  `45 suite(s), 0 failure(s), 0 skip(s)`.
+  `46 suite(s), 0 failure(s), 0 skip(s)`.
 - The ROM is `xtras/UK_V2.01_4.04_ROM.BIN`; `APOLLO2_ROM` overrides the path.
 - Never run `apollo2.exe` without `-o FILE` in automation: it plays audio. `--audio-check` is fine.
 

@@ -3,6 +3,10 @@
 #include <string.h>
 #include "render/render_native.h"
 #include "engine/native_engine.h"
+#include "orpheus/orp_map.h"
+#include "orpheus/orp_synth.h"
+
+_Static_assert(ORP_FRAME_SAMPLES == SYNTH_FRAME_SAMPLES, "both synths make 10 ms frames at 10 kHz");
 
 void render_default_options(render_options *opt)
 {
@@ -10,6 +14,7 @@ void render_default_options(render_options *opt)
     opt->voice = 'a';
     opt->stream = RENDER_STREAM_PRODUCED;
     opt->prosody = 4;
+    opt->synth_kind = RENDER_SYNTH_HOLMES;
     synth_default_options(&opt->synth);
 }
 
@@ -39,18 +44,30 @@ void render_synthesize(const frame_list *fl, const render_options *opt, render_r
     memset(out, 0, sizeof *out);
     if (fl->count == 0)
         return;
-    synth s;
-    synth_options so = opt->synth;
-    so.f0_centre_hz = params_f0_centre(&fl->frames[0][0], fl->count);   /* pitch-range centre */
-    synth_init(&s, &so);
+    float centre = params_f0_centre(&fl->frames[0][0], fl->count);   /* pitch-range centre */
     out->samples = malloc(fl->count * SYNTH_FRAME_SAMPLES * sizeof out->samples[0]);
     if (!out->samples)
         abort();
-    for (size_t i = 0; i < fl->count; i++)
-        synth_frame(&s, fl->frames[i], out->samples + i * SYNTH_FRAME_SAMPLES);
+    if (opt->synth_kind == RENDER_SYNTH_ORPHEUS) {
+        static orp_synth os;   /* about 13 KB */
+        orp_init(&os);
+        for (size_t i = 0; i < fl->count; i++) {
+            int16_t p[ORP_PARAMS];
+            orp_map_frame(fl->frames[i], centre, p);
+            orp_frame(&os, p, i == 0, out->samples + i * SYNTH_FRAME_SAMPLES);
+        }
+        out->clipped = orp_clipped(&os);
+    } else {
+        synth s;
+        synth_options so = opt->synth;
+        so.f0_centre_hz = centre;
+        synth_init(&s, &so);
+        for (size_t i = 0; i < fl->count; i++)
+            synth_frame(&s, fl->frames[i], out->samples + i * SYNTH_FRAME_SAMPLES);
+        out->clipped = s.clipped;
+    }
     out->frames = fl->count;
     out->count = fl->count * SYNTH_FRAME_SAMPLES;
-    out->clipped = s.clipped;
 }
 
 engine_status render_text_native(native_engine *e, const char *text, const render_options *opt, render_result *out)

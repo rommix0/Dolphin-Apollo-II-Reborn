@@ -157,8 +157,43 @@ static void unmodelled_lines(void)
                  "unmodelled log full: 5 more accesses not listed\n");
 }
 
+/* --synth orpheus: the default stays the Holmes synth; tests/orpheus/hello.frm through RENDER_SYNTH_ORPHEUS gives the
+   Unicorn oracle's hello.pcm, sample for sample. */
+static void orpheus_synth(void)
+{
+    render_options opt;
+    render_default_options(&opt);
+    CHECK_EQ(opt.synth_kind, RENDER_SYNTH_HOLMES);
+    char *hex = test_read_file("tests/orpheus/hello.frm");
+    CHECK(hex != NULL);
+    if (!hex)
+        return;
+    frame_list fl = { 0 };
+    for (char *line = strtok(hex, "\r\n"); line; line = strtok(NULL, "\r\n")) {
+        uint8_t f[ENGINE_FRAME_BYTES];
+        if (test_parse_hex(line, f, sizeof f))
+            frame_list_add(&fl, f);
+    }
+    free(hex);
+    static int16_t want[105 * SYNTH_FRAME_SAMPLES];
+    FILE *pcm = fopen("tests/orpheus/hello.pcm", "rb");
+    CHECK(pcm != NULL);
+    size_t n = pcm ? fread(want, sizeof want[0], sizeof want / sizeof want[0], pcm) : 0;
+    if (pcm)
+        fclose(pcm);
+    CHECK_EQ(fl.count, 105);
+    opt.synth_kind = RENDER_SYNTH_ORPHEUS;
+    render_result r;
+    render_synthesize(&fl, &opt, &r);
+    CHECK_EQ(r.count, n);
+    CHECK(r.samples && n == r.count && memcmp(r.samples, want, n * sizeof want[0]) == 0);
+    render_result_free(&r);
+    frame_list_free(&fl);
+}
+
 void suite_render_native(void)
 {
+    orpheus_synth();
     corpus_same("hello", 'a', RENDER_STREAM_PRODUCED);
     corpus_same("numbers", 'b', RENDER_STREAM_PRODUCED);
     corpus_same("prose", 'a', RENDER_STREAM_RAW);
