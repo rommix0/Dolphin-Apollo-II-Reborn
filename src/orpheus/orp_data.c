@@ -2301,7 +2301,7 @@ const orp_f64 orp_glottal_mean[106] = {
     {0x4063AD79435E50D8ULL},
 };
 
-/* A B C E D y1 y2 per filter, in orp_data.h ORP_F_* order (FINAL A for volume 80) */
+/* A B C E D y1 y2 per filter, in orp_data.h ORP_F_* order (FINAL A for volume 56) */
 const orp_f64 orp_filters[196] = {
     {0x3FEBBFDA215A0142ULL},
     {0x3FE5679D06CD6AAFULL},
@@ -2310,7 +2310,7 @@ const orp_f64 orp_filters[196] = {
     {0xBFEFD6ED05B7CA2EULL},
     {0x0000000000000000ULL},
     {0x0000000000000000ULL},
-    {0x3FD3829D48B32A28ULL},
+    {0x3FCB5075CC2E07D2ULL},
     {0x3FEFD6ED05B7CA2EULL},
     {0x0000000000000000ULL},
     {0x0000000000000000ULL},

@@ -20,9 +20,10 @@ The Dolphin Apollo 2 (Mitsubishi M50734, a 740-family CPU, and a NEC uPD77C20 DS
 - **After M5:** follow-up cleanups, a CLI hardening pass, `build.bat dist` (a release zip with `apollo2.exe`,
   `README.txt` and `manual.txt`), and the move of docs, the manual, photos and the ROM into `xtras/`.
 - **Orpheus back end:** the synthesizer of Dolphin's Orpheus (`a3s.dll`, the Apollo's software successor), recovered
-  with capstone and checked against a Unicorn oracle, is ported to `src/orpheus/` and selected with `--synth orpheus`
+  with capstone and checked against a Unicorn oracle, is ported to `src/orpheus/` (`--synth orpheus`)
   (spec `xtras/superpowers/specs/2026-10-16-orpheus-synth-analysis.md`; tools `xtras/orpheus/`). It is equal to the
-  oracle sample for sample, including an x87 80-bit model where the DLL truncates. `holmes` stays the default.
+  oracle sample for sample, including an x87 80-bit model where the DLL truncates. It is the default synth;
+  `--synth holmes` gives M2's.
 
 Still open (all optional): synth sound quality against the Juno reference (formant levels, treble, calibration
 refit), what the DSP does with b13 bits 6/4/3 and b14-b15, and test/oracle polish. Out of scope so far: serial

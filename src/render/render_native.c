@@ -14,7 +14,7 @@ void render_default_options(render_options *opt)
     opt->voice = 'a';
     opt->stream = RENDER_STREAM_PRODUCED;
     opt->prosody = 4;
-    opt->synth_kind = RENDER_SYNTH_HOLMES;
+    opt->synth_kind = RENDER_SYNTH_ORPHEUS;
     synth_default_options(&opt->synth);
 }
 

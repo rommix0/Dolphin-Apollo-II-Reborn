@@ -2,7 +2,7 @@
 
 # Dolphin Apollo II Reborn
 
-A decompilation of the Dolphin Apollo 2 speech synthesizer. The original firmware is ported to C, and its DSP frames match the ROM byte for byte; a Holmes-style synthesizer turns them into 10 kHz audio.
+A decompilation of the Dolphin Apollo 2 speech synthesizer. The original firmware is ported to C, and its DSP frames match the ROM byte for byte; the synthesizer of Dolphin's Orpheus, ported from its DLL, turns them into 10 kHz audio (`--synth holmes` gives the Holmes-style synthesizer written from scratch).
 
 The DSP program has been rewritten from scratch as the original NEC ROM has been lost to time.
 
@@ -29,13 +29,13 @@ The ROM (`xtras/UK_V2.01_4.04_ROM.BIN`) is used only by the tests and the oracle
     build/apollo2.exe -o hello.wav "Hello world."     # write a WAV (10 kHz, mono, 16-bit)
     build/apollo2.exe --voice b "Hello world."        # second speaker table (@K1)
     build/apollo2.exe --prosody 3 "Hello world."      # intonation 0-7 (@Rn); default 4, the device's own is 3
-    build/apollo2.exe --synth orpheus "Hello world."  # the Orpheus synth back end (default: holmes)
+    build/apollo2.exe --synth holmes "Hello world."   # the Holmes-style synth (default: orpheus)
     build/apollo2.exe "@W5 @F6 Faster and lower."     # device commands (xtras/apollo2.txt section 6)
     build/apollo2.exe --text-file story.txt -o story.wav
     build/apollo2.exe -o minus.wav -- "-5 degrees."   # -- ends the options
     build/apollo2.exe --audio-check                   # is live 10 kHz playback available?
 
-`--hyp b11,b13` and `--stream raw` are for listening tests (`xtras/calibration/report.md`). Exit codes: 0 ok, 1 usage or file error, 2 firmware fault, 3 cycle limit, 4 audio error, 5 unmodeled access logged.
+`--hyp b11,b13` (with `--synth holmes`) and `--stream raw` are for listening tests (`xtras/calibration/report.md`). Exit codes: 0 ok, 1 usage or file error, 2 firmware fault, 3 cycle limit, 4 audio error, 5 unmodeled access logged.
 
 ## Layout
 

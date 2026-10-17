@@ -38,8 +38,8 @@ typedef struct {
 } orp_synth;
 
 void orp_init(orp_synth *s);
-/* One frame: a3s.dll 2320ce70(p, 80, 1) then 2320e170(first, out). first is true for an utterance's first frame
-   only: every parameter then steps instead of gliding. */
+/* One frame: a3s.dll 2320ce70(p, 56, 1) then 2320e170(first, out), at volume 56 (orp_data.c's final gain). first
+   is true for an utterance's first frame only: every parameter then steps instead of gliding. */
 void orp_frame(orp_synth *s, const int16_t p[ORP_PARAMS], bool first, int16_t out[ORP_FRAME_SAMPLES]);
 uint64_t orp_clipped(const orp_synth *s);   /* samples the output limiter saturated */
 

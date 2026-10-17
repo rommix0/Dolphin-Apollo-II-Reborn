@@ -15,8 +15,8 @@ typedef enum {
 } render_stream;
 
 typedef enum {
-    RENDER_SYNTH_HOLMES,      /* src/synth: the Holmes-style synth (default) */
-    RENDER_SYNTH_ORPHEUS,     /* src/orpheus: the Orpheus back end, through the orpheus_bal mapping */
+    RENDER_SYNTH_ORPHEUS,     /* src/orpheus: the Orpheus back end, through the orpheus_bal mapping (default) */
+    RENDER_SYNTH_HOLMES,      /* src/synth: the Holmes-style synth of M2 */
 } render_synth;
 
 typedef struct {

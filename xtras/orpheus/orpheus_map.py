@@ -14,7 +14,7 @@ F3_A, F3_B = F32(1877.49), F32(0.0101545)
 F0_RANGE_GAIN, F0_MIN, F0_MAX = F32(2.0), F32(40.0), F32(400.0)
 OFFSETS = dict(alf=-10, a1=-10, a2=0, a3=-2, p8=-14, p9=-36)
 MSR = 50
-VOLUME = 80
+VOLUME = 56   # the corpus peaks at -1.6 dBFS at most, unclipped (80, the listening tests' volume, clips "pitch")
 
 
 def clampf(v, lo, hi):

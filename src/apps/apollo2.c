@@ -1,5 +1,5 @@
 /* apollo2: text -> speech through the Apollo 2 firmware, run as native C on a model of the board (no ROM, no emulated
-   CPU), and a Holmes-style parallel-formant synthesizer at 10 kHz (spec R1, R2). */
+   CPU), and the Orpheus synthesizer back end (or with --synth holmes the Holmes-style one) at 10 kHz (spec R1, R2). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,8 +19,8 @@ static int usage(void)
             "       apollo2 [options] --text-file FILE\n"
             "  -o FILE            write a WAV file (10 kHz, mono, 16-bit) instead of playing live\n"
             "  --voice a|b        speaker table: a = male (default), b = non-male (@K1)\n"
-            "  --synth S          synthesizer: holmes (default) or orpheus (the Orpheus back end)\n"
-            "  --hyp LIST         synthesizer hypothesis switches, comma-separated: b11,b13 (holmes only)\n"
+            "  --synth S          synthesizer: orpheus (default, the Orpheus back end) or holmes\n"
+            "  --hyp LIST         holmes hypothesis switches, comma-separated: b11,b13 (needs --synth holmes)\n"
             "  --stream S         frame stream fed to the synthesizer: produced (default) or raw\n"
             "  --prosody N        intonation strength 0-7, sent as @Rn (default 4 = the firmware's\n"
             "                     unscaled contour; the device's own default is 3)\n"

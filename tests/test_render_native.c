@@ -157,13 +157,13 @@ static void unmodelled_lines(void)
                  "unmodelled log full: 5 more accesses not listed\n");
 }
 
-/* --synth orpheus: the default stays the Holmes synth; tests/orpheus/hello.frm through RENDER_SYNTH_ORPHEUS gives the
-   Unicorn oracle's hello.pcm, sample for sample. */
+/* The default synth is Orpheus: tests/orpheus/hello.frm through it gives the Unicorn oracle's hello.pcm, sample for
+   sample. */
 static void orpheus_synth(void)
 {
     render_options opt;
     render_default_options(&opt);
-    CHECK_EQ(opt.synth_kind, RENDER_SYNTH_HOLMES);
+    CHECK_EQ(opt.synth_kind, RENDER_SYNTH_ORPHEUS);
     char *hex = test_read_file("tests/orpheus/hello.frm");
     CHECK(hex != NULL);
     if (!hex)
