@@ -5,6 +5,10 @@ apollo_ghidra/
 *.mp3
 *.wav
 
+# html documents
+*.htm
+*.html
+
 # Build outputs
 build/
 *.obj
